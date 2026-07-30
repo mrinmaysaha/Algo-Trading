@@ -7,10 +7,11 @@ from cachetools import TTLCache
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from sqlalchemy import Boolean, Column, Integer, MetaData, String, Text, create_engine
+from sqlalchemy import Boolean, Column, Integer, MetaData, String, Text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
-from sqlalchemy.pool import NullPool
+
+from database.engine_factory import create_db_engine
 
 from database.auth_db import PEPPER
 from utils.logging import get_logger
@@ -23,15 +24,8 @@ _settings_cache = TTLCache(maxsize=10, ttl=3600)  # 1 hour TTL
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Conditionally create engine based on DB type
-if DATABASE_URL and "sqlite" in DATABASE_URL:
-    # SQLite: Use NullPool to prevent connection pool exhaustion
-    engine = create_engine(
-        DATABASE_URL, poolclass=NullPool, connect_args={"check_same_thread": False}
-    )
-else:
-    # For other databases like PostgreSQL, use connection pooling
-    engine = create_engine(DATABASE_URL, pool_size=50, max_overflow=100, pool_timeout=10)
+# Create engine using the shared project-wide database factory
+engine = create_db_engine(DATABASE_URL)
 
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()

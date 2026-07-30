@@ -37,7 +37,7 @@ async function fetchCSRFToken(): Promise<string> {
 }
 
 export default function ApiKey() {
-  const { user } = useAuthStore()
+  const { user, setApiKey: setGlobalApiKey } = useAuthStore()
   const [apiKey, setApiKey] = useState<string | null>(null)
   const [hasApiKey, setHasApiKey] = useState(false)
   const [showApiKey, setShowApiKey] = useState(false)
@@ -70,6 +70,13 @@ export default function ApiKey() {
           const data = await response.json()
           setApiKey(data.api_key || null)
           setHasApiKey(!!data.api_key)
+          // Persist API key into the global auth store so other pages (Orderbook,
+          // Option Chain, etc.) can call API endpoints that require the key.
+          try {
+            setGlobalApiKey(data.api_key || null)
+          } catch {
+            // Non-fatal: UI should still work locally within this page
+          }
           setOrderMode(data.order_mode || 'auto')
         } else {
           // Backend returned HTML - this shouldn't happen now
@@ -119,6 +126,9 @@ export default function ApiKey() {
         setApiKey(data.api_key)
         setHasApiKey(true)
         setShowApiKey(true)
+        try {
+          setGlobalApiKey(data.api_key)
+        } catch {}
         showToast.success('API key generated successfully', 'system')
       } else {
         showToast.error(data.error || 'Failed to generate API key', 'system')

@@ -52,7 +52,7 @@ def create_db_engine(database_url=None):
         return create_engine(
             database_url,
             poolclass=NullPool,
-            connect_args={"check_same_thread": False},
+            connect_args={"check_same_thread": False, "timeout": 30},
         )
 
     # Non-SQLite backends (e.g. PostgreSQL): use a real connection pool.
