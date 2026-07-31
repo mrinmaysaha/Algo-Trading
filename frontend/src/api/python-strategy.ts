@@ -211,4 +211,18 @@ export const pythonStrategyApi = {
       await webClient.post<ApiResponse<{ started: number }>>('/python/check-contracts')
     return response.data
   },
+
+  /**
+   * Run a backtest for a Python strategy
+   */
+  runBacktest: async (data: {
+    strategy_id: string;
+    symbols: string[];
+    interval: string;
+    lookback_days: number;
+    initial_capital: number;
+  }): Promise<any> => {
+    const response = await webClient.post('/api/v1/python_strategy_backtest', data)
+    return response.data
+  },
 }

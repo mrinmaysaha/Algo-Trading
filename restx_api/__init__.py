@@ -57,6 +57,7 @@ from .telegram_bot import api as telegram_ns
 from .ticker import api as ticker_ns
 from .tradebook import api as tradebook_ns
 from .whatsapp_bot import api as whatsapp_ns
+from .python_strategies_backtester import api as python_strategies_backtester_ns
 
 # Add namespaces
 api.add_namespace(place_order_ns, path="/placeorder")
@@ -98,6 +99,7 @@ api.add_namespace(whatsapp_ns, path="/whatsapp")
 api.add_namespace(margin_ns, path="/margin")
 api.add_namespace(instruments_ns, path="/instruments")
 api.add_namespace(chart_ns, path="/chart")
+api.add_namespace(python_strategies_backtester_ns, path="/python_strategy_backtest")
 api.add_namespace(market_holidays_ns, path="/market/holidays")
 api.add_namespace(market_timings_ns, path="/market/timings")
 api.add_namespace(pnl_symbols_ns, path="/pnl")
