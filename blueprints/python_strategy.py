@@ -157,6 +157,9 @@ def load_configs():
                 STRATEGY_CONFIGS = json.load(f)
             mutated = False
             for cfg in STRATEGY_CONFIGS.values():
+                if "file_path" in cfg and "\\" in str(cfg["file_path"]):
+                    cfg["file_path"] = str(cfg["file_path"]).replace("\\", "/")
+                    mutated = True
                 if "exchange" not in cfg or not cfg.get("exchange"):
                     cfg["exchange"] = "NSE"
                     mutated = True
@@ -428,9 +431,14 @@ def start_strategy_process(strategy_id):
         if not config:
             return False, "Strategy configuration not found"
 
-        file_path = Path(config["file_path"])
+        file_path = Path(str(config["file_path"]).replace("\\", "/"))
         if not file_path.exists():
-            return False, f"Strategy file not found: {file_path}"
+            # Fallback check relative to STRATEGIES_DIR / file_name if relative path resolution fails
+            alt_path = STRATEGIES_DIR / config.get("file_name", "")
+            if alt_path.exists():
+                file_path = alt_path
+            else:
+                return False, f"Strategy file not found: {file_path}"
 
         # Check file permissions
         if not IS_WINDOWS:
