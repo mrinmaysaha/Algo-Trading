@@ -28,6 +28,13 @@ export const tools: Tool[] = [
     color: 'bg-violet-500',
   },
   {
+    title: 'Python Strategy Backtester',
+    description:
+      'Select a python strategy, test it across multiple symbols/intervals, and generate OpenStatz tearsheets with AI parameter optimization',
+    href: '/tools/python-backtester',
+    color: 'bg-emerald-600',
+  },
+  {
     title: 'Portfolio Backtester',
     description:
       'Backtest a weighted portfolio against an index with real delivery costs, rebalancing rules, crisis periods and a full tearsheet',
