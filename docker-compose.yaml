@@ -12,9 +12,9 @@ services:
 
     # persistent DB, strategies, logs + mount the host .env read-only so dotenv can read it
     volumes:
-      - openalgo_db:/app/db
+      - ./db:/app/db
       - openalgo_log:/app/log            # Application logs (named volume)
-      - openalgo_strategies:/app/strategies  # Python strategies (named volume)
+      - ./strategies:/app/strategies     # Python strategies (host bind mount)
       - openalgo_keys:/app/keys          # API keys/certificates (named volume)
       - openalgo_tmp:/app/tmp            # Temporary directory for numba/scipy (named volume)
       - ./.env:/app/.env
@@ -44,9 +44,9 @@ services:
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:5000/auth/check-setup"]
       interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+      timeout: 30s
+      retries: 5
+      start_period: 180s
 
     restart: unless-stopped
 

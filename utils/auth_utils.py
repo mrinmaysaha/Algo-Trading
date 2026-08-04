@@ -349,6 +349,25 @@ def async_master_contract_download(broker):
     return master_contract_status
 
 
+def launch_async_master_contract_download(broker: str):
+    """
+    Spawns the master contract downloader in a dedicated Python subprocess
+    so heavy CPU operations (JSON parsing, SQLite bulk insert, index building)
+    never block Gunicorn's eventlet greenlet worker loop, keeping SocketIO,
+    APScheduler jobs, and WebSocket order updates 100% responsive.
+    """
+    import sys
+    import subprocess
+
+    logger.info(f"Launching master contract download subprocess for broker: {broker}")
+    cmd = [
+        sys.executable,
+        "-c",
+        f"from utils.auth_utils import async_master_contract_download; async_master_contract_download('{broker}')",
+    ]
+    subprocess.Popen(cmd)
+
+
 def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, user_id=None):
     """
     Handles common tasks after successful authentication.
@@ -427,9 +446,8 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
         logger.info(f"Smart download check for {broker}: should_download={should_download}, reason={reason}")
 
         if should_download:
-            # Start async download in background thread
-            thread = Thread(target=async_master_contract_download, args=(broker,), daemon=True)
-            thread.start()
+            # Start async download in isolated subprocess (non-blocking for Gunicorn/eventlet)
+            launch_async_master_contract_download(broker)
         else:
             # Use cached data - load existing master contract
             logger.info(f"Skipping download for {broker}: {reason}")

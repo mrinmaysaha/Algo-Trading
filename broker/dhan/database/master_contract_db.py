@@ -96,15 +96,17 @@ def download_csv_dhan_data(output_path):
 
     # Iterate through the URLs and download the CSV files
     for key, url in csv_urls.items():
-        # Send GET request
-        response = requests.get(url, timeout=10)
+        # Send GET request with streaming and extended timeout
+        response = requests.get(url, stream=True, timeout=(15, 120))
         # Check if the request was successful
         if response.status_code == 200:
             # Construct the full output path for the file
             file_path = f"{output_path}/{key}.csv"
-            # Write the content to the file
+            # Write the content to the file using streaming
             with open(file_path, "wb") as file:
-                file.write(response.content)
+                for chunk in response.iter_content(chunk_size=65536):
+                    if chunk:
+                        file.write(chunk)
             downloaded_files.append(file_path)
         else:
             logger.error(

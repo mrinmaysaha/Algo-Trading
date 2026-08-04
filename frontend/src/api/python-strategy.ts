@@ -222,7 +222,7 @@ export const pythonStrategyApi = {
     lookback_days: number;
     initial_capital: number;
   }): Promise<any> => {
-    const response = await webClient.post('/api/v1/python_strategy_backtest', data)
+    const response = await webClient.post('/api/v1/python_strategy_backtest/run', data)
     return response.data
   },
 }

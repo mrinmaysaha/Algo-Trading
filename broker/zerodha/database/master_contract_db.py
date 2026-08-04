@@ -104,10 +104,11 @@ def download_csv_zerodha_data(output_path):
             'Authorization': f'token {AUTH_TOKEN}'
         }
 
-        # Make the GET request using the shared client
+        # Make the GET request using the shared client with extended timeout
         response = client.get(
             'https://api.kite.trade/instruments',
-            headers=headers  # Increased timeout for potentially large file
+            headers=headers,
+            timeout=120.0
         )
         response.raise_for_status()  # Raises an exception for 4XX/5XX responses
 

@@ -160,14 +160,14 @@ def download_csv_aliceblue_data(output_path):
     # Iterate through the URLs and download the CSV files
     for key, url in csv_urls.items():
         try:
-            # Send GET request using the shared httpx client
-            response = client.get(url, timeout=10)
+            # Send GET request using the shared httpx client with extended timeout
+            response = client.get(url, timeout=120.0)
             response.raise_for_status()  # Raise exception for error status codes
 
             # Construct the full output path for the file
             file_path = f"{output_path}/{key}.csv"
 
-            # Write the content to the file with a larger chunk size for better performance
+            # Write the content to the file
             with open(file_path, "wb") as file:
                 file.write(response.content)
 

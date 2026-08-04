@@ -6,6 +6,7 @@ from database.master_contract_status_db import check_if_ready, get_status, init_
 from utils.auth_utils import (
     async_master_contract_download,
     get_master_contract_cutoff,
+    launch_async_master_contract_download,
     should_download_master_contract,
 )
 from utils.logging import get_logger
@@ -183,10 +184,9 @@ def force_master_contract_download():
                     "should_download": False
                 }), 200
 
-        # Initialize status and start download
+        # Initialize status and start download in isolated background subprocess
         init_broker_status(broker)
-        thread = Thread(target=async_master_contract_download, args=(broker,), daemon=True)
-        thread.start()
+        launch_async_master_contract_download(broker)
 
         return jsonify({
             "status": "success",

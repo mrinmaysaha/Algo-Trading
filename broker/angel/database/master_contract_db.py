@@ -3,6 +3,7 @@
 import gzip
 import os
 import shutil
+import time
 from datetime import datetime
 
 import pandas as pd
@@ -40,6 +41,7 @@ class SymToken(Base):
     lotsize = Column(Integer)
     instrumenttype = Column(String)
     tick_size = Column(Float)
+    contract_value = Column(Float)
 
     # Define a composite index on symbol and exchange columns
     __table_args__ = (Index("idx_symbol_exchange", "symbol", "exchange"),)
@@ -50,47 +52,132 @@ def init_db():
     Base.metadata.create_all(bind=engine)
 
 
+def drop_symtoken_indexes():
+    logger.info("Dropping Symtoken Indexes for fast bulk operation")
+    try:
+        with engine.begin() as conn:
+            conn.exec_driver_sql("DROP INDEX IF EXISTS ix_symtoken_symbol")
+            conn.exec_driver_sql("DROP INDEX IF EXISTS ix_symtoken_brsymbol")
+            conn.exec_driver_sql("DROP INDEX IF EXISTS ix_symtoken_exchange")
+            conn.exec_driver_sql("DROP INDEX IF EXISTS ix_symtoken_brexchange")
+            conn.exec_driver_sql("DROP INDEX IF EXISTS ix_symtoken_token")
+            conn.exec_driver_sql("DROP INDEX IF EXISTS idx_symbol_exchange")
+    except Exception as e:
+        logger.warning(f"Error dropping indexes: {e}")
+
+
+def create_symtoken_indexes():
+    logger.info("Creating Symtoken Indexes")
+    try:
+        with engine.begin() as conn:
+            conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_symtoken_symbol ON symtoken (symbol)")
+            conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_symtoken_brsymbol ON symtoken (brsymbol)")
+            conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_symtoken_exchange ON symtoken (exchange)")
+            conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_symtoken_brexchange ON symtoken (brexchange)")
+            conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_symtoken_token ON symtoken (token)")
+            conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_symbol_exchange ON symtoken (symbol, exchange)")
+        logger.info("Symtoken indexes created successfully")
+    except Exception as e:
+        logger.error(f"Error creating indexes: {e}")
+
+
+def ensure_symtoken_schema(conn):
+    """Ensure symtoken table schema has all required columns including contract_value."""
+    try:
+        cursor = conn.exec_driver_sql("PRAGMA table_info(symtoken)")
+        existing_cols = [row[1] for row in cursor.fetchall()]
+        if existing_cols and "contract_value" not in existing_cols:
+            logger.info("Adding missing contract_value column to symtoken table")
+            conn.exec_driver_sql("ALTER TABLE symtoken ADD COLUMN contract_value REAL")
+    except Exception as e:
+        logger.warning(f"Schema check exception: {e}")
+
+
 def delete_symtoken_table():
     logger.info("Deleting Symtoken Table")
-    SymToken.query.delete()
-    db_session.commit()
+    try:
+        db_session.remove()
+        drop_symtoken_indexes()
+        with engine.begin() as conn:
+            ensure_symtoken_schema(conn)
+            conn.exec_driver_sql("DELETE FROM symtoken")
+        logger.info("Symtoken table deleted successfully")
+    except Exception as e:
+        logger.error(f"Error deleting symtoken table: {e}")
+        db_session.rollback()
+    finally:
+        db_session.remove()
 
 
 def copy_from_dataframe(df):
     logger.info("Performing Bulk Insert")
-    # Convert DataFrame to a list of dictionaries
-    data_dict = df.to_dict(orient="records")
-
-    # Retrieve existing tokens to filter them out from the insert
-    existing_tokens = {result.token for result in db_session.query(SymToken.token).all()}
-
-    # Filter out data_dict entries with tokens that already exist
-    filtered_data_dict = [row for row in data_dict if row["token"] not in existing_tokens]
-
-    # Insert in bulk the filtered records
     try:
-        if filtered_data_dict:  # Proceed only if there's anything to insert
-            db_session.bulk_insert_mappings(SymToken, filtered_data_dict)
-            db_session.commit()
-            logger.info(
-                f"Bulk insert completed successfully with {len(filtered_data_dict)} new records."
-            )
-        else:
-            logger.info("No new records to insert.")
+        db_session.remove()
+        # Filter DataFrame columns to match SymToken database schema
+        db_cols = [c.name for c in SymToken.__table__.columns if c.name != "id"]
+        valid_cols = [col for col in db_cols if col in df.columns]
+        df_to_insert = df[valid_cols]
+
+        total_records = len(df_to_insert)
+
+        # Replace NaN with None so SQLite handles NULL correctly
+        df_to_insert = df_to_insert.where(pd.notnull(df_to_insert), None)
+        rows = list(df_to_insert.itertuples(index=False, name=None))
+
+        col_names = ", ".join(valid_cols)
+        placeholders = ", ".join(["?"] * len(valid_cols))
+        query = f"INSERT INTO symtoken ({col_names}) VALUES ({placeholders})"
+
+        # Apply ultra-fast in-memory PRAGMAs prior to starting the transaction
+        try:
+            with engine.connect() as conn:
+                conn.exec_driver_sql("PRAGMA synchronous = OFF")
+                conn.exec_driver_sql("PRAGMA temp_store = MEMORY")
+                conn.commit()
+        except Exception:
+            pass
+
+        CHUNK_SIZE = 10000
+        # Single transaction write with fast C-level executemany
+        with engine.begin() as conn:
+            raw_conn = conn.connection
+            for i in range(0, total_records, CHUNK_SIZE):
+                chunk = rows[i : i + CHUNK_SIZE]
+                raw_conn.executemany(query, chunk)
+                time.sleep(0.0001)
+
+        logger.info(f"Bulk insert completed successfully with {total_records} new records.")
+
+        # Re-create all B-Tree indexes in a single optimized pass
+        create_symtoken_indexes()
+
+        # Restore standard SQLite PRAGMAs after bulk load
+        try:
+            with engine.connect() as conn:
+                conn.exec_driver_sql("PRAGMA synchronous = NORMAL")
+                conn.commit()
+        except Exception:
+            pass
+
     except Exception as e:
         logger.error(f"Error during bulk insert: {e}")
         db_session.rollback()
+    finally:
+        db_session.remove()
 
 
 def download_json_angel_data(url, output_path):
     """
-    Downloads a JSON file from the specified URL and saves it to the specified path.
+    Downloads a JSON file from the specified URL and saves it to the specified path using streaming.
     """
     logger.info("Downloading JSON data")
-    response = requests.get(url, timeout=10)  # timeout after 10 seconds
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    response = requests.get(url, stream=True, timeout=(15, 120))  # 15s connect, 120s read timeout
     if response.status_code == 200:  # Successful download
         with open(output_path, "wb") as f:
-            f.write(response.content)
+            for chunk in response.iter_content(chunk_size=65536):
+                if chunk:
+                    f.write(chunk)
         logger.info("Download complete")
     else:
         logger.error(f"Failed to download data. Status code: {response.status_code}")
@@ -404,13 +491,22 @@ def master_contract_download():
         delete_symtoken_table()  # Consider the implications of this action
         copy_from_dataframe(token_df)
 
-        return socketio.emit(
-            "master_contract_download", {"status": "success", "message": "Successfully Downloaded"}
-        )
+        try:
+            socketio.emit(
+                "master_contract_download", {"status": "success", "message": "Successfully Downloaded"}
+            )
+        except Exception as se:
+            logger.debug(f"SocketIO emit ignored: {se}")
+
+        return {"status": "success", "message": "Successfully Downloaded"}
 
     except Exception as e:
         logger.info(f"{str(e)}")
-        return socketio.emit("master_contract_download", {"status": "error", "message": str(e)})
+        try:
+            socketio.emit("master_contract_download", {"status": "error", "message": str(e)})
+        except Exception:
+            pass
+        return {"status": "error", "message": str(e)}
 
 
 def search_symbols(symbol, exchange):

@@ -41,7 +41,7 @@ if LOGS_DATABASE_URL and "sqlite" in LOGS_DATABASE_URL:
     # misuse" and "cannot commit — SQL statements in progress" errors on all
     # platforms (Windows, Mac, Linux).
     logs_engine = create_engine(
-        LOGS_DATABASE_URL, poolclass=NullPool, connect_args={"check_same_thread": False}
+        LOGS_DATABASE_URL, poolclass=NullPool, connect_args={"check_same_thread": False, "timeout": 30}
     )
 else:
     # For other databases like PostgreSQL, use connection pooling

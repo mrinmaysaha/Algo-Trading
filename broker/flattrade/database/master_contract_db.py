@@ -116,12 +116,14 @@ def download_csv_data(output_path):
 
     for key, url in flattrade_urls.items():
         try:
-            response = requests.get(url, timeout=10)
+            response = requests.get(url, stream=True, timeout=(15, 120))
             if response.status_code == 200:
                 logger.info(f"Successfully downloaded {key} from {url}")
                 output_file = os.path.join(output_path, f"{key}.csv")
                 with open(output_file, "wb") as f:
-                    f.write(response.content)
+                    for chunk in response.iter_content(chunk_size=65536):
+                        if chunk:
+                            f.write(chunk)
                 downloaded_files.append(f"{key}.csv")
             else:
                 logger.error(

@@ -112,14 +112,15 @@ def download_and_unzip_shoonya_data(output_path):
     # Iterate through the shoonya URLs and download/unzip files
     for key, url in shoonya_urls.items():
         try:
-            # Send GET request to download the zip file
-            response = requests.get(url, timeout=10)
+            # Send GET request to download the zip file using streaming and extended timeout
+            response = requests.get(url, stream=True, timeout=(15, 120))
 
             if response.status_code == 200:
                 logger.info(f"Successfully downloaded {key} from {url}")
 
                 # Use in-memory file to handle the downloaded zip file
-                z = zipfile.ZipFile(io.BytesIO(response.content))
+                content = response.content
+                z = zipfile.ZipFile(io.BytesIO(content))
                 z.extractall(output_path)
                 downloaded_files.append(f"{key}.txt")
             else:

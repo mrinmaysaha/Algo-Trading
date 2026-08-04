@@ -86,9 +86,14 @@ def download_and_unzip_upstox_data(url, input_path, output_path):
     Downloads the compressed JSON from Upstox, unzips it, and saves it to the specified path.
     """
     logger.info("Downloading Upstox Master Contract")
-    response = requests.get(url, timeout=10)  # timeout after 10 seconds
+    os.makedirs(os.path.dirname(input_path), exist_ok=True)
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    response = requests.get(url, stream=True, timeout=(15, 120))  # 15s connect, 120s read timeout
+    response.raise_for_status()
     with open(input_path, "wb") as f:
-        f.write(response.content)
+        for chunk in response.iter_content(chunk_size=65536):
+            if chunk:
+                f.write(chunk)
     logger.info("Decompressing the JSON file")
     with gzip.open(input_path, "rb") as f_in:
         with open(output_path, "wb") as f_out:

@@ -129,30 +129,26 @@ def update_status(broker, status, message, total_symbols=None):
 
 
 def get_status(broker):
-    """Get the current status for a broker"""
+    """Get the current status for a broker (pure read-only)"""
     session = SessionLocal()
     try:
         status = session.query(MasterContractStatus).filter_by(broker=broker).first()
 
         if status:
             # Detect stuck downloads: if status is 'downloading' but last_updated
-            # is older than the timeout, auto-transition to 'error'
-            if (
+            # is older than the timeout, treat as error in returned status without writing to DB
+            is_stuck = (
                 status.status == "downloading"
                 and status.last_updated
                 and datetime.now() - status.last_updated > timedelta(minutes=DOWNLOAD_TIMEOUT_MINUTES)
-            ):
-                logger.warning(
-                    f"Download for {broker} stuck for >{DOWNLOAD_TIMEOUT_MINUTES}min, marking as error"
-                )
-                status.status = "error"
-                status.message = (
-                    f"Download timed out (stuck for >{DOWNLOAD_TIMEOUT_MINUTES} minutes). "
-                    "Click Force Download to retry."
-                )
-                status.last_updated = datetime.now()
-                status.is_ready = False
-                session.commit()
+            )
+
+            current_status = "error" if is_stuck else status.status
+            current_message = (
+                f"Download timed out (stuck for >{DOWNLOAD_TIMEOUT_MINUTES} minutes). Click Force Download to retry."
+                if is_stuck
+                else status.message
+            )
 
             # Parse exchange_stats JSON if present
             exchange_stats = None
@@ -164,12 +160,11 @@ def get_status(broker):
 
             return {
                 "broker": status.broker,
-                "status": status.status,
-                "message": status.message,
+                "status": current_status,
+                "message": current_message,
                 "last_updated": status.last_updated.isoformat() if status.last_updated else None,
                 "total_symbols": status.total_symbols,
-                "is_ready": status.is_ready,
-                # Smart download fields
+                "is_ready": False if is_stuck else status.is_ready,
                 "last_download_time": status.last_download_time.isoformat() if status.last_download_time else None,
                 "download_date": status.download_date.isoformat() if status.download_date else None,
                 "exchange_stats": exchange_stats,

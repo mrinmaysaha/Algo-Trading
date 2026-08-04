@@ -237,6 +237,13 @@ def react_tools():
     return serve_react_app()
 
 
+# Python Strategy Backtester
+@react_bp.route("/tools/python-backtester", strict_slashes=False)
+@react_bp.route("/tools/python-backtester/results", strict_slashes=False)
+def react_python_backtester():
+    return serve_react_app()
+
+
 # IV Chart for options implied volatility
 @react_bp.route("/ivchart")
 def react_ivchart():

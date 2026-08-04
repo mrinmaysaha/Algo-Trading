@@ -13,11 +13,13 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { usePythonStrategyBacktestStore } from '@/stores/pythonStrategyBacktestStore'
+import { useAuthStore } from '@/stores/authStore'
 import { Loader2 } from 'lucide-react'
 import { showToast } from '@/utils/toast'
 
 export default function PythonStrategyBacktester() {
   const navigate = useNavigate()
+  const { apiKey } = useAuthStore()
   const { setResult, setLoading, setError, isLoading } = usePythonStrategyBacktestStore()
   
   const [strategies, setStrategies] = useState<any[]>([])
@@ -28,6 +30,7 @@ export default function PythonStrategyBacktester() {
     interval: '15m',
     lookback_days: 60,
     initial_capital: 100000,
+    source: 'db',
   })
 
   useEffect(() => {
@@ -38,7 +41,7 @@ export default function PythonStrategyBacktester() {
     e.preventDefault()
     
     if (!formData.strategy_id || !formData.symbols) {
-      showToast('Error', 'Please select a strategy and symbols.', 'destructive')
+      showToast.error('Please select a strategy and symbols.')
       return
     }
 
@@ -53,7 +56,9 @@ export default function PythonStrategyBacktester() {
         symbols: symbolsList,
         interval: formData.interval,
         lookback_days: Number(formData.lookback_days),
-        initial_capital: Number(formData.initial_capital)
+        initial_capital: Number(formData.initial_capital),
+        source: formData.source,
+        apikey: apiKey || ''
       }
       
       const res = await pythonStrategyApi.runBacktest(payload)
@@ -66,8 +71,9 @@ export default function PythonStrategyBacktester() {
       }
     } catch (err: any) {
       console.error(err)
-      setError(err.message)
-      showToast('Backtest Failed', err.message, 'destructive')
+      const errorMsg = err.response?.data?.message || err.message || 'An unknown error occurred'
+      setError(errorMsg)
+      showToast.error(errorMsg)
     } finally {
       setLoading(false)
     }
@@ -131,6 +137,7 @@ export default function PythonStrategyBacktester() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="1m">1 Minute</SelectItem>
+                    <SelectItem value="3m">3 Minutes</SelectItem>
                     <SelectItem value="5m">5 Minutes</SelectItem>
                     <SelectItem value="15m">15 Minutes</SelectItem>
                     <SelectItem value="30m">30 Minutes</SelectItem>
@@ -163,6 +170,23 @@ export default function PythonStrategyBacktester() {
                   onChange={(e) => setFormData(prev => ({ ...prev, initial_capital: parseFloat(e.target.value) }))}
                   required
                 />
+              </div>
+
+              <div className="space-y-2 sm:col-span-2">
+                <Label htmlFor="source">Data Source</Label>
+                <Select
+                  value={formData.source}
+                  onValueChange={(val) => setFormData(prev => ({ ...prev, source: val }))}
+                >
+                  <SelectTrigger id="source">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="db">Local Historify Database (Fastest)</SelectItem>
+                    <SelectItem value="api">Broker API (Live / Recent data)</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground mt-1">Select where to fetch historical data from.</p>
               </div>
             </div>
 

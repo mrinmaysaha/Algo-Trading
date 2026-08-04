@@ -111,8 +111,8 @@ def download_and_unzip_zebu_data(output_path):
     # Iterate through the Zebu URLs and download/unzip files
     for key, url in zebu_urls.items():
         try:
-            # Send GET request to download the zip file using httpx client
-            response = client.get(url, timeout=10.0)
+            # Send GET request to download the zip file using httpx client with extended timeout
+            response = client.get(url, timeout=120.0)
 
             if response.status_code == 200:
                 logger.info(f"Successfully downloaded {key} from {url}")
