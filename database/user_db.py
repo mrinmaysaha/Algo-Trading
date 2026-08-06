@@ -43,7 +43,7 @@ PASSWORD_PEPPER = _pepper_value
 if DATABASE_URL and "sqlite" in DATABASE_URL:
     # SQLite: Use NullPool to prevent connection pool exhaustion
     engine = create_engine(
-        DATABASE_URL, echo=False, poolclass=NullPool, connect_args={"check_same_thread": False}
+        DATABASE_URL, echo=False, poolclass=NullPool, connect_args={"check_same_thread": False, "timeout": 30}
     )
 else:
     # For other databases like PostgreSQL, use connection pooling

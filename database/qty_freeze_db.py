@@ -175,13 +175,13 @@ def get_freeze_qty(symbol: str, exchange: str) -> int:
     if not _cache_loaded:
         load_freeze_qty_cache()
 
-    # Look up the configured entry for this exchange+symbol; default to 1 if none.
+    # Look up the configured entry for this exchange+symbol; default to 0 (unlimited/no cap) if none.
     cache_key = f"{exchange}:{symbol}"
     if cache_key in _freeze_qty_cache:
         return _freeze_qty_cache[cache_key]
 
-    # If not found, return 1 as default
-    return 1
+    # If not found, return 0 as default (0 means no freeze quantity cap configured)
+    return 0
 
 
 def get_freeze_qty_for_option(option_symbol: str, exchange: str) -> int:
@@ -218,14 +218,14 @@ def get_freeze_qty_for_option(option_symbol: str, exchange: str) -> int:
         if option_symbol.upper().startswith(idx_sym):
             return get_freeze_qty(idx_sym, exchange)
 
-    # For stock symbols, extract up to the first digit
+    # For stock/commodity symbols, extract up to the first digit
     match = re.match(r"^([A-Z&-]+)", option_symbol.upper())
     if match:
         underlying = match.group(1)
-        # Handle special cases like M&M, BAJAJ-AUTO
+        # Handle special cases like M&M, BAJAJ-AUTO, CRUDEOIL
         return get_freeze_qty(underlying, exchange)
 
-    return 1
+    return 0
 
 
 def get_all_freeze_qty(exchange: str = None) -> dict[str, int]:

@@ -165,7 +165,7 @@ if DATABASE_URL and "sqlite" in DATABASE_URL:
     # StaticPool must NOT be used: concurrent requests on a single shared
     # SQLite connection cause "bad parameter or other API misuse" errors.
     engine = create_engine(
-        DATABASE_URL, poolclass=NullPool, connect_args={"check_same_thread": False}
+        DATABASE_URL, poolclass=NullPool, connect_args={"check_same_thread": False, "timeout": 30}
     )
 else:
     # For other databases like PostgreSQL, use connection pooling

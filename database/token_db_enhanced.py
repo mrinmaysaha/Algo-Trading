@@ -342,11 +342,17 @@ class BrokerSymbolCache:
         return now_ist < self.next_reset_time
 
     def get_token(self, symbol: str, exchange: str) -> str | None:
-        """Get token for symbol and exchange - O(1) lookup"""
+        """Get token for symbol and exchange - O(1) lookup with commodity fallback"""
         self.stats.hits += 1
         key = (symbol, exchange)
         if key in self.by_symbol_exchange:
             return self.by_symbol_exchange[key].token
+
+        clean = symbol.replace(" ", "").upper() if symbol else ""
+        for cand in (clean, clean + "COM"):
+            cand_key = (cand, exchange)
+            if cand_key in self.by_symbol_exchange:
+                return self.by_symbol_exchange[cand_key].token
 
         self.stats.hits -= 1
         self.stats.misses += 1
@@ -364,11 +370,17 @@ class BrokerSymbolCache:
         return None
 
     def get_br_symbol(self, symbol: str, exchange: str) -> str | None:
-        """Get broker symbol for symbol and exchange - O(1) lookup"""
+        """Get broker symbol for symbol and exchange - O(1) lookup with commodity fallback"""
         self.stats.hits += 1
         key = (symbol, exchange)
         if key in self.by_symbol_exchange:
             return self.by_symbol_exchange[key].brsymbol
+
+        clean = symbol.replace(" ", "").upper() if symbol else ""
+        for cand in (clean, clean + "COM"):
+            cand_key = (cand, exchange)
+            if cand_key in self.by_symbol_exchange:
+                return self.by_symbol_exchange[cand_key].brsymbol
 
         self.stats.hits -= 1
         self.stats.misses += 1
@@ -386,22 +398,34 @@ class BrokerSymbolCache:
         return None
 
     def get_brexchange(self, symbol: str, exchange: str) -> str | None:
-        """Get broker exchange for symbol and exchange - O(1) lookup"""
+        """Get broker exchange for symbol and exchange - O(1) lookup with commodity fallback"""
         self.stats.hits += 1
         key = (symbol, exchange)
         if key in self.by_symbol_exchange:
             return self.by_symbol_exchange[key].brexchange
+
+        clean = symbol.replace(" ", "").upper() if symbol else ""
+        for cand in (clean, clean + "COM"):
+            cand_key = (cand, exchange)
+            if cand_key in self.by_symbol_exchange:
+                return self.by_symbol_exchange[cand_key].brexchange
 
         self.stats.hits -= 1
         self.stats.misses += 1
         return None
 
     def get_symbol_info(self, symbol: str, exchange: str) -> SymbolData | None:
-        """Get full symbol data for symbol and exchange - O(1) lookup"""
+        """Get full symbol data for symbol and exchange - O(1) lookup with commodity fallback"""
         self.stats.hits += 1
         key = (symbol, exchange)
         if key in self.by_symbol_exchange:
             return self.by_symbol_exchange[key]
+
+        clean = symbol.replace(" ", "").upper() if symbol else ""
+        for cand in (clean, clean + "COM"):
+            cand_key = (cand, exchange)
+            if cand_key in self.by_symbol_exchange:
+                return self.by_symbol_exchange[cand_key]
 
         self.stats.hits -= 1
         self.stats.misses += 1
@@ -832,15 +856,27 @@ def get_symbol_info(symbol: str, exchange: str) -> SymbolData | None:
 
 # Database fallback functions (imported from original token_db)
 def get_token_dbquery(symbol: str, exchange: str) -> str | None:
-    """Query database for token by symbol and exchange"""
+    """Query database for token by symbol and exchange with commodity fallback"""
     try:
         from database.symbol import SymToken
 
         sym_token = SymToken.query.filter_by(symbol=symbol, exchange=exchange).first()
         if sym_token:
             return sym_token.token
-        else:
-            return None
+
+        clean = symbol.replace(" ", "").upper() if symbol else ""
+        for cand in (clean, clean + "COM"):
+            sym_token = SymToken.query.filter_by(symbol=cand, exchange=exchange).first()
+            if sym_token:
+                return sym_token.token
+
+        sym_token = SymToken.query.filter(
+            SymToken.exchange == exchange, SymToken.symbol.like(f"{clean}%")
+        ).first()
+        if sym_token:
+            return sym_token.token
+
+        return None
     except Exception as e:
         logger.exception(f"Error while querying the database: {e}")
         return None
@@ -862,15 +898,27 @@ def get_symbol_dbquery(token: str, exchange: str) -> str | None:
 
 
 def get_br_symbol_dbquery(symbol: str, exchange: str) -> str | None:
-    """Query database for broker symbol"""
+    """Query database for broker symbol with commodity fallback"""
     try:
         from database.symbol import SymToken
 
         sym_token = SymToken.query.filter_by(symbol=symbol, exchange=exchange).first()
         if sym_token:
             return sym_token.brsymbol
-        else:
-            return None
+
+        clean = symbol.replace(" ", "").upper() if symbol else ""
+        for cand in (clean, clean + "COM"):
+            sym_token = SymToken.query.filter_by(symbol=cand, exchange=exchange).first()
+            if sym_token:
+                return sym_token.brsymbol
+
+        sym_token = SymToken.query.filter(
+            SymToken.exchange == exchange, SymToken.symbol.like(f"{clean}%")
+        ).first()
+        if sym_token:
+            return sym_token.brsymbol
+
+        return None
     except Exception as e:
         logger.exception(f"Error while querying the database: {e}")
         return None
@@ -892,15 +940,27 @@ def get_oa_symbol_dbquery(brsymbol: str, exchange: str) -> str | None:
 
 
 def get_brexchange_dbquery(symbol: str, exchange: str) -> str | None:
-    """Query database for broker exchange"""
+    """Query database for broker exchange with commodity fallback"""
     try:
         from database.symbol import SymToken
 
         sym_token = SymToken.query.filter_by(symbol=symbol, exchange=exchange).first()
         if sym_token:
             return sym_token.brexchange
-        else:
-            return None
+
+        clean = symbol.replace(" ", "").upper() if symbol else ""
+        for cand in (clean, clean + "COM"):
+            sym_token = SymToken.query.filter_by(symbol=cand, exchange=exchange).first()
+            if sym_token:
+                return sym_token.brexchange
+
+        sym_token = SymToken.query.filter(
+            SymToken.exchange == exchange, SymToken.symbol.like(f"{clean}%")
+        ).first()
+        if sym_token:
+            return sym_token.brexchange
+
+        return None
     except Exception as e:
         logger.exception(f"Error while querying the database: {e}")
         return None
@@ -912,6 +972,17 @@ def get_symbol_info_dbquery(symbol: str, exchange: str) -> SymbolData | None:
         from database.symbol import SymToken
 
         sym_token = SymToken.query.filter_by(symbol=symbol, exchange=exchange).first()
+        if not sym_token:
+            clean = symbol.replace(" ", "").upper() if symbol else ""
+            for cand in (clean, clean + "COM"):
+                sym_token = SymToken.query.filter_by(symbol=cand, exchange=exchange).first()
+                if sym_token:
+                    break
+            if not sym_token:
+                sym_token = SymToken.query.filter(
+                    SymToken.exchange == exchange, SymToken.symbol.like(f"{clean}%")
+                ).first()
+
         if sym_token:
             # Convert SymToken database object to SymbolData
             return SymbolData(

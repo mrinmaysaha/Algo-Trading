@@ -98,7 +98,7 @@ fernet = _build_fernet()
 # SQLAlchemy engine — same NullPool pattern as the rest of OpenAlgo SQLite usage.
 if DATABASE_URL and "sqlite" in DATABASE_URL:
     engine = create_engine(
-        DATABASE_URL, poolclass=NullPool, connect_args={"check_same_thread": False}
+        DATABASE_URL, poolclass=NullPool, connect_args={"check_same_thread": False, "timeout": 30}
     )
 else:
     engine = create_engine(

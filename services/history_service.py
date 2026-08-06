@@ -34,7 +34,7 @@ def validate_symbol_exchange(symbol: str, exchange: str) -> tuple[bool, str | No
 
     Args:
         symbol: Trading symbol
-        exchange: Exchange (e.g., NSE, NFO)
+        exchange: Exchange (e.g., NSE, NFO, MCX)
 
     Returns:
         Tuple of (is_valid, error_message)
@@ -44,8 +44,12 @@ def validate_symbol_exchange(symbol: str, exchange: str) -> tuple[bool, str | No
     if exchange_upper not in VALID_EXCHANGES:
         return False, f"Invalid exchange '{exchange}'. Must be one of: {', '.join(VALID_EXCHANGES)}"
 
-    # Validate symbol exists in master contract
+    # Validate symbol exists in master contract (supports base names like GOLDM, CRUDEOIL, CRUDEOIL M)
     token = get_token(symbol, exchange_upper)
+    if token is None and symbol:
+        clean = symbol.replace(" ", "").upper()
+        token = get_token(clean, exchange_upper) or get_token(clean + "COM", exchange_upper)
+
     if token is None:
         return (
             False,
@@ -72,6 +76,44 @@ def import_broker_module(broker_name: str) -> Any | None:
     except ImportError as error:
         logger.error(f"Error importing broker module '{module_path}': {error}")
         return None
+
+
+def resolve_active_fut_symbol(symbol: str, exchange: str) -> str | None:
+    """
+    Resolves the current active near-month futures contract for an MCX commodity symbol.
+    Brokers store intraday OHLCV under active futures contracts (e.g. CRUDEOILM19AUG26FUT)
+    rather than base spot symbols (e.g. CRUDEOILMCOM).
+    """
+    if exchange.upper() != "MCX":
+        return None
+    try:
+        import datetime
+        from database.symbol import SymToken
+
+        base = symbol.replace("COM", "").replace(" ", "").upper()
+        candidates = SymToken.query.filter(
+            SymToken.exchange == "MCX", SymToken.symbol.like(f"{base}%FUT")
+        ).all()
+
+        today = datetime.date.today()
+        valid_futs = []
+        for c in candidates:
+            if c.expiry:
+                for fmt in ("%d-%b-%y", "%d-%b-%Y"):
+                    try:
+                        exp_dt = datetime.datetime.strptime(c.expiry.upper(), fmt).date()
+                        if exp_dt >= today:
+                            valid_futs.append((exp_dt, c.symbol))
+                        break
+                    except Exception:
+                        pass
+
+        if valid_futs:
+            valid_futs.sort(key=lambda x: x[0])
+            return valid_futs[0][1]
+    except Exception as e:
+        logger.warning(f"Failed to resolve active futures contract for {symbol}: {e}")
+    return None
 
 
 def get_history_with_auth(
@@ -125,11 +167,28 @@ def get_history_with_auth(
             # Fallback to just auth token if we can't inspect
             data_handler = broker_module.BrokerData(auth_token)
 
+        # Pre-resolve MCX base commodity symbols to active near-month futures symbol
+        query_symbol = symbol
+        if exchange.upper() == "MCX":
+            fut_sym = resolve_active_fut_symbol(symbol, exchange)
+            if fut_sym:
+                logger.info(
+                    f"Resolved MCX commodity '{symbol}' to active futures contract: '{fut_sym}'"
+                )
+                query_symbol = fut_sym
+
         # Call the broker's get_history method
-        df = data_handler.get_history(symbol, exchange, interval, start_date, end_date)
+        df = data_handler.get_history(query_symbol, exchange, interval, start_date, end_date)
 
         if not isinstance(df, pd.DataFrame):
             raise ValueError("Invalid data format returned from broker")
+
+        if df.empty:
+            return (
+                False,
+                {"status": "error", "message": f"No history found for {symbol} {exchange} {interval}"},
+                404,
+            )
 
         # Ensure all responses include 'oi' field, set to 0 if not present
         if "oi" not in df.columns:

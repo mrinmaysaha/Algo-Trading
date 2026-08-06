@@ -38,7 +38,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 # Conditionally create engine based on DB type
 if DATABASE_URL and "sqlite" in DATABASE_URL:
     engine = create_engine(
-        DATABASE_URL, poolclass=NullPool, connect_args={"check_same_thread": False}
+        DATABASE_URL, poolclass=NullPool, connect_args={"check_same_thread": False, "timeout": 30}
     )
 else:
     engine = create_engine(DATABASE_URL, pool_size=50, max_overflow=100, pool_timeout=10)
