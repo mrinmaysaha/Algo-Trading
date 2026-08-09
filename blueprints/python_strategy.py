@@ -3009,6 +3009,8 @@ def api_run_backtest():
         if not strategy_id or not symbols:
             return jsonify({"status": "error", "message": "strategy_id and symbols are required"}), 400
 
+        logger.info(f"[BACKTEST] Running strategy '{strategy_id}' on symbols {symbols} (interval={interval}, lookback={lookback_days}d, source={source})")
+
         strategy_filename = f"{strategy_id}.py" if not strategy_id.endswith(".py") else strategy_id
         strategy_path = os.path.join("strategies", "scripts", strategy_filename)
 
@@ -3064,6 +3066,14 @@ def api_run_backtest():
             feed_token=feed_token,
             broker=broker
         )
+        if isinstance(result, dict) and result.get("status") == "error":
+            logger.error(
+                f"[BACKTEST] Failed for strategy '{strategy_id}' (symbols: {symbols}): {result.get('message')}"
+            )
+        else:
+            logger.info(
+                f"[BACKTEST] Completed successfully for '{strategy_id}': {len(result.get('trades', []))} trades generated"
+            )
         return jsonify(result)
     except Exception as e:
         logger.exception("Flask blueprint run-backtest failed")

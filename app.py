@@ -457,6 +457,9 @@ def create_app():
         csrf.exempt(app.view_functions["health_bp.simple_health"])
         csrf.exempt(app.view_functions["health_bp.detailed_health_check"])
 
+        # Exempt Python strategy backtest API from CSRF (React SPA internal POST, sends X-CSRFToken header)
+        csrf.exempt(app.view_functions["python_strategy_bp.api_run_backtest"])
+
         # Initialize latency monitoring (after registering API blueprint)
         init_latency_monitoring(app)
 
@@ -561,7 +564,7 @@ def create_app():
 
         # Check if it's a CSRF error
         if "CSRF" in error_description or "csrf" in error_description.lower():
-            if request.is_json or request.path.startswith("/api"):
+            if request.is_json or request.path.startswith("/api") or request.path.startswith("/python/api"):
                 return jsonify(
                     {
                         "error": "CSRF validation failed",

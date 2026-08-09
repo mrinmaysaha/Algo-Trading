@@ -18,7 +18,8 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import JSON, Boolean, Column, DateTime, Float, Integer, String, create_engine
+from sqlalchemy import JSON, Boolean, Column, DateTime, Float, Integer, String, create_engine, event
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.pool import NullPool
@@ -31,10 +32,19 @@ HEALTH_DATABASE_URL = os.getenv("HEALTH_DATABASE_URL", "sqlite:///db/health.db")
 
 # Conditionally create engine based on DB type
 if HEALTH_DATABASE_URL and "sqlite" in HEALTH_DATABASE_URL:
-    # SQLite: Use NullPool to prevent connection pool exhaustion
+    # SQLite: Use NullPool to prevent connection pool exhaustion with 60s timeout
     health_engine = create_engine(
-        HEALTH_DATABASE_URL, poolclass=NullPool, connect_args={"check_same_thread": False}
+        HEALTH_DATABASE_URL,
+        poolclass=NullPool,
+        connect_args={"check_same_thread": False, "timeout": 60}
     )
+
+    @event.listens_for(health_engine, "connect")
+    def _set_sqlite_pragma(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL;")
+        cursor.execute("PRAGMA busy_timeout=60000;")
+        cursor.close()
 else:
     # For other databases like PostgreSQL, use connection pooling
     health_engine = create_engine(
@@ -166,9 +176,16 @@ class HealthMetric(HealthBase):
             health_session.add(metric)
             health_session.commit()
             return True
-        except Exception as e:
-            logger.exception(f"Error logging health metrics: {str(e)}")
+        except OperationalError as oe:
             health_session.rollback()
+            if "locked" in str(oe).lower():
+                logger.warning("Health metric insert deferred: SQLite database is busy/locked")
+            else:
+                logger.exception(f"Database operational error in health metrics: {oe}")
+            return False
+        except Exception as e:
+            health_session.rollback()
+            logger.exception(f"Error logging health metrics: {str(e)}")
             return False
 
     @staticmethod
