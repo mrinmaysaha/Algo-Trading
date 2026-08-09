@@ -54,7 +54,7 @@ import { useLivePrice } from '@/hooks/useLivePrice'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { usePageVisibility } from '@/hooks/usePageVisibility'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
-import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
+import { cn, getContractMultiplier, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { Position } from '@/types/trading'
@@ -115,13 +115,12 @@ function calculatePnlPercent(position: Position): number {
 
   // For open positions with quantity, calculate based on investment
   if (qty !== 0) {
-    const investment = Math.abs(avgPrice * qty)
+    const multiplier = getContractMultiplier(position.symbol, position.exchange, position.lot_size)
+    const investment = Math.abs(avgPrice * qty * multiplier)
     return investment > 0 ? (pnl / investment) * 100 : 0
   }
 
   // For closed positions (qty=0), return 0% like Zerodha
-  // We cannot reliably calculate P&L% without knowing the original quantity
-  // The P&L amount is still shown correctly from the API
   return 0
 }
 
@@ -574,7 +573,8 @@ export default function Positions() {
       totalPnl += pos.pnl || 0
       const avgPrice = pos.average_price || 0
       const qty = Math.abs(pos.quantity || 0)
-      totalInvestment += avgPrice * qty
+      const multiplier = getContractMultiplier(pos.symbol, pos.exchange, pos.lot_size)
+      totalInvestment += avgPrice * qty * multiplier
     })
 
     const pnlPercent = totalInvestment > 0 ? (totalPnl / totalInvestment) * 100 : 0

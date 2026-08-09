@@ -45,3 +45,46 @@ def is_future(symbol: str, exchange: str) -> bool:
     if exchange in FNO_EXCHANGES - CRYPTO_EXCHANGES:
         return symbol.endswith("FUT")
     return False
+
+
+def get_contract_multiplier(symbol: str, exchange: str) -> float:
+    """
+    Get price multiplier for contract value, trade value, and P&L calculations.
+
+    MCX Commodity Quotation Rules:
+    - GOLD / GOLDM / GOLDTEN: Quoted per 10g while Qty is in grams -> multiplier = 0.1
+    - COTTONCNDY: Quoted per candy (2 bales) while Qty is in bales -> multiplier = 0.5
+    - SILVER / SILVERM / SILVERMIC: Quoted per 1kg, Qty in kg -> multiplier = 1.0 (Qty * Price is exact)
+    - CRUDEOIL / CRUDEOILM: Quoted per 1 bbl, Qty in bbl -> multiplier = 1.0 (Qty * Price is exact)
+    - NATURALGAS / NATGASMINI / NATGASM: Quoted per 1 mmBtu, Qty in mmBtu -> multiplier = 1.0 (Qty * Price is exact)
+    - Default multiplier = 1.0.
+    """
+    if not symbol or not exchange:
+        return 1.0
+
+    ex_upper = str(exchange).upper()
+    sym_upper = str(symbol).upper()
+
+    # MCX quotation unit rules:
+    if ex_upper == "MCX":
+        if (sym_upper.startswith("GOLDM") or sym_upper.startswith("GOLD")) and not (
+            sym_upper.startswith("GOLDGUINEA") or sym_upper.startswith("GOLDPETAL")
+        ):
+            return 0.1
+        if sym_upper.startswith("COTTONCNDY") or sym_upper.startswith("COTTON"):
+            return 0.5
+
+    try:
+        from database.token_db import get_symbol_info
+
+        sym_info = get_symbol_info(symbol, exchange)
+        if sym_info and getattr(sym_info, "contract_value", None):
+            cv = float(sym_info.contract_value)
+            if cv > 0 and cv != 1.0:
+                return cv
+    except Exception:
+        pass
+
+    return 1.0
+
+

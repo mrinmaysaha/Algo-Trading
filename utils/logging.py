@@ -421,11 +421,12 @@ def setup_logging():
     root_logger.addHandler(json_handler)
 
     # Suppress noisy third-party loggers
-    logging.getLogger("werkzeug").setLevel(logging.WARNING)
-    logging.getLogger("urllib3").setLevel(logging.WARNING)
-    logging.getLogger("requests").setLevel(logging.WARNING)
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("werkzeug").setLevel(logging.INFO)
+    logging.getLogger("urllib3").setLevel(logging.INFO)
+    logging.getLogger("requests").setLevel(logging.INFO)
+    logging.getLogger("httpx").setLevel(logging.INFO)
+    logging.getLogger("httpcore").setLevel(logging.INFO)
+    logging.getLogger("websockets").setLevel(logging.INFO)
 
     # Add Werkzeug error filter to suppress known development server errors
     werkzeug_error_filter = WerkzeugErrorFilter()
@@ -443,12 +444,12 @@ def setup_logging():
     logging.getLogger("hpack.hpack").setLevel(logging.INFO)
     logging.getLogger("hpack").setLevel(logging.INFO)
     # Suppress APScheduler verbose logs
-    logging.getLogger("apscheduler").setLevel(logging.WARNING)
-    logging.getLogger("apscheduler.scheduler").setLevel(logging.WARNING)
-    logging.getLogger("apscheduler.executors").setLevel(logging.WARNING)
+    logging.getLogger("apscheduler").setLevel(logging.INFO)
+    logging.getLogger("apscheduler.scheduler").setLevel(logging.INFO)
+    logging.getLogger("apscheduler.executors").setLevel(logging.INFO)
     # Suppress websockets library logs
-    logging.getLogger("websockets").setLevel(logging.WARNING)
-    logging.getLogger("websockets.server").setLevel(logging.WARNING)
+    logging.getLogger("websockets").setLevel(logging.INFO)
+    logging.getLogger("websockets.server").setLevel(logging.INFO)
     # Suppress telegram-bot library logs
     logging.getLogger("telegram").setLevel(logging.WARNING)
     logging.getLogger("telegram.ext").setLevel(logging.WARNING)

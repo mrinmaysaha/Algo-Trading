@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router'
 import { pythonStrategyApi } from '@/api/python-strategy'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
@@ -67,7 +67,7 @@ export default function PythonStrategyBacktester() {
         setResult(res)
         navigate('/tools/python-backtester/results')
       } else {
-        throw new Error(res.message || 'Backtest failed')
+        throw new Error(res.message || res.error || 'Backtest failed')
       }
     } catch (err: any) {
       console.error(err)

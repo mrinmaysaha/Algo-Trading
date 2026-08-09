@@ -128,8 +128,10 @@ webClient.interceptors.response.use(
       window.location.href = '/login'
     } else if (status === 403) {
       // Forbidden - user doesn't have permission for this resource
-      // Create a more descriptive error for the caller to handle
-      error.message = 'You do not have permission to access this resource'
+      // Create a more descriptive error for the caller to handle if backend didn't provide one
+      if (!error.response?.data?.message) {
+        error.message = 'You do not have permission to access this resource'
+      }
     }
     return Promise.reject(error)
   }

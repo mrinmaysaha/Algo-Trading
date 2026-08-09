@@ -16,10 +16,9 @@ RUN pip install --no-cache-dir uv && \
 # ------------------------------ Frontend Builder Stage --------------------- #
 FROM node:22-bullseye-slim AS frontend-builder
 WORKDIR /app
-COPY frontend/package*.json ./frontend/
-RUN cd frontend && npm ci
-COPY frontend/ ./frontend/
-RUN cd frontend && npm run build
+COPY . .
+RUN cd frontend && npm install --include=dev && npm run build
+
 
 # --------------------------------------------------------------------------- #
 # ------------------------------ Production Stage --------------------------- #

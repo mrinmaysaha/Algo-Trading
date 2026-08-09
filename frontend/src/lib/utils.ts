@@ -43,3 +43,39 @@ export function makeFormatCurrency(broker?: string | null): (value: number) => s
           minimumFractionDigits: 2,
         }).format(value)
 }
+
+/**
+ * Returns the contract multiplier for trade value and P&L calculations.
+ * - MCX GOLD and GOLDM options/futures: price is quoted per 10g while qty is in grams -> multiplier = 0.1
+ * - Custom lot_size (e.g. Crypto ETHUSD.P): returns lot_size
+ * - Default: 1.0
+ */
+export function getContractMultiplier(
+  symbol?: string,
+  exchange?: string,
+  lotSize?: number
+): number {
+  if (!symbol || !exchange) return 1.0
+  const exUpper = exchange.toUpperCase()
+  const symUpper = symbol.toUpperCase()
+
+  if (exUpper === 'MCX') {
+    if (
+      (symUpper.startsWith('GOLDM') || symUpper.startsWith('GOLD')) &&
+      !symUpper.startsWith('GOLDGUINEA') &&
+      !symUpper.startsWith('GOLDPETAL')
+    ) {
+      return 0.1
+    }
+    if (symUpper.startsWith('COTTONCNDY') || symUpper.startsWith('COTTON')) {
+      return 0.5
+    }
+  }
+
+  if (lotSize !== undefined && lotSize !== null && lotSize > 0 && lotSize !== 1) {
+    return lotSize
+  }
+
+  return 1.0
+}
+

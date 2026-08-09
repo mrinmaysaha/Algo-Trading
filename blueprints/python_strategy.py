@@ -1562,6 +1562,7 @@ def unschedule_strategy(strategy_id):
 @check_session_validity
 def index():
     """Main dashboard"""
+    load_configs()
     # Ensure initialization is done when first accessed
     initialize_with_app_context()
     cleanup_dead_processes()
@@ -2989,3 +2990,82 @@ def initialize_with_app_context():
 # The initialization is now handled in the index route and other entry points
 
 logger.debug(f"Python Strategy System initialized (basic) on {OS_TYPE}")
+
+
+@python_strategy_bp.route("/api/run-backtest", methods=["POST"])
+def api_run_backtest():
+    """Run a VectorBT backtest for a Python strategy."""
+    try:
+        data = request.get_json(silent=True) or (request.json if hasattr(request, "json") else {}) or {}
+        strategy_id = str(data.get("strategy_id", "")).strip()
+        symbols = data.get("symbols", [])
+        if isinstance(symbols, str):
+            symbols = [s.strip() for s in symbols.split(",") if s.strip()]
+        interval = data.get("interval", "5m")
+        lookback_days = int(data.get("lookback_days", 60))
+        initial_capital = float(data.get("initial_capital", 100000.0))
+        source = data.get("source", "db")
+
+        if not strategy_id or not symbols:
+            return jsonify({"status": "error", "message": "strategy_id and symbols are required"}), 400
+
+        strategy_filename = f"{strategy_id}.py" if not strategy_id.endswith(".py") else strategy_id
+        strategy_path = os.path.join("strategies", "scripts", strategy_filename)
+
+        exchange = "NSE"
+        config_file = os.path.join("strategies", "strategy_configs.json")
+        if os.path.exists(config_file):
+            try:
+                with open(config_file, "r") as f:
+                    configs = json.load(f)
+                    lookup_id = strategy_id.replace(".py", "")
+                    if lookup_id in configs:
+                        cfg_entry = configs[lookup_id]
+                        exchange = cfg_entry.get("exchange", "NSE")
+                        if not os.path.exists(strategy_path):
+                            if cfg_entry.get("file_path") and os.path.exists(cfg_entry["file_path"]):
+                                strategy_path = cfg_entry["file_path"]
+                            elif cfg_entry.get("file_name") and os.path.exists(os.path.join("strategies", "scripts", cfg_entry["file_name"])):
+                                strategy_path = os.path.join("strategies", "scripts", cfg_entry["file_name"])
+            except Exception as e:
+                logger.error(f"Error reading strategy_configs.json: {e}")
+
+        if not os.path.exists(strategy_path):
+            return jsonify({"status": "error", "message": f"Strategy file '{strategy_id}' not found on server"}), 404
+
+        host_server = request.host_url.rstrip("/") if (request and hasattr(request, "host_url") and request.host_url) else "http://127.0.0.1:5000"
+
+        api_key = data.get("apikey", "") or session.get("api_key", "")
+        auth_token = None
+        feed_token = None
+        broker = None
+
+        if source == "api":
+            from database.auth_db import get_auth_token_broker, verify_api_key
+            if not api_key or verify_api_key(api_key) is None:
+                return jsonify({"status": "error", "message": "Invalid or missing OpenAlgo API key. Please configure your API key."}), 403
+            
+            auth_token, feed_token, broker = get_auth_token_broker(api_key, include_feed_token=True)
+            if auth_token is None:
+                return jsonify({"status": "error", "message": "No active broker session for Data Source = Broker API. Please log in to your broker in OpenAlgo, or switch Data Source to Local Database."}), 403
+
+        from backtesting.engine import run_python_strategy_backtest
+        result = run_python_strategy_backtest(
+            strategy_path=strategy_path,
+            symbols=symbols,
+            interval=interval,
+            lookback_days=lookback_days,
+            initial_capital=initial_capital,
+            api_key=api_key,
+            host_server=host_server,
+            exchange=exchange,
+            source=source,
+            auth_token=auth_token,
+            feed_token=feed_token,
+            broker=broker
+        )
+        return jsonify(result)
+    except Exception as e:
+        logger.exception("Flask blueprint run-backtest failed")
+        return jsonify({"status": "error", "message": str(e)}), 500
+

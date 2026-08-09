@@ -210,17 +210,28 @@ def map_trade_data(trade_data):
     return trade_data
 
 
+from utils.symbol_utils import get_contract_multiplier
+
+
 def transform_tradebook_data(tradebook_data):
     transformed_data = []
     for trade in tradebook_data:
+        symbol = trade.get("tradingsymbol", "")
+        exchange = trade.get("exchange", "")
+        qty = _to_float(trade.get("quantity", 0))
+        price = _to_float(trade.get("fillprice", 0.0))
+        multiplier = get_contract_multiplier(symbol, exchange)
+
+        trade_value = qty * price * multiplier if (qty > 0 and price > 0) else _to_float(trade.get("tradevalue", 0.0))
+
         transformed_trade = {
-            "symbol": trade.get("tradingsymbol", ""),
-            "exchange": trade.get("exchange", ""),
+            "symbol": symbol,
+            "exchange": exchange,
             "product": trade.get("producttype", ""),
             "action": trade.get("transactiontype", ""),
             "quantity": trade.get("quantity", 0),
-            "average_price": trade.get("fillprice", 0.0),
-            "trade_value": trade.get("tradevalue", 0),
+            "average_price": price,
+            "trade_value": round(trade_value, 2),
             "orderid": trade.get("orderid", ""),
             "timestamp": trade.get("filltime", ""),
         }
@@ -235,17 +246,27 @@ def map_position_data(position_data):
 def transform_positions_data(positions_data):
     transformed_data = []
     for position in positions_data:
+        symbol = position.get("tradingsymbol", "")
+        exchange = position.get("exchange", "")
+        multiplier = get_contract_multiplier(symbol, exchange)
+        raw_pnl = _to_float(position.get("pnl", 0.0))
+
+        # Adjust PnL if broker returned unadjusted quotation unit PnL
+        pnl = raw_pnl * multiplier if multiplier != 1.0 else raw_pnl
+
         transformed_position = {
-            "symbol": position.get("tradingsymbol", ""),
-            "exchange": position.get("exchange", ""),
+            "symbol": symbol,
+            "exchange": exchange,
             "product": position.get("producttype", ""),
             "quantity": _to_int(position.get("netqty", 0)),
             "average_price": _to_float(position.get("avgnetprice", 0.0)),
             "ltp": _to_float(position.get("ltp", 0.0)),
-            "pnl": _to_float(position.get("pnl", 0.0)),
+            "pnl": round(pnl, 2),
+            "lot_size": multiplier,
         }
         transformed_data.append(transformed_position)
     return transformed_data
+
 
 
 def transform_holdings_data(holdings_data):

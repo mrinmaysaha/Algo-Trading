@@ -33,7 +33,7 @@ import {
 } from '@/components/ui/table'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
-import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
+import { cn, getContractMultiplier, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { Trade } from '@/types/trading'
@@ -545,43 +545,52 @@ export default function TradeBook() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {sortedAndFilteredTrades.map((trade, index) => (
-                    <TableRow key={`${trade.orderid}-${index}`}>
-                      <TableCell className="font-medium">{trade.symbol}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline">{trade.exchange}</Badge>
-                      </TableCell>
-                      {!isCrypto && (
+                  {sortedAndFilteredTrades.map((trade, index) => {
+                    const qty = Number(trade.quantity) || 0
+                    const price = Number(trade.average_price) || 0
+                    const multiplier = getContractMultiplier(trade.symbol, trade.exchange)
+                    const tradeValue = (qty > 0 && price > 0)
+                      ? qty * price * multiplier
+                      : (Number(trade.trade_value) || 0)
+
+                    return (
+                      <TableRow key={`${trade.orderid}-${index}`}>
+                        <TableCell className="font-medium">{trade.symbol}</TableCell>
                         <TableCell>
-                          <Badge variant="secondary">{trade.product}</Badge>
+                          <Badge variant="outline">{trade.exchange}</Badge>
                         </TableCell>
-                      )}
-                      <TableCell>
-                        <Badge
-                          variant={trade.action === 'BUY' ? 'default' : 'destructive'}
-                          className={cn('gap-1', trade.action === 'BUY' ? 'bg-green-500' : '')}
-                        >
-                          {trade.action === 'BUY' ? (
-                            <TrendingUp className="h-3 w-3" />
-                          ) : (
-                            <TrendingDown className="h-3 w-3" />
-                          )}
-                          {trade.action}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-right font-mono">{trade.quantity}</TableCell>
-                      <TableCell className="text-right font-mono">
-                        {formatCurrency(trade.average_price)}
-                      </TableCell>
-                      <TableCell className="text-right font-mono">
-                        {formatCurrency(trade.trade_value)}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs">{trade.orderid}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {formatTime(trade.timestamp)}
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                        {!isCrypto && (
+                          <TableCell>
+                            <Badge variant="secondary">{trade.product}</Badge>
+                          </TableCell>
+                        )}
+                        <TableCell>
+                          <Badge
+                            variant={trade.action === 'BUY' ? 'default' : 'destructive'}
+                            className={cn('gap-1', trade.action === 'BUY' ? 'bg-green-500' : '')}
+                          >
+                            {trade.action === 'BUY' ? (
+                              <TrendingUp className="h-3 w-3" />
+                            ) : (
+                              <TrendingDown className="h-3 w-3" />
+                            )}
+                            {trade.action}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right font-mono">{trade.quantity}</TableCell>
+                        <TableCell className="text-right font-mono">
+                          {formatCurrency(trade.average_price)}
+                        </TableCell>
+                        <TableCell className="text-right font-mono">
+                          {formatCurrency(tradeValue)}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">{trade.orderid}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {formatTime(trade.timestamp)}
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
                 </TableBody>
               </Table>
             </div>

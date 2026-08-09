@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  BarChart3,
   Calendar,
   Clock,
   Download,
@@ -192,6 +193,10 @@ export default function PythonStrategyIndex() {
     } catch (_error) {
       showToast.error('Failed to export strategy', 'pythonStrategy')
     }
+  }
+
+  const handleBacktest = (strategy: PythonStrategy) => {
+    navigate('/tools/python-backtester', { state: { strategyId: strategy.id, symbol: strategy.exchange || 'NIFTY' } })
   }
 
   const handleCheckContracts = async () => {
@@ -401,6 +406,10 @@ export default function PythonStrategyIndex() {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => handleBacktest(strategy)}>
+                          <BarChart3 className="h-4 w-4 mr-2" />
+                          Run Backtest
+                        </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => handleExport(strategy)}>
                           <Download className="h-4 w-4 mr-2" />
                           Export
@@ -538,6 +547,20 @@ export default function PythonStrategyIndex() {
                         ? `${strategy.schedule_start_time} - ${strategy.schedule_stop_time}`
                         : 'Edit schedule'}
                     </TooltipContent>
+                  </Tooltip>
+
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="border-emerald-500/50 text-emerald-600 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950"
+                        onClick={() => handleBacktest(strategy)}
+                      >
+                        <BarChart3 className="h-4 w-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Run Backtest</TooltipContent>
                   </Tooltip>
 
                   <Tooltip>

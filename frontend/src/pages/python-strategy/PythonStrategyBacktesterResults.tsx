@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router'
 import {
   ArrowLeft,
   ExternalLink,
@@ -138,11 +138,11 @@ function TradingViewChart({
       wickDownColor: '#ef5350',
     })
 
-    // Parse time strings ("YYYY-MM-DD HH:MM") to unix seconds or date string
+    // Parse time strings ("YYYY-MM-DD HH:MM") to unix seconds with IST timezone offset
     const formattedCandles = displayCandles
       .map(c => {
-        const timeStr = c.time.replace(' ', 'T')
-        const dateObj = new Date(timeStr)
+        const isoStr = c.time.includes('T') ? c.time : `${c.time.replace(' ', 'T')}:00+05:30`
+        const dateObj = new Date(isoStr)
         const timestamp = Math.floor(dateObj.getTime() / 1000)
         return {
           time: (isNaN(timestamp) ? c.time : timestamp) as Time,
@@ -188,12 +188,33 @@ function TradingViewChart({
     
     const markers = signals
       .map(s => {
-        const timeStr = s.time.replace(' ', 'T')
-        const dateObj = new Date(timeStr)
+        const isoStr = s.time.includes('T') ? s.time : `${s.time.replace(' ', 'T')}:00+05:30`
+        const dateObj = new Date(isoStr)
         const timestamp = Math.floor(dateObj.getTime() / 1000)
-        const t = (isNaN(timestamp) ? s.time : timestamp) as Time
+        let t = (isNaN(timestamp) ? s.time : timestamp) as Time
 
-        if (!candleTimes.has(t)) return null
+        if (!candleTimes.has(t)) {
+          const tNum = typeof t === 'number' ? t : 0
+          if (tNum > 0 && uniqueCandles.length > 0) {
+            let minDiff = Infinity
+            let bestCandleTime: Time | null = null
+            for (const cand of uniqueCandles) {
+              const candTimeNum = typeof cand.time === 'number' ? cand.time : 0
+              const diff = Math.abs(candTimeNum - tNum)
+              if (diff < minDiff && diff <= 86400) {
+                minDiff = diff
+                bestCandleTime = cand.time
+              }
+            }
+            if (bestCandleTime !== null) {
+              t = bestCandleTime
+            } else {
+              return null
+            }
+          } else {
+            return null
+          }
+        }
 
         const isBuy = s.type.includes('buy') && !s.type.includes('pe')
         const isPe = s.type.includes('pe') || s.label?.includes('PE')
@@ -300,7 +321,10 @@ export default function PythonStrategyBacktesterResults() {
     drawdown_curve = [],
     trades = [],
     price_charts = {},
-    portfolio_breakdown = []
+    portfolio_breakdown = [],
+    heatmap_html = '',
+    assumptions = {},
+    manifest = {}
   } = result
 
   // Filtered trade list
@@ -726,6 +750,80 @@ export default function PythonStrategyBacktesterResults() {
           )}
         </div>
       </div>
+
+      {/* StockMock / AlgoTest Monthly PnL Heatmap Matrix */}
+      {heatmap_html && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg font-semibold">StockMock Monthly PnL Matrix (₹)</CardTitle>
+            <CardDescription>Monthly profit distribution & performance heatmap</CardDescription>
+          </CardHeader>
+          <CardContent className="overflow-x-auto">
+            <div dangerouslySetInnerHTML={{ __html: heatmap_html }} />
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Reproducibility Manifest & Transparency Disclosures */}
+      {(manifest?.run_id || assumptions?.pricing_model) && (
+        <div className="grid gap-6 md:grid-cols-2">
+          {manifest?.run_id && (
+            <Card className="bg-card">
+              <CardHeader>
+                <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                  <ShieldAlert className="h-4 w-4 text-primary" /> Audit Trail & Reproducibility Manifest
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 text-xs font-mono">
+                <div className="flex justify-between border-b pb-1">
+                  <span className="text-muted-foreground">Run ID</span>
+                  <span className="font-bold text-foreground">{manifest.run_id}</span>
+                </div>
+                <div className="flex justify-between border-b pb-1">
+                  <span className="text-muted-foreground">Code Hash</span>
+                  <span>{manifest.strategy_code_hash}</span>
+                </div>
+                <div className="flex justify-between border-b pb-1">
+                  <span className="text-muted-foreground">Engine Version</span>
+                  <span className="text-emerald-500 font-bold">{manifest.engine_version}</span>
+                </div>
+                <div className="flex justify-between pt-1">
+                  <span className="text-muted-foreground">Generated At</span>
+                  <span>{manifest.generated_at?.slice(0, 19).replace('T', ' ')}</span>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {assumptions?.pricing_model && (
+            <Card className="bg-card">
+              <CardHeader>
+                <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                  <Lightbulb className="h-4 w-4 text-yellow-500" /> Backtest Methodology & Pricing Model
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 text-xs">
+                <div className="flex justify-between border-b pb-1">
+                  <span className="text-muted-foreground">Pricing Model</span>
+                  <span className="font-semibold">{assumptions.pricing_model}</span>
+                </div>
+                <div className="flex justify-between border-b pb-1">
+                  <span className="text-muted-foreground">DTE Calculation</span>
+                  <span>{assumptions.dte_calculation}</span>
+                </div>
+                <div className="flex justify-between border-b pb-1">
+                  <span className="text-muted-foreground">Slippage Model</span>
+                  <span>{assumptions.slippage_model}</span>
+                </div>
+                <div className="flex justify-between pt-1">
+                  <span className="text-muted-foreground">Confidence Grade</span>
+                  <span className="font-bold text-emerald-400">{assumptions.confidence_grade}</span>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
 
       {/* Interactive Trades Log Table matching requested format */}
       <Card>

@@ -54,6 +54,16 @@ class TrafficLoggerMiddleware:
 
             try:
                 duration_ms = (time.time() - start_time) * 1000
+                if status_code >= 400 or error:
+                    logger.error(
+                        f"{request.method} {request.path} - Status: {status_code} ({duration_ms:.1f}ms)"
+                        + (f" - Error: {error}" if error else "")
+                    )
+                else:
+                    logger.info(
+                        f"{request.method} {request.path} - Status: {status_code} ({duration_ms:.1f}ms)"
+                    )
+
                 # Capture request-context values now; the DB write happens on
                 # the executor thread where the Flask context is gone.
                 payload = {

@@ -1,532 +1,447 @@
 # backtesting/universal_runner.py
 """
-Universal Dynamic Strategy Execution Runner (AlgoTest / StockMock Style)
-
-Executes ANY Python strategy script dynamically without hardcoding strategy-specific
-branches or hardcoded option prices in the backtesting engine. Supports Class-Based Strategies
-and Universal Signal Strategies seamlessly.
+Master Multi-Asset Backtesting Orchestrator & Universal Strategy Runner.
+Implements Indian F&O multi-symbol risk enforcement, BSM/Black-76 option pricing,
+and production-grade trade execution replay.
 """
-
+import datetime
 import os
-import sys
-import ast
 import re
-import importlib.util
-from datetime import datetime, timedelta
-import pandas as pd
+import ast
+from typing import Dict, List, Optional, Any
 import numpy as np
-from openalgo import ta
+import pandas as pd
+
+from backtesting.config.asset_registry import (
+    INDIAN_ASSET_SPECS,
+    get_historical_lot_size,
+    calculate_exact_dte,
+    validate_strategy_config
+)
+from backtesting.pricing.option_models import IndianOptionPricingEngine
+from backtesting.execution.tax_engine import IndianTaxEngine
+from backtesting.adapters.technical_engine import TechnicalEngine
+from backtesting.adapters.strategy_protocol import (
+    StrategyProtocol,
+    LiveStrategyAdapter,
+    GenericIndicatorStrategy,
+    Signal
+)
+from backtesting.analytics.stats_engine import (
+    PerformanceAnalytics,
+    StockMockPnLMatrix,
+    build_run_manifest,
+    get_assumptions_disclosure
+)
 
 
-def get_estimated_atm_premium(symbol: str, spot_price: float) -> float:
-    """
-    Dynamically computes estimated ATM option contract premium based on underlying spot level.
-    Weekly ATM index options typically trade at ~0.75% of spot price level.
-    """
-    if spot_price <= 0:
-        return 200.0
-    return round(spot_price * 0.0075, 2)
+class DataUnavailableError(Exception):
+    """Raised when market data is unavailable. Enforces zero fake-data generation."""
+    pass
 
 
-class SimulatedBrokerClient:
-    """
-    Mocks OpenAlgo API client (api) to intercept strategy order execution
-    and market data subscriptions during historical bar replay.
-    """
-    def __init__(self, api_key=None, host=None, ws_url=None, verbose=0):
-        self.api_key = api_key
-        self.host = host
-        self.ws_url = ws_url
-        self.verbose = verbose
-        self.placed_orders = []
-        self.subscribed_symbols = []
-        self.current_bar = {}
-        self.symbol_quotes = {}
+class PortfolioRiskManager:
+    """Enforces multi-symbol intraday risk guardrails inside backtests."""
 
-    def connect(self):
-        """Mocks OpenAlgo WebSocket connect."""
+    def __init__(self, config: Dict):
+        self.max_total_trades_per_day = config.get("max_total_trades_per_day", 10)
+        self.max_trades_per_index = config.get("max_trades_per_index", 3)
+        self.max_daily_loss = config.get("max_daily_loss", 5000.0)
+
+        self.current_date: Optional[datetime.date] = None
+        self.total_trades_today = 0
+        self.realized_pnl_today = 0.0
+        self.index_trades_today: Dict[str, int] = {}
+        self.trading_halted_today = False
+
+    def reset_if_new_day(self, date_val: datetime.date):
+        if self.current_date != date_val:
+            self.current_date = date_val
+            self.total_trades_today = 0
+            self.realized_pnl_today = 0.0
+            self.index_trades_today = {}
+            self.trading_halted_today = False
+
+    def can_open_trade(self, symbol: str) -> bool:
+        if self.trading_halted_today:
+            return False
+        if self.total_trades_today >= self.max_total_trades_per_day:
+            return False
+        if self.index_trades_today.get(symbol, 0) >= self.max_trades_per_index:
+            return False
+        if self.realized_pnl_today <= -abs(self.max_daily_loss):
+            self.trading_halted_today = True
+            return False
         return True
 
-    def set_current_bar(self, data_dict):
-        """Sets the current historical bar data."""
-        self.current_bar = data_dict
-        sym = data_dict.get("symbol", "")
-        ltp = float(data_dict.get("close", data_dict.get("ltp", 0.0)))
-        self.symbol_quotes[sym] = ltp
-
-    def optionsorder(self, strategy=None, underlying=None, exchange=None, expiry_date=None,
-                     offset="ATM", option_type="CE", action="BUY", quantity=1, pricetype="MARKET", product="MIS", **kwargs):
-        """Simulates OpenAlgo optionsorder placement with dynamic ATM premium."""
-        spot_price = float(self.current_bar.get("close", self.current_bar.get("ltp", 52500.0)))
-        opt_symbol = f"{underlying}_{offset}_{option_type}"
-        est_premium = get_estimated_atm_premium(underlying or "INDEX", spot_price)
-        
-        order_record = {
-            "status": "success",
-            "order_id": f"ORD_{len(self.placed_orders) + 1}",
-            "symbol": opt_symbol,
-            "underlying": underlying,
-            "underlying_ltp": spot_price,
-            "option_type": option_type,
-            "action": action,
-            "quantity": quantity,
-            "product": product,
-            "price": est_premium,
-            "timestamp": self.current_bar.get("timestamp", datetime.now().strftime("%Y-%m-%d %H:%M"))
-        }
-        self.placed_orders.append(order_record)
-        return order_record
-
-    def placeorder(self, strategy=None, symbol=None, action="BUY", exchange=None, price_type="MARKET", product="MIS", quantity=1, **kwargs):
-        """Simulates OpenAlgo placeorder execution."""
-        ltp = float(self.current_bar.get("close", self.current_bar.get("ltp", 0.0)))
-        est_premium = get_estimated_atm_premium(symbol or "INDEX", ltp) if ltp > 0 else 200.0
-        
-        order_record = {
-            "status": "success",
-            "order_id": f"ORD_{len(self.placed_orders) + 1}",
-            "symbol": symbol,
-            "action": action,
-            "quantity": quantity,
-            "product": product,
-            "price": est_premium,
-            "timestamp": self.current_bar.get("timestamp", datetime.now().strftime("%Y-%m-%d %H:%M"))
-        }
-        self.placed_orders.append(order_record)
-        return order_record
-
-    def quotes(self, exchange=None, symbol=None):
-        """Returns mock/simulated quote."""
-        ltp = float(self.current_bar.get("close", self.current_bar.get("ltp", 0.0)))
-        return {"status": "success", "symbol": symbol, "ltp": ltp}
-
-    def subscribe_ltp(self, symbol_list, on_data_received=None):
-        """Mocks subscribing to market ticks."""
-        self.subscribed_symbols.extend(symbol_list)
-        return {"status": "success"}
+    def record_trade_result(self, symbol: str, net_pnl: float):
+        self.total_trades_today += 1
+        self.index_trades_today[symbol] = self.index_trades_today.get(symbol, 0) + 1
+        self.realized_pnl_today += net_pnl
+        if self.realized_pnl_today <= -abs(self.max_daily_loss):
+            self.trading_halted_today = True
 
 
 class UniversalStrategyRunner:
-    """
-    Universal Dynamic Strategy Execution Engine.
-    Executes ANY Python strategy script without hardcoded strategy names or logic.
-    """
-    def __init__(self, strategy_path: str):
-        self.strategy_path = strategy_path
-        with open(strategy_path, "r", encoding="utf-8") as f:
-            self.code = f.read()
-        self.tree = ast.parse(self.code)
-        
-        # Dynamic Module Loader
-        self.module = None
-        try:
-            module_name = f"dynamic_strat_{os.path.basename(strategy_path).replace('.py', '')}"
-            spec = importlib.util.spec_from_file_location(module_name, strategy_path)
-            if spec and spec.loader:
-                mod = importlib.util.module_from_spec(spec)
-                sys.modules[module_name] = mod
-                spec.loader.exec_module(mod)
-                self.module = mod
-        except Exception as exc:
-            print(f"Notice: Dynamic module import for {strategy_path}: {exc}")
+    """Master Multi-Asset Backtesting Orchestrator."""
+
+    def __init__(self, strategy_instance: Any, config: Dict = None, slippage_pts: float = 0.5):
+        if config is None:
+            config = {}
+        if isinstance(strategy_instance, str) and os.path.exists(strategy_instance):
+            self.strategy_path = strategy_instance
+            with open(strategy_instance, "r", encoding="utf-8") as f:
+                self.code = f.read()
+            strategy_instance = None
+        else:
+            self.strategy_path = ""
+            self.code = ""
+
+        self.config = validate_strategy_config(config)
+        self.slippage_pts = slippage_pts
+        self.risk_manager = PortfolioRiskManager(self.config)
+
+        if strategy_instance is not None:
+            self.adapter: StrategyProtocol = LiveStrategyAdapter(strategy_instance, self.config)
+        else:
+            self.adapter: StrategyProtocol = GenericIndicatorStrategy(self.config)
 
     def extract_parameters(self) -> dict:
         """Extracts CONFIG dictionary or os.getenv(...) parameters dynamically."""
-        params = {}
-        
-        # 1. Extract from module CONFIG dictionary if available
-        if self.module and hasattr(self.module, "CONFIG") and isinstance(self.module.CONFIG, dict):
-            for k, v in self.module.CONFIG.items():
-                if isinstance(v, (int, float, str, bool)):
-                    params[k.upper()] = v
-
-        # 2. Extract os.getenv("PARAM_NAME", "default")
-        matches = re.finditer(r'os\.getenv\(\s*["\']([A-Z_0-9]+)["\']\s*,\s*["\']([^"\']+)["\']\s*\)', self.code)
-        for match in matches:
-            key, val = match.groups()
-            if key in ["OPENALGO_API_KEY", "HOST_SERVER", "OPENALGO_HOST", "WEBSOCKET_URL", "WEBSOCKET_HOST", "WEBSOCKET_PORT", "STRATEGY_NAME"]:
-                continue
-            if val.isdigit():
-                params[key] = int(val)
-            elif val.replace('.', '', 1).isdigit() and val.count('.') < 2:
-                params[key] = float(val)
-            elif val.lower() in ['true', 'false']:
-                params[key] = val.lower() == 'true'
-            else:
-                params[key] = val
-
-        # 3. Extract direct AST assignments
-        for node in ast.walk(self.tree):
-            if isinstance(node, ast.Assign):
-                for target in node.targets:
-                    if isinstance(target, ast.Name):
-                        name_upper = target.id.upper()
-                        if any(k in name_upper for k in ["SL", "STOP", "TARGET", "TP", "TRAIL", "LOT", "PRODUCT", "DELTA"]):
-                            if isinstance(node.value, ast.Constant):
-                                params[name_upper] = node.value.value
-                            elif isinstance(node.value, ast.Num):
-                                params[name_upper] = node.value.n
-                            elif isinstance(node.value, ast.Str):
-                                params[name_upper] = node.value.s
-
+        params = dict(self.config)
+        if self.code:
+            matches = re.finditer(r'os\.getenv\(\s*["\']([A-Z_0-9]+)["\']\s*,\s*["\']([^"\']+)["\']\s*\)', self.code)
+            for match in matches:
+                key, val = match.groups()
+                if key in ["OPENALGO_API_KEY", "HOST_SERVER", "OPENALGO_HOST", "WEBSOCKET_URL", "WEBSOCKET_HOST", "WEBSOCKET_PORT", "STRATEGY_NAME"]:
+                    continue
+                if val.isdigit():
+                    params[key] = int(val)
+                elif val.replace('.', '', 1).isdigit() and val.count('.') < 2:
+                    params[key] = float(val)
+                elif val.lower() in ['true', 'false']:
+                    params[key] = val.lower() == 'true'
+                else:
+                    params[key] = val
         return params
 
-    def run_simulation(self, symbol: str, df: pd.DataFrame, params: dict) -> list:
-        """
-        Universal entry point to simulate ANY strategy across historical OHLCV data.
-        """
-        LOT_SIZES = {
-            "NIFTY": 65,
-            "BANKNIFTY": 30,
-            "FINNIFTY": 60,
-            "MIDCPNIFTY": 120,
-            "SENSEX": 20,
-            "BANKEX": 30
-        }
-        lot_sz = params.get("LOT_SIZE", params.get("LOTSIZE", LOT_SIZES.get(symbol.upper(), 65)))
-        delta = float(params.get("DELTA", 0.55))
+    def compute_option_premium(
+        self, symbol: str, underlying_price: float, strike: float, dte_days: float, option_type: str
+    ) -> float:
+        spec = INDIAN_ASSET_SPECS.get(symbol.upper(), {"pricing_model": "BSM", "default_iv": 0.18})
+        if spec["pricing_model"] == "BLACK76":
+            return IndianOptionPricingEngine.price_mcx_commodity_option(
+                futures_price=underlying_price,
+                strike=strike,
+                dte_days=dte_days,
+                iv=spec["default_iv"],
+                option_type=option_type
+            )
+        else:
+            return IndianOptionPricingEngine.price_nse_index_option(
+                spot=underlying_price,
+                strike=strike,
+                dte_days=dte_days,
+                iv=spec["default_iv"],
+                option_type=option_type
+            )
 
-        # Check if the module defines a Strategy Class
-        strat_class = None
-        if self.module:
-            for attr_name in dir(self.module):
-                attr = getattr(self.module, attr_name)
-                if isinstance(attr, type) and "Strategy" in attr_name and attr_name != "OpenAlgoInstitutionalStrategyBase":
-                    strat_class = attr
-                    break
+    def run_simulation(self, symbol: str, df: pd.DataFrame, params: dict = None) -> List[Dict]:
+        if params and isinstance(params, dict):
+            self.config.update(params)
+            self.config = validate_strategy_config(self.config)
 
-        if strat_class is not None and hasattr(self.module, "CONFIG"):
-            return self._run_class_strategy_simulation(symbol, df, strat_class, self.module.CONFIG, lot_sz, delta)
+        sym_upper = symbol.upper()
+        spec = INDIAN_ASSET_SPECS.get(sym_upper, {"exchange": "NSE_INDEX", "strike_step": 50})
 
-        return self._run_universal_bar_simulation(symbol, df, params, lot_sz, delta)
+        if df.empty:
+            raise DataUnavailableError(f"Market history DataFrame for {symbol} is empty.")
 
-    def _run_class_strategy_simulation(self, symbol: str, df: pd.DataFrame, strat_class, config: dict, lot_sz: int, delta: float) -> list:
-        """
-        Executes Class-Based Strategy by replaying OHLCV candles to the strategy instance.
-        """
-        cfg_copy = dict(config)
-        cfg_copy["active_index"] = symbol.upper()
-        if symbol.upper() in cfg_copy.get("indices_registry", {}):
-            cfg_copy["indices_registry"][symbol.upper()]["lot_size"] = lot_sz
+        # Normalize Schema
+        df = df.copy()
+        if "datetime" not in df.columns:
+            if "timestamp" in df.columns:
+                df["datetime"] = pd.to_datetime(df["timestamp"])
+            else:
+                df["datetime"] = pd.to_datetime(df.index)
 
-        sim_client = SimulatedBrokerClient()
+        df["datetime"] = pd.to_datetime(df["datetime"])
+        df = df.sort_values("datetime").reset_index(drop=True)
 
-        try:
-            strat_instance = strat_class(cfg_copy)
-            strat_instance.client = sim_client
-        except Exception as exc:
-            print(f"Notice: Class instantiation fallback: {exc}")
-            return self._run_universal_bar_simulation(symbol, df, config, lot_sz, delta)
+        df_calc = TechnicalEngine.calculate_all(df, self.config)
+        if df_calc is None or df_calc.empty:
+            raise DataUnavailableError(f"Insufficient candles to compute indicators for {symbol}.")
 
         trades = []
         trade_id = 1
         in_pos = False
-        pos_dir = None
-        spot_entry = 0.0
-        entry_t = None
+        pos_state: Optional[Dict] = None
 
-        close = df["close"]
-        high = df["high"]
-        low = df["low"]
-        vol = df["volume"] if "volume" in df.columns else pd.Series(1000, index=df.index)
+        sl_atr_mult = self.config.get("sl_atr_mult", 1.2)
+        tp_atr_mult = self.config.get("tp_atr_mult", 3.0)
 
-        # Reset candle history
-        if hasattr(strat_instance, "aggregator") and hasattr(strat_instance.aggregator, "candles"):
-            strat_instance.aggregator.candles = []
+        start_time = self.config.get("start_time", datetime.time(9, 30))
+        end_time = self.config.get("end_time", datetime.time(14, 30))
+        square_off_time = self.config.get("square_off_time", datetime.time(15, 15))
 
-        for i in range(len(df)):
-            t = df.index[i]
-            t_dt = pd.to_datetime(t)
-            c_p = float(close.iloc[i])
-            h_p = float(high.iloc[i])
-            l_p = float(low.iloc[i])
-            v_p = int(vol.iloc[i])
+        reg_lot_override = self.config.get("indices_registry", {}).get(sym_upper, {}).get("lot_size")
+        default_lots = self.config.get("indices_registry", {}).get(sym_upper, {}).get("default_lots", 1)
 
-            sim_client.set_current_bar({"symbol": symbol, "close": c_p, "high": h_p, "low": l_p, "timestamp": t_dt.strftime("%Y-%m-%d %H:%M")})
+        # Synchronous Replay Loop
+        for i in range(len(df_calc) - 1):
+            curr_bar = df_calc.iloc[i]
+            next_bar = df_calc.iloc[i + 1]
 
-            # Check open position risk & intraday MIS session close (15:15 IST)
-            if in_pos:
-                exit_pos = False
-                exit_price = c_p
+            t_curr = pd.to_datetime(curr_bar["datetime"])
+            date_curr = t_curr.date()
+            now_time = t_curr.time()
+
+            self.risk_manager.reset_if_new_day(date_curr)
+
+            if now_time < start_time:
+                continue
+
+            lot_sz = get_historical_lot_size(sym_upper, date_curr.strftime("%Y-%m-%d"), reg_lot_override) * default_lots
+
+            days_to_thursday = (3 - t_curr.weekday()) % 7
+            expiry_date = date_curr + datetime.timedelta(days=days_to_thursday)
+            dte_days = calculate_exact_dte(t_curr.to_pydatetime(), expiry_date)
+
+            # --- 1. EVALUATE EXITS FOR OPEN POSITIONS ---
+            if in_pos and pos_state is not None:
+                c_high = float(curr_bar["high"])
+                c_low = float(curr_bar["low"])
+                c_close = float(curr_bar["close"])
+                atr_val = float(curr_bar["atr"])
+
+                updated_sl, tsl_act = self.adapter.update_trailing_sl(pos_state, c_high, c_low, atr_val)
+                pos_state["stop_loss"] = updated_sl
+                pos_state["tsl_activated"] = tsl_act
+
+                exit_triggered = False
+                exit_spot = c_close
                 exit_reason = "SIGNAL"
 
-                # 1. Hard Intraday Square-Off at 15:15 IST
-                if t_dt.time() >= pd.to_datetime("15:15").time():
-                    exit_pos = True
-                    exit_price = c_p
-                    exit_reason = "SESSION_CLOSE (15:15 IST)"
+                next_bar_time = pd.to_datetime(next_bar["datetime"])
+                is_last_bar_of_session = (i == len(df_calc) - 2) or (next_bar_time.date() > date_curr) or (now_time >= square_off_time)
 
-                # 2. Check Stop Loss Hit from strategy instance state
-                elif hasattr(strat_instance, "stop_loss") and strat_instance.stop_loss > 0:
-                    if pos_dir == "CE" and l_p <= strat_instance.stop_loss:
-                        exit_pos = True
-                        exit_price = strat_instance.stop_loss
-                        exit_reason = "SL_HIT"
-                    elif pos_dir == "PE" and h_p >= strat_instance.stop_loss:
-                        exit_pos = True
-                        exit_price = strat_instance.stop_loss
-                        exit_reason = "SL_HIT"
+                if is_last_bar_of_session:
+                    exit_triggered = True
+                    exit_spot = c_close
+                    exit_reason = f"SESSION_SQUARE_OFF ({square_off_time.strftime('%H:%M')} IST)"
+                else:
+                    sl_hit = (pos_state["position"] == "CE" and c_low <= pos_state["stop_loss"]) or \
+                             (pos_state["position"] == "PE" and c_high >= pos_state["stop_loss"])
+                    tp_hit = (pos_state["position"] == "CE" and c_high >= pos_state["take_profit"]) or \
+                             (pos_state["position"] == "PE" and c_low <= pos_state["take_profit"])
 
-                # 3. Check Take Profit Hit from strategy instance state
-                elif hasattr(strat_instance, "take_profit") and strat_instance.take_profit > 0:
-                    if pos_dir == "CE" and h_p >= strat_instance.take_profit:
-                        exit_pos = True
-                        exit_price = strat_instance.take_profit
-                        exit_reason = "TARGET_HIT"
-                    elif pos_dir == "PE" and l_p <= strat_instance.take_profit:
-                        exit_pos = True
-                        exit_price = strat_instance.take_profit
+                    # Priority given to SL if both limits breached in same candle
+                    if sl_hit:
+                        exit_triggered = True
+                        exit_spot = pos_state["stop_loss"]
+                        exit_reason = "STEP_TSL_HIT" if pos_state["tsl_activated"] else "INITIAL_SL_HIT"
+                    elif tp_hit:
+                        exit_triggered = True
+                        exit_spot = pos_state["take_profit"]
                         exit_reason = "TARGET_HIT"
 
-                if exit_pos:
-                    spot_pnl_pts = round(exit_price - spot_entry, 2) if pos_dir == "CE" else round(spot_entry - exit_price, 2)
-                    option_pnl_pts = round(spot_pnl_pts * delta, 2)
-                    pnl_rs = round(option_pnl_pts * lot_sz, 2)
-                    res_val = "WIN" if option_pnl_pts > 0 else "LOSS"
+                if exit_triggered:
+                    raw_exit = self.compute_option_premium(sym_upper, exit_spot, pos_state["strike"], dte_days, pos_state["position"])
+                    fill_exit = max(0.05, raw_exit - self.slippage_pts)
 
-                    # Dynamic ATM Premium based on Entry Spot Level
-                    est_entry_prem = get_estimated_atm_premium(symbol, spot_entry)
+                    entry_fill = pos_state["entry_premium"]
+                    gross_pnl_rs = (fill_exit - entry_fill) * lot_sz
 
-                    # Calculate intraday market session holding minutes (09:15 - 15:30 IST)
-                    holding_mins = 0
-                    if t_dt > entry_t:
-                        curr_d = entry_t.date()
-                        end_d = t_dt.date()
-                        while curr_d <= end_d:
-                            if curr_d.weekday() < 5:
-                                m_open = datetime.combine(curr_d, datetime.min.time()).replace(hour=9, minute=15)
-                                m_close = datetime.combine(curr_d, datetime.min.time()).replace(hour=15, minute=30)
-                                t_s = max(entry_t, m_open) if curr_d == entry_t.date() else m_open
-                                t_e = min(t_dt, m_close) if curr_d == t_dt.date() else m_close
-                                if t_e > t_s:
-                                    holding_mins += int((t_e - t_s).total_seconds() / 60)
-                            curr_d += timedelta(days=1)
+                    costs = IndianTaxEngine.calculate_charges(entry_fill, fill_exit, lot_sz, exchange=spec["exchange"])
+                    net_pnl_rs = round(gross_pnl_rs - costs["total_charges"], 2)
 
-                    h_mins = max(1, holding_mins)
-                    h_str = f"{h_mins} min" if h_mins < 60 else f"{h_mins // 60}h {h_mins % 60}m"
+                    self.risk_manager.record_trade_result(sym_upper, net_pnl_rs)
+
+                    option_pnl_pts = round(fill_exit - entry_fill, 2)
+                    spot_pnl_pts = round(exit_spot - pos_state["entry_spot"], 2) if pos_state["position"] == "CE" else round(pos_state["entry_spot"] - exit_spot, 2)
 
                     trades.append({
                         "trade_id": trade_id,
-                        "symbol": symbol,
-                        "date": entry_t.strftime("%Y-%m-%d"),
-                        "day": entry_t.strftime("%a"),
-                        "entry_time": entry_t.strftime("%Y-%m-%d %H:%M"),
-                        "exit_time": t_dt.strftime("%Y-%m-%d %H:%M"),
-                        "direction": f"Call ({pos_dir})" if pos_dir == "CE" else f"Put ({pos_dir})",
-                        "action": f"BUY {pos_dir}",
-                        "option_type": pos_dir,
-                        "size": 1,
-                        "entry_price": spot_entry,
-                        "exit_price": exit_price,
+                        "symbol": sym_upper,
+                        "exchange": spec["exchange"],
+                        "strike": pos_state["strike"],
+                        "option_type": pos_state["position"],
+                        "direction": f"Call ({pos_state['position']})" if pos_state["position"] == "CE" else f"Put ({pos_state['position']})",
+                        "action": f"BUY {pos_state['position']}",
+                        "entry_time": pos_state["entry_time"].strftime("%Y-%m-%d %H:%M"),
+                        "exit_time": t_curr.strftime("%Y-%m-%d %H:%M"),
+                        "entry_spot": pos_state["entry_spot"],
+                        "exit_spot": exit_spot,
+                        "entry_price": pos_state["entry_spot"],
+                        "exit_price": exit_spot,
+                        "entry_premium": entry_fill,
+                        "exit_premium": fill_exit,
                         "pnl_pts": option_pnl_pts,
-                        "result": res_val,
-                        "holding_time": h_str,
-                        "pnl": pnl_rs,
-                        "return_pct": round((option_pnl_pts / est_entry_prem) * 100.0, 2)
+                        "spot_pnl_pts": spot_pnl_pts,
+                        "gross_pnl_rs": round(gross_pnl_rs, 2),
+                        "charges_rs": costs["total_charges"],
+                        "net_pnl_rs": net_pnl_rs,
+                        "pnl": net_pnl_rs,
+                        "result": "WIN" if net_pnl_rs > 0 else "LOSS",
+                        "exit_reason": exit_reason,
                     })
+
                     trade_id += 1
                     in_pos = False
-                    pos_dir = None
-                    strat_instance.position = None
+                    pos_state = None
 
-            # Feed candle to strategy instance callbacks
-            try:
-                orders_before = len(sim_client.placed_orders)
-                if hasattr(strat_instance, "on_tick_received"):
-                    strat_instance.on_tick_received({"ltp": c_p, "volume": v_p, "timestamp": int(t_dt.timestamp() * 1000)})
-                elif hasattr(strat_instance, "on_market_data"):
-                    strat_instance.on_market_data({"close": c_p, "high": h_p, "low": l_p, "open": float(df["open"].iloc[i]), "volume": v_p})
-                
-                orders_after = len(sim_client.placed_orders)
+            # --- 2. EVALUATE ENTRIES (Fill at Next-Bar Open) ---
+            next_bar_dt = pd.to_datetime(next_bar["datetime"])
+            if not in_pos and now_time <= end_time and next_bar_dt.date() == date_curr and self.risk_manager.can_open_trade(sym_upper):
+                hist_slice = df_calc.iloc[max(0, i - 50): i + 1]
+                sig_obj = self.adapter.evaluate_entry_signal(hist_slice, sym_upper)
 
-                if not in_pos and orders_after > orders_before:
-                    new_order = sim_client.placed_orders[-1]
+                if sig_obj and sig_obj.action == "ENTER" and sig_obj.option_type in ["CE", "PE"]:
+                    signal = sig_obj.option_type
+                    fill_spot = float(next_bar["open"])
+                    fill_time = pd.to_datetime(next_bar["datetime"])
+                    atr_entry = float(curr_bar["atr"])
+
+                    strike_step = spec["strike_step"]
+                    atm_strike = round(fill_spot / strike_step) * strike_step
+
+                    raw_entry = self.compute_option_premium(sym_upper, fill_spot, atm_strike, dte_days, signal)
+                    fill_entry = raw_entry + self.slippage_pts
+
+                    if signal == "CE":
+                        sl_price = fill_spot - (atr_entry * sl_atr_mult)
+                        tp_price = fill_spot + (atr_entry * tp_atr_mult)
+                    else:
+                        sl_price = fill_spot + (atr_entry * sl_atr_mult)
+                        tp_price = fill_spot - (atr_entry * tp_atr_mult)
+
                     in_pos = True
-                    pos_dir = new_order.get("option_type", "CE")
-                    spot_entry = c_p
-                    entry_t = t_dt
-            except Exception:
-                pass
+                    pos_state = {
+                        "position": signal,
+                        "strike": atm_strike,
+                        "entry_spot": fill_spot,
+                        "entry_time": fill_time,
+                        "entry_premium": fill_entry,
+                        "stop_loss": sl_price,
+                        "take_profit": tp_price,
+                        "last_step_high": fill_spot if signal == "CE" else None,
+                        "last_step_low": fill_spot if signal == "PE" else None,
+                        "tsl_activated": False,
+                    }
 
         return trades
 
-    def _run_universal_bar_simulation(self, symbol: str, df: pd.DataFrame, params: dict, lot_sz: int, delta: float) -> list:
-        """
-        Universal Bar-by-Bar Signal & Strategy Execution Engine.
-        Dynamically extracts signals, SL, TP, and 15:15 IST intraday MIS square-off.
-        """
-        close = df["close"]
-        high = df["high"]
-        low = df["low"]
 
-        # 1. Extract SL and TP from strategy parameters or code
-        sl_pts = None
-        for k in ["STOP_LOSS", "SL_PTS", "SL_POINTS", "SL", "STOPLOSS"]:
-            if k in params:
-                sl_pts = float(params[k])
-                break
+def run_production_backtest(
+    strategy_config: Dict,
+    strategy_instance: Any,
+    symbol_data_map: Dict[str, pd.DataFrame],
+    strategy_path: str = "",
+    initial_capital: float = 100000.0,
+    slippage_pts: float = 0.5
+) -> Dict:
+    """Primary Multi-Asset Orchestrator delivering complete UI payload."""
+    runner = UniversalStrategyRunner(strategy_instance, strategy_config, slippage_pts=slippage_pts)
 
-        tp_pts = None
-        for k in ["TARGET", "TARGET_PTS", "TARGET_POINTS", "TP", "TAKE_PROFIT"]:
-            if k in params:
-                tp_pts = float(params[k])
-                break
+    all_trades = []
+    portfolio_breakdown = []
+    price_charts = {}
 
-        # 2. Universal Signal Generator
-        is_ema = "EMA_FAST" in params and "EMA_SLOW" in params
-        is_supertrend = "ST_PERIOD" in params or "ST_MULTIPLIER" in params or "supertrend" in self.code.lower()
+    symbols_processed = list(symbol_data_map.keys())
 
-        if is_ema:
-            fast = params.get("EMA_FAST", 5)
-            slow = params.get("EMA_SLOW", 13)
-            ema_f = ta.ema(close, fast)
-            ema_s = ta.ema(close, slow)
-            buy_s = ta.crossover(ema_f, ema_s)
-            sell_s = ta.crossunder(ema_f, ema_s)
-        elif is_supertrend:
-            st_p = params.get("ST_PERIOD", 7)
-            st_m = params.get("ST_MULTIPLIER", 2.0)
-            _, st_dir = ta.supertrend(high, low, close, period=st_p, multiplier=st_m)
-            st_dir = pd.Series(st_dir, index=close.index)
-            buy_s = (st_dir == 1) & (st_dir.shift(1) != 1)
-            sell_s = (st_dir == -1) & (st_dir.shift(1) != -1)
-        else:
-            rsi_p = params.get("RSI_PERIOD", 14)
-            rsi_ob = params.get("RSI_OB", 70)
-            rsi_os = params.get("RSI_OS", 30)
-            rsi = ta.rsi(close, rsi_p)
-            buy_s = (rsi < rsi_os)
-            sell_s = (rsi > rsi_ob)
+    for symbol, df_hist in symbol_data_map.items():
+        sym_trades = runner.run_simulation(symbol, df_hist)
+        all_trades.extend(sym_trades)
 
-        is_late = close.index.time >= pd.to_datetime("14:45").time()
+        sym_pnl = sum(t["net_pnl_rs"] for t in sym_trades)
+        portfolio_breakdown.append({
+            "symbol": symbol,
+            "trades": len(sym_trades),
+            "pnl": round(sym_pnl, 2),
+            "win_rate": round(sum(1 for t in sym_trades if t["result"] == "WIN") / len(sym_trades) * 100.0, 2) if sym_trades else 0.0,
+            "return_pct": round((sym_pnl / (initial_capital / max(1, len(symbols_processed)))) * 100.0, 2)
+        })
 
-        ce_in = pd.Series(buy_s, index=close.index).fillna(False).astype(bool)
-        ce_out = pd.Series(sell_s, index=close.index).fillna(False).astype(bool)
-        ce_in[is_late] = False
+        candles = []
+        step = 1 if len(df_hist) <= 5000 else max(1, len(df_hist) // 5000)
+        for idx_row, row in df_hist.iloc[::step].iterrows():
+            candles.append({
+                "time": str(row.get("datetime", idx_row))[:16],
+                "open": round(float(row.get("open", 0)), 2),
+                "high": round(float(row.get("high", 0)), 2),
+                "low": round(float(row.get("low", 0)), 2),
+                "close": round(float(row.get("close", 0)), 2),
+                "volume": int(row.get("volume", 0))
+            })
 
-        pe_in = pd.Series(sell_s, index=close.index).fillna(False).astype(bool)
-        pe_out = pd.Series(buy_s, index=close.index).fillna(False).astype(bool)
-        pe_in[is_late] = False
+        signals = []
+        for t in sym_trades:
+            signals.append({
+                "time": t["entry_time"],
+                "type": f"buy_{t['option_type'].lower()}",
+                "label": f"BUY {t['option_type']}",
+                "price": t["entry_spot"],
+                "symbol": symbol
+            })
 
-        trades = []
-        trade_id = 1
+        price_charts[symbol] = {"candles": candles, "signals": signals}
 
-        in_pos = False
-        pos_dir = None
-        entry_p = 0.0
-        entry_t = None
+    all_trades = sorted(all_trades, key=lambda x: x["entry_time"])
+    for idx, t in enumerate(all_trades, 1):
+        t["trade_id"] = idx
 
-        for i in range(len(close)):
-            t = close.index[i]
-            t_dt = pd.to_datetime(t)
-            c_p = float(close.iloc[i])
-            h_p = float(high.iloc[i])
-            l_p = float(low.iloc[i])
+    first_df = list(symbol_data_map.values())[0] if symbol_data_map else pd.DataFrame()
+    start_date = str(first_df["datetime"].iloc[0])[:10] if not first_df.empty and "datetime" in first_df.columns else "2026-01-01"
+    end_date = str(first_df["datetime"].iloc[-1])[:10] if not first_df.empty and "datetime" in first_df.columns else "2026-12-31"
 
-            if not in_pos:
-                if t_dt.time() >= pd.to_datetime("14:45").time():
-                    continue
+    metrics = PerformanceAnalytics.calculate_metrics(all_trades, initial_capital, start_date, end_date)
+    pnl_matrix = StockMockPnLMatrix(all_trades, initial_capital)
 
-                if ce_in.iloc[i]:
-                    in_pos = True
-                    pos_dir = "CE"
-                    entry_p = c_p
-                    entry_t = t_dt
-                elif pe_in.iloc[i]:
-                    in_pos = True
-                    pos_dir = "PE"
-                    entry_p = c_p
-                    entry_t = t_dt
-            else:
-                exit_pos = False
-                exit_p = c_p
+    equity_curve = []
+    drawdown_curve = []
+    peak = initial_capital
+    curr_eq = initial_capital
 
-                # 1. Intraday MIS Session Auto Square-Off at 15:15 IST
-                if t_dt.time() >= pd.to_datetime("15:15").time():
-                    exit_pos = True
-                    exit_p = c_p
+    date_series = pd.bdate_range(start=start_date, end=end_date)
+    trade_df = pd.DataFrame(all_trades) if all_trades else pd.DataFrame()
 
-                # 2. Stop Loss Hit Check on candle High/Low
-                elif sl_pts is not None:
-                    if pos_dir == "CE":
-                        sl_target = entry_p - sl_pts
-                        if l_p <= sl_target:
-                            exit_pos = True
-                            exit_p = sl_target
-                    elif pos_dir == "PE":
-                        sl_target = entry_p + sl_pts
-                        if h_p >= sl_target:
-                            exit_pos = True
-                            exit_p = sl_target
+    for dt in date_series:
+        dt_str = dt.strftime("%Y-%m-%d")
+        day_pnl = trade_df[trade_df["exit_time"].str.slice(0, 10) == dt_str]["net_pnl_rs"].sum() if not trade_df.empty else 0.0
 
-                # 3. Take Profit Hit Check on candle High/Low
-                if not exit_pos and tp_pts is not None:
-                    if pos_dir == "CE":
-                        tp_target = entry_p + tp_pts
-                        if h_p >= tp_target:
-                            exit_pos = True
-                            exit_p = tp_target
-                    elif pos_dir == "PE":
-                        tp_target = entry_p - tp_pts
-                        if l_p <= tp_target:
-                            exit_pos = True
-                            exit_p = tp_target
+        curr_eq += day_pnl
+        if curr_eq > peak:
+            peak = curr_eq
+        dd = round(((peak - curr_eq) / peak) * 100.0, 2) if peak > 0 else 0.0
 
-                # 4. Signal Exit Check
-                if not exit_pos:
-                    if pos_dir == "CE" and ce_out.iloc[i]:
-                        exit_pos = True
-                        exit_p = c_p
-                    elif pos_dir == "PE" and pe_out.iloc[i]:
-                        exit_pos = True
-                        exit_p = c_p
+        equity_curve.append({"date": dt_str, "value": round(curr_eq, 2)})
+        drawdown_curve.append({"date": dt_str, "drawdown": -dd})
 
-                if exit_pos:
-                    spot_pnl_pts = round(exit_p - entry_p, 2) if pos_dir == "CE" else round(entry_p - exit_p, 2)
-                    option_pnl_pts = round(spot_pnl_pts * delta, 2)
-                    pnl_rs = round(option_pnl_pts * lot_sz, 2)
-                    res_val = "WIN" if option_pnl_pts > 0 else "LOSS"
+    data_meta = {
+        "symbols": symbols_processed,
+        "start_date": start_date,
+        "end_date": end_date,
+        "total_candles": sum(len(df) for df in symbol_data_map.values())
+    }
 
-                    est_entry_prem = get_estimated_atm_premium(symbol, entry_p)
+    manifest = build_run_manifest(strategy_path, strategy_config, data_meta)
+    assumptions = get_assumptions_disclosure(slippage_pts)
 
-                    holding_mins = 0
-                    if t_dt > entry_t:
-                        curr_d = entry_t.date()
-                        end_d = t_dt.date()
-                        while curr_d <= end_d:
-                            if curr_d.weekday() < 5:
-                                m_open = datetime.combine(curr_d, datetime.min.time()).replace(hour=9, minute=15)
-                                m_close = datetime.combine(curr_d, datetime.min.time()).replace(hour=15, minute=30)
-                                t_s = max(entry_t, m_open) if curr_d == entry_t.date() else m_open
-                                t_e = min(t_dt, m_close) if curr_d == t_dt.date() else m_close
-                                if t_e > t_s:
-                                    holding_mins += int((t_e - t_s).total_seconds() / 60)
-                            curr_d += timedelta(days=1)
+    from backtesting.analytics.stats_engine import sanitize_json_types
 
-                    h_mins = max(1, holding_mins)
-                    h_str = f"{h_mins} min" if h_mins < 60 else f"{h_mins // 60}h {h_mins % 60}m"
-
-                    trades.append({
-                        "trade_id": trade_id,
-                        "symbol": symbol,
-                        "date": entry_t.strftime("%Y-%m-%d"),
-                        "day": entry_t.strftime("%a"),
-                        "entry_time": entry_t.strftime("%Y-%m-%d %H:%M"),
-                        "exit_time": t_dt.strftime("%Y-%m-%d %H:%M"),
-                        "direction": f"Call ({pos_dir})" if pos_dir == "CE" else f"Put ({pos_dir})",
-                        "action": f"BUY {pos_dir}",
-                        "option_type": pos_dir,
-                        "size": 1,
-                        "entry_price": entry_p,
-                        "exit_price": exit_p,
-                        "pnl_pts": option_pnl_pts,
-                        "result": res_val,
-                        "holding_time": h_str,
-                        "pnl": pnl_rs,
-                        "return_pct": round((option_pnl_pts / est_entry_prem) * 100.0, 2)
-                    })
-                    trade_id += 1
-                    in_pos = False
-                    pos_dir = None
-
-        return trades
+    return sanitize_json_types({
+        "status": "success",
+        "symbol": " / ".join(symbols_processed),
+        "symbols": symbols_processed,
+        "metrics": metrics,
+        "monthly_pnl_matrix": pnl_matrix.generate_matrix().to_dict(),
+        "heatmap_html": pnl_matrix.to_html_heatmap(),
+        "parameters": strategy_config,
+        "equity_curve": equity_curve,
+        "drawdown_curve": drawdown_curve,
+        "trades": all_trades,
+        "price_charts": price_charts,
+        "portfolio_breakdown": portfolio_breakdown,
+        "assumptions": assumptions,
+        "manifest": manifest
+    })

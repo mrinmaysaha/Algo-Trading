@@ -63,6 +63,10 @@ export interface PythonStrategyBacktestResult {
   trades?: TradeRecord[]
   price_charts?: Record<string, PriceChartData>
   portfolio_breakdown?: PortfolioBreakdownItem[]
+  heatmap_html?: string
+  monthly_pnl_matrix?: Record<string, any>
+  assumptions?: Record<string, any>
+  manifest?: Record<string, any>
 }
 
 interface PythonStrategyBacktestState {
