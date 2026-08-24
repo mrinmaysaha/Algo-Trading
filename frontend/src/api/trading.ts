@@ -259,13 +259,15 @@ export const tradingApi = {
   closePosition: async (
     symbol: string,
     exchange: string,
-    product: string
+    product: string,
+    strategy?: string
   ): Promise<ApiResponse<void>> => {
     // Uses the web route which handles session-based auth with CSRF
     const response = await webClient.post<ApiResponse<void>>('/close_position', {
       symbol,
       exchange,
       product,
+      strategy,
     })
     return response.data
   },

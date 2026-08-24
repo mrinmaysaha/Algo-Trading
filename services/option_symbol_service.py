@@ -75,6 +75,40 @@ def clear_strikes_cache():
     logger.info("Strikes cache cleared")
 
 
+def normalize_expiry_date(expiry_date: str) -> tuple[str, str]:
+    """
+    Normalize an expiry date string into standard 2-digit year formats:
+    - expiry_no_hyphen: DDMMMYY format (e.g., '27AUG26') used in option symbols
+    - expiry_formatted: DD-MMM-YY format (e.g., '27-AUG-26') used in database SymToken.expiry queries
+
+    Handles input formats such as:
+    '27AUG2026', '27AUG26', '27-AUG-2026', '27-AUG-26', '2026-08-27', etc.
+    """
+    if not expiry_date:
+        return "", ""
+
+    clean = expiry_date.strip().replace("-", "").replace(" ", "").upper()
+
+    # Try common datetime formats
+    for fmt in ("%d%b%Y", "%d%b%y", "%Y%m%d", "%d%B%Y", "%d%B%y"):
+        try:
+            dt = datetime.strptime(clean, fmt)
+            return dt.strftime("%d%b%y").upper(), dt.strftime("%d-%b-%y").upper()
+        except ValueError:
+            pass
+
+    # Heuristic fallback if datetime parsing fails
+    if len(clean) == 9 and clean[:2].isdigit() and clean[2:5].isalpha() and clean[5:].isdigit():
+        clean = clean[:5] + clean[7:]
+
+    if len(clean) == 7:
+        formatted = f"{clean[:2]}-{clean[2:5]}-{clean[5:]}"
+    else:
+        formatted = clean
+
+    return clean, formatted
+
+
 def parse_underlying_symbol(underlying: str) -> tuple[str, str | None]:
     """
     Parse underlying symbol to extract base symbol and expiry date if present.
@@ -86,18 +120,19 @@ def parse_underlying_symbol(underlying: str) -> tuple[str, str | None]:
         Tuple of (base_symbol, expiry_date)
         e.g., ("NIFTY", "28OCT25") or ("NIFTY", None)
     """
-    # Pattern to match: SYMBOL + DDMMMYY + optional FUT
-    # Examples: NIFTY28OCT25FUT, BANKNIFTY31JAN25FUT, RELIANCE28MAR24FUT
-    pattern = r"^([A-Z]+)(\d{2}[A-Z]{3}\d{2})(?:FUT)?$"
+    # Pattern to match: SYMBOL + DDMMMYY / DDMMMYYYY + optional FUT
+    # Examples: NIFTY28OCT25FUT, BANKNIFTY31JAN25FUT, RELIANCE28MAR2024FUT
+    pattern = r"^([A-Z]+)(\d{2}[A-Z]{3}\d{2,4})(?:FUT)?$"
 
     match = re.match(pattern, underlying.upper())
     if match:
         base_symbol = match.group(1)
-        expiry_date = match.group(2)
+        raw_expiry = match.group(2)
+        expiry_no_hyphen, _ = normalize_expiry_date(raw_expiry)
         logger.info(
-            f"Parsed underlying '{underlying}' -> base: '{base_symbol}', expiry: '{expiry_date}'"
+            f"Parsed underlying '{underlying}' -> base: '{base_symbol}', expiry: '{expiry_no_hyphen}'"
         )
-        return base_symbol, expiry_date
+        return base_symbol, expiry_no_hyphen
 
     # If no pattern match, treat the entire string as base symbol
     logger.info(f"Underlying '{underlying}' has no embedded expiry, using as-is")
@@ -299,13 +334,14 @@ def construct_option_symbol(
         construct_option_symbol("NIFTY", "28MAR24", 20800, "CE") -> "NIFTY28MAR2420800CE"
         construct_option_symbol("VEDL", "25APR24", 292.5, "CE") -> "VEDL25APR24292.5CE"
     """
+    expiry_no_hyphen, _ = normalize_expiry_date(expiry_date)
     # Format strike: Remove .0 if it's a whole number, otherwise keep decimal
     if strike == int(strike):
         strike_str = str(int(strike))
     else:
         strike_str = str(strike)
 
-    option_symbol = f"{base_symbol}{expiry_date}{strike_str}{option_type.upper()}"
+    option_symbol = f"{base_symbol}{expiry_no_hyphen}{strike_str}{option_type.upper()}"
     logger.info(f"Constructed option symbol: {option_symbol}")
     return option_symbol
 
@@ -392,10 +428,12 @@ def get_available_strikes(
     global _STRIKES_CACHE, _CACHE_STATS
 
     try:
+        expiry_no_hyphen, expiry_formatted = normalize_expiry_date(expiry_date)
+
         # Normalize inputs for cache key
         cache_key = (
             base_symbol.upper(),
-            expiry_date.upper(),
+            expiry_no_hyphen.upper(),
             option_type.upper(),
             exchange.upper(),
         )
@@ -415,10 +453,6 @@ def get_available_strikes(
         # Cache miss - query database
         _CACHE_STATS["misses"] += 1
         logger.debug(f"Cache MISS: Querying database for {base_symbol} {expiry_date} {option_type}")
-
-        # Convert expiry from DDMMMYY to DD-MMM-YY format used in database
-        # e.g., "28OCT25" -> "28-OCT-25"
-        expiry_formatted = f"{expiry_date[:2]}-{expiry_date[2:5]}-{expiry_date[5:]}"
 
         if exchange.upper() in CRYPTO_EXCHANGES:
             # CRYPTO canonical format: BTC28FEB2580000CE (Indian F&O-style, no dashes)
@@ -440,7 +474,6 @@ def get_available_strikes(
         else:
             # Construct symbol pattern: BASE + EXPIRY (without hyphens) + % wildcard
             # e.g., "NIFTY" + "18NOV25" + "%" = "NIFTY18NOV25%"
-            expiry_no_hyphen = expiry_date.upper()  # Already in DDMMMYY format
             symbol_pattern = f"{base_symbol}{expiry_no_hyphen}%{option_type.upper()}"
 
             # Query database for all strikes matching the criteria
@@ -656,8 +689,8 @@ def get_option_symbol(
 
         # Determine final expiry date
         # Explicit expiry_date takes precedence (e.g., MCX option expiry differs from futures expiry)
-        final_expiry = expiry_date or embedded_expiry
-        if not final_expiry:
+        raw_expiry = expiry_date or embedded_expiry
+        if not raw_expiry:
             logger.error("No expiry date provided or found in underlying symbol")
             return (
                 False,
@@ -667,6 +700,8 @@ def get_option_symbol(
                 },
                 400,
             )
+
+        final_expiry, _ = normalize_expiry_date(raw_expiry)
 
         # Step 2: Determine the quote exchange (where to fetch LTP from)
         # If exchange is already NFO/BFO, we need to get LTP from index/equity exchange
@@ -712,6 +747,21 @@ def get_option_symbol(
                 quote_symbol = underlying.upper()
             else:
                 quote_symbol = base_symbol
+        elif exchange.upper() in NO_SPOT_EXCHANGES:
+            # MCX and commodity/currency segments have no tradable spot instrument.
+            # Price against the near-month future instead.
+            quote_exchange = exchange.upper()
+            resolved = resolve_underlying_quote(base_symbol, quote_exchange)
+            if resolved is None:
+                return (
+                    False,
+                    {
+                        "status": "error",
+                        "message": f"No unexpired futures found for {base_symbol} on {quote_exchange}.",
+                    },
+                    404,
+                )
+            quote_symbol, quote_exchange = resolved
         else:
             quote_symbol = underlying
 

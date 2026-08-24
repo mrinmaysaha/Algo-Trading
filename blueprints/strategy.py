@@ -1031,3 +1031,29 @@ def webhook(webhook_id):
     except Exception as e:
         logger.exception(f"Error processing webhook: {str(e)}")
         return jsonify({"error": "Internal server error"}), 500
+
+
+@strategy_bp.route("/api/analytics", methods=["GET"])
+@strategy_bp.route("/analytics", methods=["GET"])
+@check_session_validity
+def strategy_analytics():
+    """Retrieve multi-timeframe strategy P&L analytics, win-rates, and leaderboard metrics.
+    
+    Query Params:
+        timeframe: '1D' | '2D' | '1W' | '2W' | '1M' | 'ALL' (default: '1D')
+        strategy: optional strategy name filter
+    """
+    timeframe = request.args.get("timeframe", "1D")
+    strategy_name = request.args.get("strategy")
+    user_id = session.get("user_id")
+
+    try:
+        from services.strategy_pnl_service import get_multi_timeframe_strategy_analytics
+        data = get_multi_timeframe_strategy_analytics(
+            timeframe=timeframe, user_id=user_id, strategy=strategy_name
+        )
+        return jsonify(data), 200
+    except Exception as e:
+        logger.exception(f"Error fetching strategy analytics: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+

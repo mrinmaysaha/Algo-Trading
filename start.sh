@@ -324,18 +324,19 @@ trap cleanup SIGTERM SIGINT
 # Use PORT env var if set (Railway/cloud), otherwise default to 5000
 APP_PORT="${PORT:-5000}"
 
-echo "[OpenAlgo] Starting application on port ${APP_PORT} with eventlet..."
+echo "[OpenAlgo] Starting application on port ${APP_PORT} with gthread..."
 
 # Create gunicorn worker temp directory (must be inside container, not mounted volume)
 mkdir -p /tmp/gunicorn_workers
 
 exec /app/.venv/bin/gunicorn \
-    --worker-class eventlet \
+    --worker-class gthread \
     --workers 1 \
+    --threads 8 \
     --bind 0.0.0.0:${APP_PORT} \
     --timeout 300 \
     --graceful-timeout 30 \
     --worker-tmp-dir /tmp/gunicorn_workers \
     --no-control-socket \
-    --log-level warning \
+    --log-level info \
     app:app

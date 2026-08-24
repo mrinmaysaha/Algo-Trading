@@ -450,13 +450,31 @@ class HistorifyScheduler:
 
     def remove_job(self, job_id: str) -> bool:
         """Remove a job from the scheduler"""
-        try:
-            self.scheduler.remove_job(job_id)
-            logger.debug(f"Removed job {job_id}")
-            return True
-        except Exception as e:
-            logger.exception(f"Failed to remove job {job_id}: {e}")
-            return False
+        from apscheduler.jobstores.base import JobLookupError
+        from sqlalchemy.exc import OperationalError
+        import time
+
+        for attempt in range(1, 4):
+            try:
+                self.scheduler.remove_job(job_id)
+                logger.debug(f"Removed job {job_id}")
+                return True
+            except JobLookupError:
+                logger.debug(f"No scheduler job {job_id} to remove")
+                return False
+            except OperationalError as e:
+                if attempt < 3:
+                    logger.warning(
+                        f"Database locked removing job {job_id} (attempt {attempt}/3), retrying..."
+                    )
+                    time.sleep(1)
+                    continue
+                logger.exception(f"Failed to remove job {job_id}: {e}")
+                return False
+            except Exception as e:
+                logger.exception(f"Failed to remove job {job_id}: {e}")
+                return False
+        return False
 
     def get_job(self, job_id: str):
         """Get a job by ID"""
@@ -472,23 +490,51 @@ class HistorifyScheduler:
 
     def pause_job(self, job_id: str) -> bool:
         """Pause a job"""
-        try:
-            self.scheduler.pause_job(job_id)
-            logger.debug(f"Paused job {job_id}")
-            return True
-        except Exception as e:
-            logger.exception(f"Failed to pause job {job_id}: {e}")
-            return False
+        from sqlalchemy.exc import OperationalError
+        import time
+
+        for attempt in range(1, 4):
+            try:
+                self.scheduler.pause_job(job_id)
+                logger.debug(f"Paused job {job_id}")
+                return True
+            except OperationalError as e:
+                if attempt < 3:
+                    logger.warning(
+                        f"Database locked pausing job {job_id} (attempt {attempt}/3), retrying..."
+                    )
+                    time.sleep(1)
+                    continue
+                logger.exception(f"Failed to pause job {job_id}: {e}")
+                return False
+            except Exception as e:
+                logger.exception(f"Failed to pause job {job_id}: {e}")
+                return False
+        return False
 
     def resume_job(self, job_id: str) -> bool:
         """Resume a paused job"""
-        try:
-            self.scheduler.resume_job(job_id)
-            logger.debug(f"Resumed job {job_id}")
-            return True
-        except Exception as e:
-            logger.exception(f"Failed to resume job {job_id}: {e}")
-            return False
+        from sqlalchemy.exc import OperationalError
+        import time
+
+        for attempt in range(1, 4):
+            try:
+                self.scheduler.resume_job(job_id)
+                logger.debug(f"Resumed job {job_id}")
+                return True
+            except OperationalError as e:
+                if attempt < 3:
+                    logger.warning(
+                        f"Database locked resuming job {job_id} (attempt {attempt}/3), retrying..."
+                    )
+                    time.sleep(1)
+                    continue
+                logger.exception(f"Failed to resume job {job_id}: {e}")
+                return False
+            except Exception as e:
+                logger.exception(f"Failed to resume job {job_id}: {e}")
+                return False
+        return False
 
     def _emit_schedule_event(self, event: str, schedule_id: str, data: dict = None):
         """Emit a Socket.IO event for schedule updates"""

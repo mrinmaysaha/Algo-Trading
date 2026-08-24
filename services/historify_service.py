@@ -1486,11 +1486,12 @@ def _process_download_job(job_id: str, api_key: str):
         delay_min = float(os.getenv("HISTORIFY_DELAY_MIN", "1"))
         delay_max = float(os.getenv("HISTORIFY_DELAY_MAX", "3"))
 
-        # Count already completed items
-        already_completed = sum(1 for item in items if item["status"] == "success")
+        # Count already completed items (including skipped)
+        already_completed = sum(1 for item in items if item["status"] in ("success", "skipped"))
         already_failed = sum(1 for item in items if item["status"] == "error")
         completed = already_completed
         failed = already_failed
+        total_records_sum = 0
 
         total_items = len(items)
         processed_count = already_completed + already_failed
@@ -1573,6 +1574,8 @@ def _process_download_job(job_id: str, api_key: str):
                             logger.info(
                                 f"Skipping {item['symbol']} - data already covers requested range"
                             )
+                            completed += 1
+                            update_job_progress(job_id, completed, failed)
                             continue
 
                         # Download data BEFORE existing range if needed
@@ -1642,6 +1645,8 @@ def _process_download_job(job_id: str, api_key: str):
                         else:
                             update_job_item_status(item["id"], "success", total_records)
                             completed += 1
+                            total_records_sum += total_records
+                        update_job_progress(job_id, completed, failed)
                         continue
 
                 # Non-incremental or no existing data: download full range
@@ -1658,6 +1663,7 @@ def _process_download_job(job_id: str, api_key: str):
                     records = response.get("records", 0)
                     update_job_item_status(item["id"], "success", records)
                     completed += 1
+                    total_records_sum += records
                 else:
                     error_msg = response.get("message", "Unknown error")
                     update_job_item_status(item["id"], "error", 0, error_msg)
@@ -1690,6 +1696,51 @@ def _process_download_job(job_id: str, api_key: str):
         # Job completed
         final_status = "completed" if failed == 0 else "completed_with_errors"
         update_job_status(job_id, final_status)
+
+        # Update associated schedule execution record if this is a scheduled job
+        try:
+            from database.historify_db import (
+                get_schedule_execution_by_job_id,
+                update_schedule,
+                update_schedule_execution,
+            )
+
+            exec_rec = get_schedule_execution_by_job_id(job_id)
+            if exec_rec:
+                update_schedule_execution(
+                    exec_rec["id"],
+                    status=final_status,
+                    completed_at=datetime.now(),
+                    symbols_success=completed,
+                    symbols_failed=failed,
+                    records_downloaded=total_records_sum,
+                )
+                update_schedule(
+                    exec_rec["schedule_id"],
+                    status="idle",
+                    last_run_status="success" if failed == 0 else "failed",
+                )
+
+                # Emit socket event for schedule execution completion
+                try:
+                    from services.historify_scheduler_service import get_historify_scheduler
+
+                    sched_instance = get_historify_scheduler()
+                    if sched_instance and sched_instance.socketio:
+                        sched_instance.socketio.emit(
+                            "historify_schedule_execution_complete",
+                            {
+                                "schedule_id": exec_rec["schedule_id"],
+                                "execution_id": exec_rec["id"],
+                                "status": final_status,
+                            },
+                        )
+                except Exception as emit_err:
+                    logger.warning(
+                        f"Failed to emit historify_schedule_execution_complete: {emit_err}"
+                    )
+        except Exception as exec_err:
+            logger.warning(f"Failed to update schedule execution for job {job_id}: {exec_err}")
 
         # Emit completion event
         _emit_job_complete(job_id, completed, failed, total_items)

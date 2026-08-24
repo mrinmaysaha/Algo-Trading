@@ -128,6 +128,18 @@ def get_tradebook_with_auth(
         # Format numeric values to 2 decimal places
         formatted_trades = format_trade_data(trade_data)
 
+        # Enrich trades with strategy tag from StrategyOrderTag database
+        try:
+            from database.strategy_book_db import get_order_tags_bulk
+            order_ids = [str(t.get("orderid")) for t in formatted_trades if t.get("orderid")]
+            if order_ids:
+                tags_map = get_order_tags_bulk(order_ids)
+                for trade in formatted_trades:
+                    oid = str(trade.get("orderid") or "")
+                    trade["strategy"] = tags_map.get(oid, trade.get("strategy") or "")
+        except Exception as tag_err:
+            logger.debug(f"Could not enrich tradebook with strategy tags: {tag_err}")
+
         return True, {"status": "success", "data": formatted_trades}, 200
     except Exception as e:
         logger.exception(f"Error processing trade data: {e}")

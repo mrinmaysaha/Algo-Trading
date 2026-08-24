@@ -140,6 +140,7 @@ export default function OrderBook() {
 
   // Filter state
   const [statusFilter, setStatusFilter] = useState<string[]>([])
+  const [strategyFilter, setStrategyFilter] = useState<string[]>([])
   const [settingsOpen, setSettingsOpen] = useState(false)
 
   // Sort state - Default: most recent first
@@ -161,13 +162,23 @@ export default function OrderBook() {
     product: 'MIS' as string,
   })
 
+  // Extract distinct strategy names present in order history
+  const availableStrategies = useMemo(() => {
+    const set = new Set<string>()
+    orders.forEach((o) => {
+      set.add(o.strategy || 'Manual')
+    })
+    return Array.from(set).sort()
+  }, [orders])
+
   // Filter and Sort orders
   const sortedAndFilteredOrders = useMemo(() => {
     // 1. Filter Logic
-    const filtered =
-      statusFilter.length === 0
-        ? orders
-        : orders.filter((order) => statusFilter.includes(order.order_status))
+    const filtered = orders.filter((order) => {
+      if (statusFilter.length > 0 && !statusFilter.includes(order.order_status)) return false
+      if (strategyFilter.length > 0 && !strategyFilter.includes(order.strategy || 'Manual')) return false
+      return true
+    })
 
     // 2. Sort Logic
     return [...filtered].sort((a, b) => {
@@ -198,7 +209,7 @@ export default function OrderBook() {
       }
       return 0
     })
-  }, [orders, statusFilter, sortConfig])
+  }, [orders, statusFilter, strategyFilter, sortConfig])
 
   const requestSort = (key: SortKey) => {
     setSortConfig((prev) => ({
@@ -207,7 +218,7 @@ export default function OrderBook() {
     }))
   }
 
-  const hasActiveFilters = statusFilter.length > 0
+  const hasActiveFilters = statusFilter.length > 0 || strategyFilter.length > 0
 
   const toggleStatusFilter = (status: string) => {
     setStatusFilter((prev) => {
@@ -215,6 +226,15 @@ export default function OrderBook() {
         return prev.filter((s) => s !== status)
       }
       return [...prev, status]
+    })
+  }
+
+  const toggleStrategyFilter = (strategy: string) => {
+    setStrategyFilter((prev) => {
+      if (prev.includes(strategy)) {
+        return prev.filter((s) => s !== strategy)
+      }
+      return [...prev, strategy]
     })
   }
 
@@ -371,6 +391,7 @@ export default function OrderBook() {
     try {
       const headers = [
         'Symbol',
+        'Strategy',
         'Exchange',
         'Action',
         'Qty',
@@ -384,6 +405,7 @@ export default function OrderBook() {
       ]
       const rows = sortedAndFilteredOrders.map((o) => [
         sanitizeCSV(o.symbol),
+        sanitizeCSV(o.strategy || 'Manual'),
         sanitizeCSV(o.exchange),
         sanitizeCSV(o.action),
         sanitizeCSV(o.quantity),
@@ -422,6 +444,20 @@ export default function OrderBook() {
         statusFilter.includes(status) && 'bg-pink-500 hover:bg-pink-600'
       )}
       onClick={() => toggleStatusFilter(status)}
+    >
+      {label}
+    </Button>
+  )
+
+  const StrategyFilterChip = ({ strategy, label }: { strategy: string; label: string }) => (
+    <Button
+      variant={strategyFilter.includes(strategy) ? 'default' : 'outline'}
+      size="sm"
+      className={cn(
+        'rounded-full',
+        strategyFilter.includes(strategy) && 'bg-pink-500 hover:bg-pink-600'
+      )}
+      onClick={() => toggleStrategyFilter(strategy)}
     >
       {label}
     </Button>
@@ -470,6 +506,21 @@ export default function OrderBook() {
                 </DialogHeader>
 
                 <div className="space-y-6 py-4">
+                  {/* Order Status */}
+                  {/* Strategy Filter */}
+                  {availableStrategies.length > 0 && (
+                    <div className="space-y-3">
+                      <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                        Strategy
+                      </Label>
+                      <div className="flex flex-wrap gap-2">
+                        {availableStrategies.map((strat) => (
+                          <StrategyFilterChip key={strat} strategy={strat} label={strat} />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Order Status */}
                   <div className="space-y-3">
                     <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -540,6 +591,15 @@ export default function OrderBook() {
                   className="bg-pink-500/10 text-pink-600 border-pink-500/30"
                 >
                   {status}
+                </Badge>
+              ))}
+              {strategyFilter.map((strat) => (
+                <Badge
+                  key={strat}
+                  variant="secondary"
+                  className="bg-indigo-500/10 text-indigo-600 border-indigo-500/30"
+                >
+                  {strat}
                 </Badge>
               ))}
               <Button
@@ -642,6 +702,7 @@ export default function OrderBook() {
                               ))}
                           </div>
                         </TableHead>
+                        <TableHead className="w-[110px]">Strategy</TableHead>
                         <TableHead className="w-[80px]">Exchange</TableHead>
                         <TableHead
                           className="w-[70px] cursor-pointer hover:bg-muted/50 transition-colors"
@@ -717,6 +778,18 @@ export default function OrderBook() {
                         return (
                           <TableRow key={`${order.orderid}-${index}`}>
                             <TableCell className="font-medium">{order.symbol}</TableCell>
+                            <TableCell>
+                              {order.strategy ? (
+                                <Badge
+                                  variant="secondary"
+                                  className="bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20 font-medium text-xs whitespace-nowrap"
+                                >
+                                  {order.strategy}
+                                </Badge>
+                              ) : (
+                                <span className="text-muted-foreground text-xs font-mono">Manual</span>
+                              )}
+                            </TableCell>
                             <TableCell>
                               <Badge variant="outline">{order.exchange}</Badge>
                             </TableCell>

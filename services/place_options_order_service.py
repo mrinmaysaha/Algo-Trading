@@ -160,6 +160,7 @@ def place_options_order(
         )  # Optional - if not provided, actual strikes from database will be used
         offset = options_data.get("offset")
         option_type = options_data.get("option_type")
+        underlying_ltp = options_data.get("underlying_ltp")
 
         # Validate required option parameters (strike_int is now optional)
         if not all([underlying, exchange, offset, option_type]):
@@ -175,7 +176,8 @@ def place_options_order(
         # Log the option order request
         logger.info(
             f"Options order request: underlying={underlying}, exchange={exchange}, "
-            f"expiry={expiry_date}, strike_int={strike_int}, offset={offset}, type={option_type}"
+            f"expiry={expiry_date}, strike_int={strike_int}, offset={offset}, type={option_type}, "
+            f"underlying_ltp={underlying_ltp}"
         )
 
         # Step 1: Get the option symbol using option_symbol_service
@@ -196,6 +198,7 @@ def place_options_order(
             offset=offset,
             option_type=option_type,
             api_key=symbol_api_key,
+            underlying_ltp=underlying_ltp,
         )
 
         if not success:
@@ -206,7 +209,7 @@ def place_options_order(
         # Extract the resolved symbol and exchange
         resolved_symbol = symbol_response.get("symbol")
         resolved_exchange = symbol_response.get("exchange")
-        underlying_ltp = symbol_response.get("underlying_ltp")
+        underlying_ltp = symbol_response.get("underlying_ltp") or underlying_ltp
 
         if not resolved_symbol or not resolved_exchange:
             return (

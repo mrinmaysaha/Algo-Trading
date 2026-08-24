@@ -154,9 +154,10 @@ def get_option_symbols_for_chain(
     """
     chain_symbols = []
 
-    # Convert expiry format for database lookup (DDMMMYY -> DD-MMM-YY)
-    # e.g., "28FEB25" -> "28-FEB-25"
-    expiry_db_fmt = f"{expiry_date[:2]}-{expiry_date[2:5]}-{expiry_date[5:]}".upper()
+    # Convert expiry format for database lookup (DDMMMYY / DDMMMYYYY -> DD-MMM-YY)
+    from services.option_symbol_service import normalize_expiry_date
+
+    expiry_no_hyphen, expiry_db_fmt = normalize_expiry_date(expiry_date)
 
     for strike_info in strikes_with_labels:
         strike = strike_info["strike"]

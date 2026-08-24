@@ -46,7 +46,7 @@ def _schedule_square_off_jobs(scheduler):
     square_off_configs = {
         "NSE_BSE": get_config("nse_bse_square_off_time", "15:15"),
         "CDS_BCD": get_config("cds_bcd_square_off_time", "16:45"),
-        "MCX": get_config("mcx_square_off_time", "23:30"),
+        "MCX": get_config("mcx_square_off_time", "23:25"),
         "NCDEX": get_config("ncdex_square_off_time", "17:00"),
     }
 

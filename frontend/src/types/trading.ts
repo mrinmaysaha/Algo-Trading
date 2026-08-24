@@ -9,6 +9,7 @@ export interface Position {
   pnlpercent: number
   lot_size?: number // contract_value multiplier (e.g. 0.01 for ETHUSD.P)
   today_realized_pnl?: number // Sandbox: today's realized P&L from closed partial trades
+  strategy?: string // Originating Strategy Name
 }
 
 export interface Order {
@@ -23,6 +24,7 @@ export interface Order {
   orderid: string
   order_status: 'complete' | 'rejected' | 'cancelled' | 'open' | 'pending' | 'trigger pending'
   timestamp: string
+  strategy?: string // Originating Strategy Name
 }
 
 export interface Trade {
@@ -35,6 +37,7 @@ export interface Trade {
   product: string
   orderid: string
   timestamp: string
+  strategy?: string // Originating Strategy Name
 }
 
 export interface Holding {
@@ -129,3 +132,45 @@ export interface ApiResponse<T> {
   message?: string
   data?: T
 }
+
+export interface StrategyDailyPnLPoint {
+  date: string
+  pnl: number
+}
+
+export interface StrategyPerformanceMetric {
+  strategy: string
+  timeframe: string
+  realized_pnl: number
+  unrealized_pnl: number
+  total_pnl: number
+  today_realized_pnl: number
+  open_quantity: number
+  total_trades: number
+  win_rate: number
+  profit_factor: number
+  max_drawdown: number
+  avg_trade_pnl: number
+  active_positions_count: number
+  has_activity?: boolean
+  legs: any[]
+  daily_pnl_history: StrategyDailyPnLPoint[]
+}
+
+export interface StrategyAnalyticsResponse {
+  status: 'success' | 'error'
+  timeframe: string
+  days: number
+  as_of: string
+  portfolio_summary: {
+    total_pnl: number
+    total_trades: number
+    active_strategies_count: number
+    total_strategies_count?: number
+    winning_strategies_count: number
+    losing_strategies_count: number
+    top_performer: string
+  }
+  strategies: Record<string, StrategyPerformanceMetric>
+}
+

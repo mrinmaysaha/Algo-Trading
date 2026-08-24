@@ -33,9 +33,14 @@ LOT_SIZE_HISTORY: Dict[str, List[Tuple[str, str, int]]] = {
         ("2024-11-20", "2099-12-31", 20),
     ],
     "CRUDEOIL": [("2020-01-01", "2099-12-31", 100)],
+    "CRUDEOILM": [("2020-01-01", "2099-12-31", 10)],
     "NATURALGAS": [("2020-01-01", "2099-12-31", 1250)],
+    "NATGASMINI": [("2020-01-01", "2099-12-31", 250)],
+    "NATURALGASMINI": [("2020-01-01", "2099-12-31", 250)],
     "GOLD": [("2020-01-01", "2099-12-31", 100)],
+    "GOLDM": [("2020-01-01", "2099-12-31", 100)],
     "SILVER": [("2020-01-01", "2099-12-31", 30)],
+    "SILVERM": [("2020-01-01", "2099-12-31", 5)],
 }
 
 INDIAN_ASSET_SPECS = {
@@ -44,10 +49,15 @@ INDIAN_ASSET_SPECS = {
     "FINNIFTY": {"exchange": "NSE_INDEX", "strike_step": 50, "pricing_model": "BSM", "default_iv": 0.17},
     "MIDCPNIFTY": {"exchange": "NSE_INDEX", "strike_step": 25, "pricing_model": "BSM", "default_iv": 0.18},
     "SENSEX": {"exchange": "BSE_INDEX", "strike_step": 100, "pricing_model": "BSM", "default_iv": 0.16},
-    "CRUDEOIL": {"exchange": "MCX_COMMODITY", "strike_step": 50, "pricing_model": "BLACK76", "default_iv": 0.32},
-    "NATURALGAS": {"exchange": "MCX_COMMODITY", "strike_step": 5, "pricing_model": "BLACK76", "default_iv": 0.45},
-    "GOLD": {"exchange": "MCX_COMMODITY", "strike_step": 100, "pricing_model": "BLACK76", "default_iv": 0.14},
-    "SILVER": {"exchange": "MCX_COMMODITY", "strike_step": 250, "pricing_model": "BLACK76", "default_iv": 0.22},
+    "CRUDEOIL": {"exchange": "MCX", "strike_step": 50, "pricing_model": "BLACK76", "default_iv": 0.32},
+    "CRUDEOILM": {"exchange": "MCX", "strike_step": 50, "pricing_model": "BLACK76", "default_iv": 0.32},
+    "NATURALGAS": {"exchange": "MCX", "strike_step": 5, "pricing_model": "BLACK76", "default_iv": 0.45},
+    "NATGASMINI": {"exchange": "MCX", "strike_step": 5, "pricing_model": "BLACK76", "default_iv": 0.45},
+    "NATURALGASMINI": {"exchange": "MCX", "strike_step": 5, "pricing_model": "BLACK76", "default_iv": 0.45},
+    "GOLD": {"exchange": "MCX", "strike_step": 100, "pricing_model": "BLACK76", "default_iv": 0.14},
+    "GOLDM": {"exchange": "MCX", "strike_step": 100, "pricing_model": "BLACK76", "default_iv": 0.14},
+    "SILVER": {"exchange": "MCX", "strike_step": 250, "pricing_model": "BLACK76", "default_iv": 0.22},
+    "SILVERM": {"exchange": "MCX", "strike_step": 250, "pricing_model": "BLACK76", "default_iv": 0.22},
 }
 
 

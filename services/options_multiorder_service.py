@@ -223,6 +223,7 @@ def resolve_and_place_leg(
         # Step 1: Resolve option symbol
         # Use leg-specific expiry_date if provided, otherwise fall back to common expiry_date
         leg_expiry = leg_data.get("expiry_date") or common_data.get("expiry_date")
+        leg_ltp = leg_data.get("underlying_ltp") or underlying_ltp
 
         success, symbol_response, status_code = get_option_symbol(
             underlying=common_data.get("underlying"),
@@ -232,7 +233,7 @@ def resolve_and_place_leg(
             offset=leg_data.get("offset"),
             option_type=leg_data.get("option_type"),
             api_key=api_key,
-            underlying_ltp=underlying_ltp,
+            underlying_ltp=leg_ltp,
         )
 
         if not success:
@@ -447,10 +448,10 @@ def process_multiorder_with_auth(
     sell_legs = [(i, leg) for i, leg in enumerate(legs) if leg.get("action", "").upper() == "SELL"]
 
     results = []
-    underlying_ltp = None
+    underlying_ltp = multiorder_data.get("underlying_ltp")
 
-    # Fetch underlying LTP once (single quote fetch for all legs)
-    if legs:
+    # Fetch underlying LTP once if not provided (single quote fetch for all legs)
+    if underlying_ltp is None and legs:
         underlying = common_data.get("underlying")
         exchange = common_data.get("exchange")
         success, ltp, error_msg = get_underlying_ltp(underlying, exchange, api_key)
@@ -459,6 +460,8 @@ def process_multiorder_with_auth(
             logger.info(f"Using single LTP fetch for all legs: {underlying_ltp}")
         else:
             logger.warning(f"Failed to fetch underlying LTP: {error_msg}. Will retry per leg.")
+    elif underlying_ltp is not None:
+        logger.info(f"Using provided underlying LTP for all legs: {underlying_ltp}")
 
     # Check if any leg has splitsize > 0 (requires delay between orders)
     has_split_orders = any(leg.get("splitsize", 0) > 0 for _, leg in buy_legs + sell_legs)

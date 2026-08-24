@@ -441,10 +441,13 @@ export default function Positions() {
 
   const handleClosePosition = async (position: Position) => {
     try {
+      const strat =
+        position.strategy && position.strategy !== 'Manual' ? position.strategy : undefined
       const response = await tradingApi.closePosition(
         position.symbol,
         position.exchange,
-        position.product
+        position.product,
+        strat
       )
       if (response.status === 'success') {
         showToast.success(response.message || `Position closed for ${position.symbol}`, 'positions')
@@ -886,6 +889,7 @@ export default function Positions() {
                 <TableHeader>
                   <TableRow>
                     <SortableHeader column={0} label="Symbol" className="w-[140px]" />
+                    <TableHead className="w-[110px]">Strategy</TableHead>
                     <TableHead className="w-[80px]">Exchange</TableHead>
                     {!isCrypto && <TableHead className="w-[80px]">Product</TableHead>}
                     <SortableHeader column={3} label="Qty" className="w-[80px] text-right" />
@@ -910,7 +914,7 @@ export default function Positions() {
                             className="bg-muted/50 cursor-pointer hover:bg-muted"
                             onClick={() => toggleGroup(groupKey)}
                           >
-                            <TableCell colSpan={6}>
+                            <TableCell colSpan={7}>
                               <div className="flex items-center gap-3 py-1 font-semibold">
                                 {isCollapsed ? (
                                   <ChevronRight className="h-4 w-4 text-muted-foreground" />
@@ -951,6 +955,18 @@ export default function Positions() {
                             <TableRow key={`${position.symbol}-${position.exchange}-${index}`}>
                               <TableCell className="w-[140px] font-medium">
                                 {position.symbol}
+                              </TableCell>
+                              <TableCell className="w-[110px]">
+                                {position.strategy ? (
+                                  <Badge
+                                    variant="secondary"
+                                    className="bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20 font-medium text-xs whitespace-nowrap"
+                                  >
+                                    {position.strategy}
+                                  </Badge>
+                                ) : (
+                                  <span className="text-muted-foreground text-xs font-mono">Manual</span>
+                                )}
                               </TableCell>
                               <TableCell className="w-[80px]">
                                 <Badge

@@ -272,7 +272,11 @@ export default function PythonStrategyIndex() {
           <h1 className="text-2xl font-bold tracking-tight">Python Strategies</h1>
           <p className="text-muted-foreground">Manage and run your Python trading scripts</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
+          <Button variant="outline" size="sm" onClick={() => navigate('/strategy-analytics')}>
+            <BarChart3 className="h-4 w-4 mr-2 text-indigo-500" />
+            P&L Analytics
+          </Button>
           <Button variant="outline" size="sm" onClick={() => navigate('/python/guide')}>
             <HelpCircle className="h-4 w-4 mr-2" />
             Guide

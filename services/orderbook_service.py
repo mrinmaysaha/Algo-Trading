@@ -166,6 +166,18 @@ def get_orderbook_with_auth(
         formatted_orders = format_order_data(order_data)
         formatted_stats = format_statistics(order_stats)
 
+        # Enrich orders with strategy tag from StrategyOrderTag database
+        try:
+            from database.strategy_book_db import get_order_tags_bulk
+            order_ids = [str(o.get("orderid")) for o in formatted_orders if o.get("orderid")]
+            if order_ids:
+                tags_map = get_order_tags_bulk(order_ids)
+                for order in formatted_orders:
+                    oid = str(order.get("orderid") or "")
+                    order["strategy"] = tags_map.get(oid, order.get("strategy") or "")
+        except Exception as tag_err:
+            logger.debug(f"Could not enrich orderbook with strategy tags: {tag_err}")
+
         return (
             True,
             {

@@ -228,7 +228,12 @@ def _session_date() -> str:
 
 
 def record_order_tag(
-    orderid: str, user_id: str, strategy: str, symbol: str, exchange: str, product: str
+    orderid: str,
+    user_id: str = "",
+    strategy: str = "",
+    symbol: str = "",
+    exchange: str = "",
+    product: str = "",
 ) -> bool:
     """Remember which strategy placed an order. Ignores duplicates.
 
@@ -245,7 +250,12 @@ def record_order_tag(
 
 
 def _record_order_tag_locked(
-    orderid: str, user_id: str, strategy: str, symbol: str, exchange: str, product: str
+    orderid: str,
+    user_id: str = "",
+    strategy: str = "",
+    symbol: str = "",
+    exchange: str = "",
+    product: str = "",
 ) -> bool:
     try:
         existing = db_session.query(StrategyOrderTag).filter_by(orderid=str(orderid)).one_or_none()
@@ -367,6 +377,27 @@ def get_order_tag(orderid: str) -> StrategyOrderTag | None:
         return None
 
 
+def get_order_tags_bulk(orderids: list[str]) -> dict[str, str]:
+    """Retrieve a mapping of orderid -> strategy name for a list of order IDs."""
+    if not orderids:
+        return {}
+    try:
+        clean_ids = [str(oid).strip() for oid in orderids if oid]
+        if not clean_ids:
+            return {}
+        tags = (
+            db_session.query(StrategyOrderTag.orderid, StrategyOrderTag.strategy)
+            .filter(StrategyOrderTag.orderid.in_(clean_ids))
+            .all()
+        )
+        return {r[0]: r[1] for r in tags if r[0] and r[1]}
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not read bulk order tags")
+        return {}
+
+
+
 def apply_fill(
     orderid: str,
     filled_quantity: float,
@@ -452,7 +483,10 @@ def _apply_fill_locked(
         else:
             closing = min(abs(signed), abs(qty))
             direction = 1.0 if qty > 0 else -1.0
-            realized = closing * (price - avg) * direction
+            from utils.symbol_utils import get_contract_multiplier
+
+            multiplier = get_contract_multiplier(tag.symbol, tag.exchange)
+            realized = closing * (price - avg) * direction * multiplier
             leg.realized_pnl = float(leg.realized_pnl or 0) + realized
             leg.today_realized_pnl = float(leg.today_realized_pnl or 0) + realized
             remaining = abs(signed) - closing
@@ -481,6 +515,62 @@ def _apply_fill_locked(
         db_session.rollback()
         logger.exception(f"Could not apply fill for order {orderid}")
         return None
+
+
+def resolve_active_strategy_for_symbol(
+    user_id: str | None, symbol: str, exchange: str, product: str | None = None
+) -> str | None:
+    """Find the active strategy tag for a given symbol/exchange/product.
+    
+    Looks for active open legs (quantity != 0) first, then recent order tags.
+    """
+    if not _initialized:
+        try:
+            init_strategy_book_db()
+        except Exception:
+            return None
+    try:
+        # 1. Check StrategyPosition for open position with non-zero quantity
+        q = db_session.query(StrategyPosition).filter(
+            StrategyPosition.symbol == symbol,
+            StrategyPosition.exchange == exchange,
+            StrategyPosition.strategy.notin_(["UI Exit Position", "AUTO_SQUARE_OFF", "Manual", ""]),
+            StrategyPosition.strategy.isnot(None),
+        )
+        if user_id:
+            q = q.filter(StrategyPosition.user_id == user_id)
+        if product:
+            q = q.filter(StrategyPosition.product == product)
+
+        active_pos = (
+            q.filter(StrategyPosition.quantity != 0).order_by(StrategyPosition.id.desc()).first()
+        )
+        if active_pos and active_pos.strategy:
+            return active_pos.strategy
+
+        # 2. Check most recent StrategyOrderTag
+        tag_q = db_session.query(StrategyOrderTag).filter(
+            StrategyOrderTag.symbol == symbol,
+            StrategyOrderTag.exchange == exchange,
+            StrategyOrderTag.strategy.notin_(["UI Exit Position", "AUTO_SQUARE_OFF", "Manual", ""]),
+            StrategyOrderTag.strategy.isnot(None),
+        )
+        if user_id:
+            tag_q = tag_q.filter(StrategyOrderTag.user_id == user_id)
+        if product:
+            tag_q = tag_q.filter(StrategyOrderTag.product == product)
+
+        recent_tag = tag_q.order_by(StrategyOrderTag.id.desc()).first()
+        if recent_tag and recent_tag.strategy:
+            return recent_tag.strategy
+
+        # 3. Fallback: Any recent StrategyPosition row
+        pos = q.order_by(StrategyPosition.id.desc()).first()
+        if pos and pos.strategy:
+            return pos.strategy
+    except Exception:
+        logger.debug("Failed to resolve active strategy for symbol", exc_info=True)
+    return None
 
 
 def get_strategy_legs(user_id: str | None = None, strategy: str | None = None) -> list[dict]:

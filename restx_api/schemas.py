@@ -245,6 +245,9 @@ class OptionsOrderSchema(Schema):
         missing=0,
         validate=validate.Range(min=0, error="Disclosed quantity must be a non-negative integer."),
     )
+    underlying_ltp = fields.Float(
+        missing=None, allow_none=True
+    )  # Optional: pre-fetched underlying LTP for symbol resolution & execution reference
 
 
 class OptionsMultiOrderLegSchema(Schema):
@@ -283,6 +286,9 @@ class OptionsMultiOrderLegSchema(Schema):
         missing=0,
         validate=validate.Range(min=0, error="Disclosed quantity must be a non-negative integer."),
     )
+    underlying_ltp = fields.Float(
+        missing=None, allow_none=True
+    )  # Optional: per-leg pre-fetched underlying LTP
 
 
 class OptionsMultiOrderSchema(Schema):
@@ -298,6 +304,9 @@ class OptionsMultiOrderSchema(Schema):
     strike_int = fields.Int(
         required=False, validate=validate.Range(min=1), allow_none=True
     )  # Optional strike interval
+    underlying_ltp = fields.Float(
+        missing=None, allow_none=True
+    )  # Optional: common pre-fetched underlying LTP for all legs
     legs = fields.List(
         fields.Nested(OptionsMultiOrderLegSchema),
         required=True,

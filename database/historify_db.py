@@ -3476,6 +3476,43 @@ def update_schedule_execution(
         return False, str(e)
 
 
+def get_schedule_execution_by_job_id(download_job_id: str) -> dict[str, Any] | None:
+    """Get schedule execution record by download_job_id."""
+    try:
+        with get_connection() as conn:
+            result = conn.execute(
+                """
+                SELECT id, schedule_id, download_job_id, status,
+                       started_at, completed_at, symbols_processed,
+                       symbols_success, symbols_failed, records_downloaded,
+                       error_message
+                FROM historify_schedule_executions
+                WHERE download_job_id = ?
+            """,
+                [download_job_id],
+            ).fetchone()
+
+            if result:
+                return {
+                    "id": result[0],
+                    "schedule_id": result[1],
+                    "download_job_id": result[2],
+                    "status": result[3],
+                    "started_at": _safe_timestamp(result[4]),
+                    "completed_at": _safe_timestamp(result[5]),
+                    "symbols_processed": result[6],
+                    "symbols_success": result[7],
+                    "symbols_failed": result[8],
+                    "records_downloaded": result[9],
+                    "error_message": result[10],
+                }
+            return None
+    except Exception as e:
+        logger.exception(f"Error fetching schedule execution by job_id: {e}")
+        return None
+
+
+
 def get_schedule_executions(schedule_id: str, limit: int = 20) -> list[dict[str, Any]]:
     """Get execution history for a schedule."""
     try:

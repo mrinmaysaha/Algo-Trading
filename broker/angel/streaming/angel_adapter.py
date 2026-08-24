@@ -388,8 +388,16 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 )
 
         # Create token list for Angel API
+        tokens_to_sub = [token]
+        # For index tokens starting with 999 (e.g. 99926009 for BANKNIFTY in NSE_INDEX),
+        # also include the standard index token (26009) to guarantee delivery across all Angel One broker feed modes
+        if str(token).startswith("999"):
+            tokens_to_sub.append(str(token)[3:])
+        elif exchange in ("NSE_INDEX", "BSE_INDEX", "MCX_INDEX"):
+            tokens_to_sub.append(f"999{token}")
+
         token_list = [
-            {"exchangeType": AngelExchangeMapper.get_exchange_type(brexchange), "tokens": [token]}
+            {"exchangeType": AngelExchangeMapper.get_exchange_type(brexchange), "tokens": tokens_to_sub}
         ]
 
         # Generate unique correlation ID that includes mode to prevent overwriting
@@ -413,11 +421,9 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "is_fallback": is_fallback,
             }
             self.subscriptions[correlation_id] = sub_entry
-            # Maintain the O(1) tick-path index. (token, exch_type) uniquely
-            # identifies an instrument; symbol/exchange are identical across the
-            # modes of the same token, so one entry per key is sufficient for
-            # _on_data to resolve symbol/exchange.
-            self._token_index[(str(token), exch_type)] = sub_entry
+            # Maintain the O(1) tick-path index for all alias tokens
+            for tok in tokens_to_sub:
+                self._token_index[(str(tok), exch_type)] = sub_entry
 
         # Queue for batched subscribe (issue #1352). The actual
         # ws_client.subscribe() call is emitted by _process_batch_subscriptions
@@ -426,16 +432,17 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if self.connected and self.ws_client:
             try:
                 with self.lock:
-                    self.subscription_queue.append(
-                        {
-                            "token": token,
-                            "mode": mode,
-                            "exchange_type": AngelExchangeMapper.get_exchange_type(brexchange),
-                            "symbol": symbol,
-                            "exchange": exchange,
-                        }
-                    )
-                    if len(self.subscription_queue) == 1:
+                    for tok in tokens_to_sub:
+                        self.subscription_queue.append(
+                            {
+                                "token": tok,
+                                "mode": mode,
+                                "exchange_type": AngelExchangeMapper.get_exchange_type(brexchange),
+                                "symbol": symbol,
+                                "exchange": exchange,
+                            }
+                        )
+                    if len(self.subscription_queue) >= 1:
                         self._start_batch_timer()
             except Exception as e:
                 self.logger.error(f"Error queuing subscription for {symbol}.{exchange}: {e}")

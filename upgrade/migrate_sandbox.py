@@ -318,7 +318,7 @@ def insert_default_config(conn):
         ),
         ("nse_bse_square_off_time", "15:15", "Square-off time for NSE/BSE MIS positions (IST)"),
         ("cds_bcd_square_off_time", "16:45", "Square-off time for CDS/BCD MIS positions (IST)"),
-        ("mcx_square_off_time", "23:30", "Square-off time for MCX MIS positions (IST)"),
+        ("mcx_square_off_time", "23:25", "Square-off time for MCX MIS positions (IST)"),
         ("ncdex_square_off_time", "17:00", "Square-off time for NCDEX MIS positions (IST)"),
         ("equity_mis_leverage", "5", "Leverage multiplier for equity MIS (NSE/BSE) - Range: 1-50x"),
         ("equity_cnc_leverage", "1", "Leverage multiplier for equity CNC (NSE/BSE) - Range: 1-50x"),

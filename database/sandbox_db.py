@@ -539,7 +539,7 @@ def init_default_config():
         },
         {
             "config_key": "mcx_square_off_time",
-            "config_value": "23:30",
+            "config_value": "23:25",
             "description": "Square-off time for MCX MIS positions (IST)",
         },
         {

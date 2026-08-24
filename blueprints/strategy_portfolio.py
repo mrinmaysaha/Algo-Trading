@@ -60,6 +60,28 @@ def list_strategies():
     return jsonify({"status": "success", "items": items})
 
 
+@strategy_portfolio_bp.route("/api/strategy-analytics", methods=["GET"])
+@strategy_portfolio_bp.route("/api/strategy/analytics", methods=["GET"])
+@check_session_validity
+@limiter.limit(PORTFOLIO_READ_LIMIT)
+def get_strategy_analytics_api():
+    """Get multi-timeframe strategy P&L analytics, win rates, and metrics."""
+    timeframe = request.args.get("timeframe", "1D")
+    strategy_name = request.args.get("strategy")
+    user_id = getattr(request, "user_id", None)
+
+    try:
+        from services.strategy_pnl_service import get_multi_timeframe_strategy_analytics
+        data = get_multi_timeframe_strategy_analytics(
+            timeframe=timeframe, user_id=user_id, strategy=strategy_name
+        )
+        return jsonify(data), 200
+    except Exception as e:
+        logger.exception(f"Error fetching strategy analytics: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+
 @strategy_portfolio_bp.route("/api/strategy-portfolio/<int:entry_id>", methods=["GET"])
 @check_session_validity
 @limiter.limit(PORTFOLIO_READ_LIMIT)

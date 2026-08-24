@@ -461,6 +461,7 @@ def init_health_db():
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)
 
+    # pyrefly: ignore [missing-import]
     from database.db_init_helper import init_db_with_logging
 
     init_db_with_logging(HealthBase, health_engine, "Health Monitoring DB", logger)

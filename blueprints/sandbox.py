@@ -126,7 +126,7 @@ def api_get_configs():
                 "value": "16:45",
                 "description": "Square-off time for CDS/BCD MIS",
             },
-            "mcx_square_off_time": {"value": "23:30", "description": "Square-off time for MCX MIS"},
+            "mcx_square_off_time": {"value": "23:25", "description": "Square-off time for MCX MIS"},
             "ncdex_square_off_time": {
                 "value": "17:00",
                 "description": "Square-off time for NCDEX MIS",
@@ -322,7 +322,7 @@ def reset_config():
             "mtm_update_interval": "5",
             "nse_bse_square_off_time": "15:15",
             "cds_bcd_square_off_time": "16:45",
-            "mcx_square_off_time": "23:30",
+            "mcx_square_off_time": "23:25",
             "ncdex_square_off_time": "17:00",
             "equity_mis_leverage": "5",
             "equity_cnc_leverage": "1",

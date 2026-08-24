@@ -12,7 +12,7 @@ services:
 
     # persistent DB, strategies, logs + mount the host .env read-only so dotenv can read it
     volumes:
-      - ./db:/app/db
+      - openalgo_db:/app/db
       - openalgo_log:/app/log            # Application logs (named volume)
       - ./strategies:/app/strategies     # Python strategies (host bind mount)
       - openalgo_keys:/app/keys          # API keys/certificates (named volume)

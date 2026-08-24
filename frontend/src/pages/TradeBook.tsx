@@ -43,10 +43,11 @@ interface FilterState {
   action: string[]
   exchange: string[]
   product: string[]
+  strategy: string[]
 }
 
 // Sort configuration types
-type SortKey = 'timestamp' | 'symbol' | 'action'
+type SortKey = 'timestamp' | 'symbol' | 'action' | 'strategy'
 interface SortConfig {
   key: SortKey
   direction: 'asc' | 'desc'
@@ -112,6 +113,7 @@ export default function TradeBook() {
     action: [],
     exchange: [],
     product: [],
+    strategy: [],
   })
   const [settingsOpen, setSettingsOpen] = useState(false)
 
@@ -128,13 +130,14 @@ export default function TradeBook() {
       if (filters.action.length > 0 && !filters.action.includes(trade.action)) return false
       if (filters.exchange.length > 0 && !filters.exchange.includes(trade.exchange)) return false
       if (filters.product.length > 0 && !filters.product.includes(trade.product)) return false
+      if (filters.strategy.length > 0 && !filters.strategy.includes(trade.strategy || 'Manual')) return false
       return true
     })
 
     // 2. Sort Logic
     return [...filtered].sort((a, b) => {
-      const aValue = a[sortConfig.key]
-      const bValue = b[sortConfig.key]
+      const aValue = a[sortConfig.key] || ''
+      const bValue = b[sortConfig.key] || ''
 
       if (sortConfig.key === 'timestamp') {
         const aTime = parseTimestamp(aValue as string)
@@ -142,12 +145,21 @@ export default function TradeBook() {
         return sortConfig.direction === 'asc' ? aTime - bTime : bTime - aTime
       }
 
-      // Standard alphabetical sort for Symbol and Action
+      // Standard alphabetical sort for Symbol, Action, Strategy
       if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1
       if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1
       return 0
     })
   }, [trades, filters, sortConfig])
+
+  // Extract distinct strategy names present in trade history
+  const availableStrategies = useMemo(() => {
+    const set = new Set<string>()
+    trades.forEach((t) => {
+      set.add(t.strategy || 'Manual')
+    })
+    return Array.from(set).sort()
+  }, [trades])
 
   const requestSort = (key: SortKey) => {
     setSortConfig((prev) => ({
@@ -157,7 +169,10 @@ export default function TradeBook() {
   }
 
   const hasActiveFilters =
-    filters.action.length > 0 || filters.exchange.length > 0 || filters.product.length > 0
+    filters.action.length > 0 ||
+    filters.exchange.length > 0 ||
+    filters.product.length > 0 ||
+    filters.strategy.length > 0
 
   const toggleFilter = (type: keyof FilterState, value: string) => {
     setFilters((prev) => {
@@ -171,7 +186,7 @@ export default function TradeBook() {
   }
 
   const clearFilters = () => {
-    setFilters({ action: [], exchange: [], product: [] })
+    setFilters({ action: [], exchange: [], product: [], strategy: [] })
   }
 
   const fetchTrades = useCallback(
@@ -206,16 +221,13 @@ export default function TradeBook() {
   }, [fetchTrades])
 
   // Refresh on order events instead of polling
-  useOrderEventRefresh(fetchTrades, {
-    events: ['order_event', 'analyzer_update'],
-  })
+  useOrderEventRefresh(fetchTrades)
 
   // Listen for mode changes (live/analyze) and refresh data
   useEffect(() => {
-    const unsubscribe = onModeChange(() => {
+    return onModeChange(() => {
       fetchTrades()
     })
-    return () => unsubscribe()
   }, [fetchTrades])
 
   const exportToCSV = () => {
@@ -227,6 +239,7 @@ export default function TradeBook() {
     try {
       const headers = [
         'Symbol',
+        'Strategy',
         'Exchange',
         ...(isCrypto ? [] : ['Product']),
         'Action',
@@ -238,6 +251,7 @@ export default function TradeBook() {
       ]
       const rows = sortedAndFilteredTrades.map((t) => [
         sanitizeCSV(t.symbol),
+        sanitizeCSV(t.strategy || 'Manual'),
         sanitizeCSV(t.exchange),
         ...(isCrypto ? [] : [sanitizeCSV(t.product)]),
         sanitizeCSV(t.action),
@@ -348,6 +362,20 @@ export default function TradeBook() {
                     <FilterChip type="exchange" value="CDS" label="CDS" />
                   </div>
                 </div>
+
+                {/* Strategy */}
+                {availableStrategies.length > 0 && (
+                  <div className="space-y-3">
+                    <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                      Strategy
+                    </Label>
+                    <div className="flex flex-wrap gap-2">
+                      {availableStrategies.map((strat) => (
+                        <FilterChip key={strat} type="strategy" value={strat} label={strat} />
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Product */}
                 {!isCrypto && (
@@ -508,6 +536,7 @@ export default function TradeBook() {
                           ))}
                       </div>
                     </TableHead>
+                    <TableHead>Strategy</TableHead>
                     <TableHead>Exchange</TableHead>
                     {!isCrypto && <TableHead>Product</TableHead>}
                     <TableHead
@@ -556,6 +585,18 @@ export default function TradeBook() {
                     return (
                       <TableRow key={`${trade.orderid}-${index}`}>
                         <TableCell className="font-medium">{trade.symbol}</TableCell>
+                        <TableCell>
+                          {trade.strategy ? (
+                            <Badge
+                              variant="secondary"
+                              className="bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20 font-medium text-xs whitespace-nowrap"
+                            >
+                              {trade.strategy}
+                            </Badge>
+                          ) : (
+                            <span className="text-muted-foreground text-xs font-mono">Manual</span>
+                          )}
+                        </TableCell>
                         <TableCell>
                           <Badge variant="outline">{trade.exchange}</Badge>
                         </TableCell>

@@ -384,14 +384,16 @@ def set_resource_limits():
         import resource
 
         # Memory limit (virtual memory) - prevents memory bombs
-        memory_bytes = STRATEGY_MEMORY_LIMIT_MB * 1024 * 1024
-        try:
-            resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))
-            # Also limit data segment for additional protection
-            resource.setrlimit(resource.RLIMIT_DATA, (memory_bytes, memory_bytes))
-        except (OSError, ValueError) as e:
-            # Some systems may not support these limits
-            logger.debug(f"Could not set memory limit: {e}")
+        # If STRATEGY_MEMORY_LIMIT_MB <= 0, virtual memory limiting is disabled.
+        # On 64-bit Linux, multi-threaded C extensions (OpenBLAS, NumPy, SciPy, WebSockets)
+        # map significant virtual address space for thread stacks & arenas.
+        # We ensure adequate virtual address space headroom to prevent glibc TLS allocation aborts.
+        if STRATEGY_MEMORY_LIMIT_MB > 0:
+            memory_bytes = max(STRATEGY_MEMORY_LIMIT_MB * 1024 * 1024 * 4, 2048 * 1024 * 1024)
+            try:
+                resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))
+            except (OSError, ValueError) as e:
+                logger.debug(f"Could not set memory limit: {e}")
 
         # CPU time limit - prevents infinite loops from hogging CPU forever
         # Note: This is cumulative CPU time, not wall clock time
@@ -404,13 +406,13 @@ def set_resource_limits():
 
         # Limit number of open files - prevents file descriptor exhaustion
         try:
-            resource.setrlimit(resource.RLIMIT_NOFILE, (256, 256))
+            resource.setrlimit(resource.RLIMIT_NOFILE, (1024, 1024))
         except (OSError, ValueError) as e:
             logger.debug(f"Could not set file descriptor limit: {e}")
 
-        # Limit number of processes - prevents fork bombs
+        # Limit number of processes/threads - prevents fork bombs while allowing multi-threading
         try:
-            resource.setrlimit(resource.RLIMIT_NPROC, (256, 256))
+            resource.setrlimit(resource.RLIMIT_NPROC, (1024, 1024))
         except (OSError, ValueError) as e:
             logger.debug(f"Could not set process limit: {e}")
 
@@ -519,12 +521,15 @@ def start_strategy_process(strategy_id):
             )
             strategy_env.setdefault("OPENALGO_HOST", "http://127.0.0.1:5000")
             try:
-                from database.auth_db import get_api_key_for_tradingview
+                from database.auth_db import get_api_key_for_tradingview, ApiKeys, db_session
                 user_id = config.get("user_id")
-                if user_id:
-                    _api_key = get_api_key_for_tradingview(user_id)
-                    if _api_key:
-                        strategy_env["OPENALGO_API_KEY"] = _api_key
+                _api_key = get_api_key_for_tradingview(user_id) if user_id else None
+                if not _api_key:
+                    first_key = db_session.query(ApiKeys).first()
+                    if first_key:
+                        _api_key = get_api_key_for_tradingview(first_key.user_id)
+                if _api_key:
+                    strategy_env["OPENALGO_API_KEY"] = _api_key
             except Exception as e:
                 logger.warning(f"Could not inject API key for strategy {strategy_id}: {e}")
             subprocess_args["env"] = strategy_env

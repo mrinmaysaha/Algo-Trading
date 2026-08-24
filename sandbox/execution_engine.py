@@ -35,6 +35,7 @@ from database.token_db import get_symbol_info
 from sandbox.fund_manager import FundManager, reconcile_margin, validate_margin_consistency
 from services.quotes_service import get_multiquotes, get_quotes
 from utils.logging import get_logger
+from utils.symbol_utils import get_contract_multiplier
 
 logger = get_logger(__name__)
 
@@ -753,8 +754,7 @@ class ExecutionEngine:
                 elif final_quantity == 0:
                     # Position closed completely
                     # Calculate realized P&L
-                    _sym_cv_info = get_symbol_info(order.symbol, order.exchange)
-                    _cv = float(_sym_cv_info.contract_value) if _sym_cv_info and _sym_cv_info.contract_value else 1.0
+                    _cv = Decimal(str(get_contract_multiplier(order.symbol, order.exchange)))
                     realized_pnl = self._calculate_realized_pnl(
                         old_quantity, position.average_price, abs(new_quantity), execution_price, contract_value=_cv
                     )
@@ -831,8 +831,7 @@ class ExecutionEngine:
                     reduced_quantity = min(abs(old_quantity), abs(new_quantity))
 
                     # Calculate realized P&L for reduced portion
-                    _sym_cv_info = get_symbol_info(order.symbol, order.exchange)
-                    _cv = float(_sym_cv_info.contract_value) if _sym_cv_info and _sym_cv_info.contract_value else 1.0
+                    _cv = Decimal(str(get_contract_multiplier(order.symbol, order.exchange)))
                     realized_pnl = self._calculate_realized_pnl(
                         old_quantity, position.average_price, reduced_quantity, execution_price, contract_value=_cv
                     )

@@ -60,7 +60,7 @@ def _set_sqlite_pragmas(dbapi_connection, connection_record):
         except sqlite3.OperationalError:
             pass
         try:
-            cursor.execute("PRAGMA busy_timeout=15000")
+            cursor.execute("PRAGMA busy_timeout=60000")
         except sqlite3.OperationalError:
             pass
     finally:

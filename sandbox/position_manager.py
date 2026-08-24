@@ -385,12 +385,13 @@ class PositionManager:
         settlement_price = get_expiry_settlement_price(position)
 
         # Calculate realized P&L for this closure
+        cv = self._get_contract_value(position.symbol, position.exchange)
         if quantity > 0:
-            # Long position: P&L = (settlement - avg) * qty
-            close_pnl = (settlement_price - avg_price) * Decimal(str(quantity))
+            # Long position: P&L = (settlement - avg) * qty * cv
+            close_pnl = (settlement_price - avg_price) * Decimal(str(quantity)) * cv
         else:
-            # Short position: P&L = (avg - settlement) * abs(qty)
-            close_pnl = (avg_price - settlement_price) * Decimal(str(abs(quantity)))
+            # Short position: P&L = (avg - settlement) * abs(qty) * cv
+            close_pnl = (avg_price - settlement_price) * Decimal(str(abs(quantity))) * cv
 
         # Get accumulated realized P&L from position
         accumulated_realized = Decimal(str(position.accumulated_realized_pnl or 0))
@@ -562,13 +563,11 @@ class PositionManager:
             total_today_realized_pnl = Decimal("0.00")  # Today's realized P&L
             total_pnl_today = Decimal("0.00")  # Today's total (realized + unrealized)
 
-            # Build contract_value lookup map for all positions using in-memory cache
+            # Build contract_value lookup map for all positions
             try:
                 _cv_map = {}
                 for p in positions:
-                    sym_info = get_symbol_info(p.symbol, p.exchange)
-                    if sym_info and sym_info.contract_value:
-                        _cv_map[p.symbol] = float(sym_info.contract_value)
+                    _cv_map[p.symbol] = float(self._get_contract_value(p.symbol, p.exchange))
             except Exception:
                 _cv_map = {}
 
@@ -623,6 +622,150 @@ class PositionManager:
                         "lot_size": pos_cv,  # contract_value multiplier (e.g. 0.01 for ETHUSD.P)
                     }
                 )
+
+            # Enrich sandbox positions with strategy tags (matching tradebook and live strategies)
+            try:
+                import os
+                import re
+                from database.sandbox_db import SandboxOrders, SandboxTrades
+                from database.strategy_book_db import (
+                    StrategyOrderTag,
+                    StrategyPosition,
+                    get_strategy_legs,
+                    init_strategy_book_db,
+                    is_initialized,
+                )
+
+                if not is_initialized():
+                    init_strategy_book_db()
+
+                leg_map = {}
+                legs = get_strategy_legs()
+                if legs:
+                    for l in legs:
+                        strat = l.get("strategy")
+                        if not strat or strat in ("UI Exit Position", "AUTO_SQUARE_OFF"):
+                            continue
+                        sym = l.get("symbol")
+                        exch = l.get("exchange")
+                        prod = l.get("product")
+                        qty = abs(float(l.get("quantity") or 0))
+                        if (sym, exch, prod) not in leg_map or qty > 0:
+                            leg_map[(sym, exch, prod)] = strat
+                        if (sym, exch) not in leg_map or qty > 0:
+                            leg_map[(sym, exch)] = strat
+                        if sym not in leg_map or qty > 0:
+                            leg_map[sym] = strat
+
+                for pos_item in positions_list:
+                    sym = pos_item.get("symbol")
+                    exch = pos_item.get("exchange")
+                    prod = pos_item.get("product")
+
+                    matched_strat = (
+                        leg_map.get((sym, exch, prod))
+                        or leg_map.get((sym, exch))
+                        or leg_map.get(sym)
+                    )
+
+                    # 1. Check recent SandboxTrades for this user and symbol
+                    if not matched_strat:
+                        trade = (
+                            SandboxTrades.query.filter(
+                                SandboxTrades.user_id == self.user_id,
+                                SandboxTrades.symbol == sym,
+                                SandboxTrades.strategy != "UI Exit Position",
+                                SandboxTrades.strategy != "AUTO_SQUARE_OFF",
+                                SandboxTrades.strategy.isnot(None),
+                                SandboxTrades.strategy != "",
+                            )
+                            .order_by(SandboxTrades.id.desc())
+                            .first()
+                        )
+                        if trade and trade.strategy:
+                            matched_strat = trade.strategy
+
+                    # 2. Check recent SandboxOrders for this user and symbol
+                    if not matched_strat:
+                        order = (
+                            SandboxOrders.query.filter(
+                                SandboxOrders.user_id == self.user_id,
+                                SandboxOrders.symbol == sym,
+                                SandboxOrders.strategy != "UI Exit Position",
+                                SandboxOrders.strategy != "AUTO_SQUARE_OFF",
+                                SandboxOrders.strategy.isnot(None),
+                                SandboxOrders.strategy != "",
+                            )
+                            .order_by(SandboxOrders.id.desc())
+                            .first()
+                        )
+                        if order and order.strategy:
+                            matched_strat = order.strategy
+
+                    # 3. Check StrategyOrderTag in strategy_book_db
+                    if not matched_strat:
+                        tag = (
+                            StrategyOrderTag.query.filter(
+                                StrategyOrderTag.symbol == sym,
+                                StrategyOrderTag.strategy != "UI Exit Position",
+                                StrategyOrderTag.strategy != "AUTO_SQUARE_OFF",
+                                StrategyOrderTag.strategy.isnot(None),
+                                StrategyOrderTag.strategy != "",
+                            )
+                            .order_by(StrategyOrderTag.id.desc())
+                            .first()
+                        )
+                        if tag and tag.strategy:
+                            matched_strat = tag.strategy
+
+                    # 4. Fallback: Option series match from SandboxTrades
+                    if not matched_strat and sym:
+                        m = re.match(r"^([A-Z]+)(\d{2}[A-Z]{3}\d{2})(\d+)(CE|PE)$", sym)
+                        if m:
+                            und, exp, strike, opt_type = m.groups()
+                            prefix = f"{und}{exp}"
+                            trade = (
+                                SandboxTrades.query.filter(
+                                    SandboxTrades.user_id == self.user_id,
+                                    SandboxTrades.symbol.like(f"{prefix}%{opt_type}"),
+                                    SandboxTrades.strategy != "UI Exit Position",
+                                    SandboxTrades.strategy != "AUTO_SQUARE_OFF",
+                                    SandboxTrades.strategy.isnot(None),
+                                    SandboxTrades.strategy != "",
+                                )
+                                .order_by(SandboxTrades.id.desc())
+                                .first()
+                            )
+                            if trade and trade.strategy:
+                                matched_strat = trade.strategy
+
+                    if matched_strat:
+                        norm_strat = matched_strat
+                        config_path = "strategies/strategy_configs.json"
+                        if os.path.exists(config_path):
+                            try:
+                                import json
+                                with open(config_path, "r", encoding="utf-8") as f:
+                                    cfgs = json.load(f)
+                                    for s_key, s_val in cfgs.items():
+                                        disp_name = s_val.get("name") or s_key
+                                        script_file = os.path.splitext(os.path.basename(s_val.get("file_path") or ""))[0]
+                                        clean_norm = re.sub(r'[^a-zA-Z0-9]', '', norm_strat).lower()
+                                        clean_disp = re.sub(r'[^a-zA-Z0-9]', '', disp_name).lower()
+                                        clean_key = re.sub(r'[^a-zA-Z0-9]', '', s_key).lower()
+                                        clean_script = re.sub(r'[^a-zA-Z0-9]', '', script_file).lower() if script_file else ""
+
+                                        if (clean_norm == clean_disp or clean_norm == clean_key
+                                            or (clean_script and clean_norm.startswith(clean_script[:8]))
+                                            or clean_norm.startswith(clean_key[:8])
+                                            or clean_norm.startswith(clean_disp[:8])):
+                                            norm_strat = disp_name
+                                            break
+                            except Exception:
+                                pass
+                        pos_item["strategy"] = norm_strat
+            except Exception as strat_err:
+                logger.warning(f"Error enriching sandbox positions with strategy tags: {strat_err}")
 
             # Update fund unrealized P&L (only from open positions)
             # Closed position P&L is already in realized_pnl, so don't include it here
@@ -983,7 +1126,7 @@ class PositionManager:
 
         return quote_cache
 
-    def close_position(self, symbol, exchange, product):
+    def close_position(self, symbol, exchange, product, strategy=None):
         """
         Close a position (square-off)
         Creates a reverse order to close the position
@@ -1008,6 +1151,17 @@ class PositionManager:
             action = "SELL" if position.quantity > 0 else "BUY"
             quantity = abs(position.quantity)
 
+            # Resolve active strategy tag if not provided
+            if not strategy or strategy in ("AUTO_SQUARE_OFF", "UI Exit Position", "Manual", ""):
+                from database.strategy_book_db import resolve_active_strategy_for_symbol
+
+                strategy = (
+                    resolve_active_strategy_for_symbol(
+                        self.user_id, symbol, exchange, product
+                    )
+                    or "AUTO_SQUARE_OFF"
+                )
+
             # Create market order to close position
             from sandbox.order_manager import OrderManager
 
@@ -1020,7 +1174,7 @@ class PositionManager:
                 "quantity": quantity,
                 "price_type": "MARKET",
                 "product": product,
-                "strategy": "AUTO_SQUARE_OFF",
+                "strategy": strategy,
             }
 
             success, response, status_code = order_manager.place_order(order_data)
@@ -1382,10 +1536,11 @@ def cleanup_expired_contracts():
                         settlement_price = get_expiry_settlement_price(position)
 
                         # Calculate realized P&L
+                        cv = self._get_contract_value(position.symbol, position.exchange)
                         if quantity > 0:
-                            close_pnl = (settlement_price - avg_price) * Decimal(str(quantity))
+                            close_pnl = (settlement_price - avg_price) * Decimal(str(quantity)) * cv
                         else:
-                            close_pnl = (avg_price - settlement_price) * Decimal(str(abs(quantity)))
+                            close_pnl = (avg_price - settlement_price) * Decimal(str(abs(quantity))) * cv
 
                         accumulated_realized = Decimal(str(position.accumulated_realized_pnl or 0))
                         total_realized_pnl = accumulated_realized + close_pnl

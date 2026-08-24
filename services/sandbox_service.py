@@ -392,8 +392,9 @@ def sandbox_close_position(
             )
         else:
             # Close specific position
+            strategy = close_data.get("strategy")
             success, response, status_code = position_manager.close_position(
-                symbol, exchange, product
+                symbol, exchange, product, strategy=strategy
             )
             return success, response, status_code
 

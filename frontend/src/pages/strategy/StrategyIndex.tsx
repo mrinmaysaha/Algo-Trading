@@ -1,5 +1,6 @@
 import {
   ArrowLeftRight,
+  BarChart3,
   Check,
   Clock,
   Copy,
@@ -138,7 +139,11 @@ export default function StrategyIndex() {
             Manage your trading strategies and webhook integrations
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
+          <Button variant="outline" size="sm" onClick={() => navigate('/strategy-analytics')}>
+            <BarChart3 className="h-4 w-4 mr-2 text-indigo-500" />
+            P&L Analytics
+          </Button>
           <Button variant="outline" size="sm" onClick={fetchStrategies}>
             <RefreshCw className="h-4 w-4 mr-2" />
             Refresh

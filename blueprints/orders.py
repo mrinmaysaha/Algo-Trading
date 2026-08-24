@@ -524,6 +524,16 @@ def close_position():
         auth_token = get_auth_token(login_username)
         broker_name = session.get("broker")
 
+        # Resolve strategy tag if provided in request or look up from active strategy position/order tags
+        from database.strategy_book_db import resolve_active_strategy_for_symbol
+
+        strategy_tag = data.get("strategy")
+        if not strategy_tag or strategy_tag in ("UI Exit Position", "Manual", ""):
+            strategy_tag = (
+                resolve_active_strategy_for_symbol(login_username, symbol, exchange, product)
+                or "UI Exit Position"
+            )
+
         # Check if in analyze mode
         if get_analyze_mode():
             # In analyze mode, use placesmartorder service with quantity=0 and position_size=0
@@ -536,7 +546,7 @@ def close_position():
 
             # Prepare order data for placesmartorder service (without apikey in data)
             order_data = {
-                "strategy": "UI Exit Position",
+                "strategy": strategy_tag,
                 "exchange": exchange,
                 "symbol": symbol,
                 "action": "BUY",  # Will be determined by smart order logic
@@ -576,7 +586,7 @@ def close_position():
 
         # Prepare order data for direct broker API call
         order_data = {
-            "strategy": "UI Exit Position",
+            "strategy": strategy_tag,
             "exchange": exchange,
             "symbol": symbol,
             "action": "BUY",  # Will be determined by the smart order API based on current position

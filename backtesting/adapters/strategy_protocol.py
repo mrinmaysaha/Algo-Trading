@@ -36,12 +36,26 @@ class LiveStrategyAdapter(StrategyProtocol):
         if len(df_slice) < 5:
             return None
 
-        # Route to strategy instance method if present
-        for method_name in ["evaluate_signal_from_dataframe", "evaluate_signal", "get_signal", "generate_signal"]:
-            if hasattr(self.live, method_name):
-                sig_val = getattr(self.live, method_name)(df_slice, symbol)
-                if isinstance(sig_val, str) and sig_val.upper() in ["CE", "PE"]:
-                    return Signal(action="ENTER", option_type=sig_val.upper(), reason="LIVE_INSTANCE_SIGNAL")
+        # 1. Automatically discover any strategy execution or signal method
+        possible_methods = [
+            "evaluate_signal_from_dataframe", "evaluate_signal", "get_signal", 
+            "generate_signal", "evaluate", "on_bar", "on_candle", "on_data", 
+            "process_bar", "evaluate_entry", "_execute_signal"
+        ]
+        
+        if self.live is not None:
+            for method_name in possible_methods:
+                if hasattr(self.live, method_name):
+                    try:
+                        sig_val = getattr(self.live, method_name)(df_slice, symbol)
+                        if isinstance(sig_val, str) and sig_val.upper() in ["CE", "PE", "LONG", "SHORT", "BUY", "SELL"]:
+                            opt = "CE" if sig_val.upper() in ["CE", "LONG", "BUY"] else "PE"
+                            return Signal(action="ENTER", option_type=opt, reason=f"STRATEGY_{method_name.upper()}")
+                    except Exception:
+                        pass
+            
+            # If strategy instance is present, NEVER fall back to generic ORB/confluence signals
+            return None
 
         latest = df_slice.iloc[-1]
         t_curr = pd.to_datetime(latest["datetime"])
@@ -117,8 +131,8 @@ class LiveStrategyAdapter(StrategyProtocol):
         current_sl = pos_state["stop_loss"]
         tsl_activated = pos_state["tsl_activated"]
 
-        activation_mult = self.cfg.get("tsl_activation_atr_mult", 1.0)
-        step_mult = self.cfg.get("trail_step_atr_mult", 0.5)
+        activation_mult = self.cfg.get("atr_activation_mult", self.cfg.get("tsl_activation_atr_mult", 1.0))
+        step_mult = self.cfg.get("atr_step_mult", self.cfg.get("trail_step_atr_mult", 0.5))
         step_size = atr_val * step_mult
 
         if position == "CE":

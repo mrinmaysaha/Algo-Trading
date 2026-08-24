@@ -204,26 +204,32 @@ class FlowScheduler:
         return job_id
 
     def remove_job(self, job_id: str) -> bool:
-        """Remove a job from the scheduler. Returns False if there was none.
-
-        A job that does not exist is not an error for any caller: activating a
-        workflow clears any prior job first (a new workflow has none), and
-        deactivating may find it already gone after a restart. Logging that as
-        an ERROR with a traceback made a perfectly normal activation look
-        broken. A real jobstore failure is still logged with its traceback.
-        """
+        """Remove a job from the scheduler. Returns False if there was none."""
         from apscheduler.jobstores.base import JobLookupError
+        from sqlalchemy.exc import OperationalError
+        import time
 
-        try:
-            self.scheduler.remove_job(job_id)
-            logger.info(f"Removed job {job_id}")
-            return True
-        except JobLookupError:
-            logger.debug(f"No scheduler job {job_id} to remove")
-            return False
-        except Exception:
-            logger.exception(f"Failed to remove job {job_id}")
-            return False
+        for attempt in range(1, 4):
+            try:
+                self.scheduler.remove_job(job_id)
+                logger.info(f"Removed job {job_id}")
+                return True
+            except JobLookupError:
+                logger.debug(f"No scheduler job {job_id} to remove")
+                return False
+            except OperationalError as e:
+                if attempt < 3:
+                    logger.warning(
+                        f"Database locked removing job {job_id} (attempt {attempt}/3), retrying..."
+                    )
+                    time.sleep(1)
+                    continue
+                logger.exception(f"Failed to remove job {job_id}: {e}")
+                return False
+            except Exception:
+                logger.exception(f"Failed to remove job {job_id}")
+                return False
+        return False
 
     def remove_workflow_job(self, workflow_id: int) -> bool:
         """Remove a workflow job. A job that is already gone is not a failure."""

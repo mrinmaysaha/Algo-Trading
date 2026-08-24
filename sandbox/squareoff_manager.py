@@ -41,7 +41,7 @@ class SquareOffManager:
             "BFO": self._parse_time(get_config("nse_bse_square_off_time", "15:15")),
             "CDS": self._parse_time(get_config("cds_bcd_square_off_time", "16:45")),
             "BCD": self._parse_time(get_config("cds_bcd_square_off_time", "16:45")),
-            "MCX": self._parse_time(get_config("mcx_square_off_time", "23:30")),
+            "MCX": self._parse_time(get_config("mcx_square_off_time", "23:25")),
             "NCDEX": self._parse_time(get_config("ncdex_square_off_time", "17:00")),
         }
 

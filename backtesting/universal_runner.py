@@ -177,12 +177,19 @@ class UniversalStrategyRunner:
         in_pos = False
         pos_state: Optional[Dict] = None
 
-        sl_atr_mult = self.config.get("sl_atr_mult", 1.2)
-        tp_atr_mult = self.config.get("tp_atr_mult", 3.0)
+        sl_raw = self.config.get("sl_atr_mult") or self.config.get("atr_sl_mult") or 1.2
+        tp_raw = self.config.get("tp_atr_mult") or self.config.get("atr_tp_mult") or 4.0
+        sl_atr_mult = float(sl_raw) if sl_raw is not None else 1.2
+        tp_atr_mult = float(tp_raw) if tp_raw is not None else 4.0
 
-        start_time = self.config.get("start_time", datetime.time(9, 30))
-        end_time = self.config.get("end_time", datetime.time(14, 30))
-        square_off_time = self.config.get("square_off_time", datetime.time(15, 15))
+        is_mcx = spec.get("exchange") == "MCX" or sym_upper in ["GOLDM", "SILVERM", "CRUDEOILM", "NATGASMINI", "NATURALGASMINI"]
+        default_start = datetime.time(9, 15) if is_mcx else datetime.time(9, 30)
+        default_end = datetime.time(23, 0) if is_mcx else datetime.time(14, 30)
+        default_sqoff = datetime.time(23, 25) if is_mcx else datetime.time(15, 15)
+
+        start_time = self.config.get("start_time", default_start)
+        end_time = self.config.get("end_time", default_end)
+        square_off_time = self.config.get("square_off_time", default_sqoff)
 
         reg_lot_override = self.config.get("indices_registry", {}).get(sym_upper, {}).get("lot_size")
         default_lots = self.config.get("indices_registry", {}).get(sym_upper, {}).get("default_lots", 1)
@@ -246,13 +253,20 @@ class UniversalStrategyRunner:
                         exit_reason = "TARGET_HIT"
 
                 if exit_triggered:
-                    raw_exit = self.compute_option_premium(sym_upper, exit_spot, pos_state["strike"], dte_days, pos_state["position"])
-                    fill_exit = max(0.05, raw_exit - self.slippage_pts)
+                    is_futures = pos_state.get("instrument_type") == "FUTURES" or self.config.get("instrument_type") == "FUTURES"
+                    if is_futures:
+                        spot_diff = (exit_spot - pos_state["entry_spot"]) if pos_state["position"] in ["CE", "LONG", "BUY"] else (pos_state["entry_spot"] - exit_spot)
+                        gross_pnl_rs = spot_diff * lot_sz
+                        fill_exit = exit_spot
+                        entry_fill = pos_state["entry_spot"]
+                        costs = {"total_charges": round(0.0003 * (entry_fill + fill_exit) * lot_sz, 2)}
+                    else:
+                        raw_exit = self.compute_option_premium(sym_upper, exit_spot, pos_state["strike"], dte_days, pos_state["position"])
+                        fill_exit = max(0.05, raw_exit - self.slippage_pts)
+                        entry_fill = pos_state["entry_premium"]
+                        gross_pnl_rs = (fill_exit - entry_fill) * lot_sz
+                        costs = IndianTaxEngine.calculate_charges(entry_fill, fill_exit, lot_sz, exchange=spec["exchange"])
 
-                    entry_fill = pos_state["entry_premium"]
-                    gross_pnl_rs = (fill_exit - entry_fill) * lot_sz
-
-                    costs = IndianTaxEngine.calculate_charges(entry_fill, fill_exit, lot_sz, exchange=spec["exchange"])
                     net_pnl_rs = round(gross_pnl_rs - costs["total_charges"], 2)
 
                     self.risk_manager.record_trade_result(sym_upper, net_pnl_rs)

@@ -178,6 +178,9 @@ class OptionSymbolSchema(Schema):
     option_type = fields.Str(
         required=True, validate=validate.OneOf(["CE", "PE", "ce", "pe"])
     )  # Call or Put option
+    underlying_ltp = fields.Float(
+        missing=None, allow_none=True
+    )  # OPTIONAL: Pre-fetched LTP to avoid redundant quote requests
 
 
 class OptionGreeksSchema(Schema):

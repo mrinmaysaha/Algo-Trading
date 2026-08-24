@@ -79,6 +79,8 @@ const OIProfile = lazy(() => import('@/pages/OIProfile'))
 const Arbitrage = lazy(() => import('@/pages/Arbitrage'))
 const StrategyBuilder = lazy(() => import('@/pages/StrategyBuilder'))
 const StrategyPortfolio = lazy(() => import('@/pages/StrategyPortfolio'))
+const StrategyAnalytics = lazy(() => import('@/pages/StrategyAnalytics'))
+
 
 // Strategy pages
 const StrategyIndex = lazy(() => import('@/pages/strategy/StrategyIndex'))
@@ -255,6 +257,8 @@ function App() {
                 <Route path="/websocket/test/50" element={<WebSocketTest depthLevel={50} />} />
                 {/* Phase 6: Webhook Strategies */}
                 <Route path="/strategy" element={<StrategyIndex />} />
+                <Route path="/strategy/analytics" element={<StrategyAnalytics />} />
+                <Route path="/strategy-analytics" element={<StrategyAnalytics />} />
                 <Route path="/strategy/new" element={<NewStrategy />} />
                 <Route path="/strategy/:strategyId" element={<ViewStrategy />} />
                 <Route path="/strategy/:strategyId/configure" element={<ConfigureSymbols />} />
