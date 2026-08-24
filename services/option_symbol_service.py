@@ -36,10 +36,11 @@ Example Usage (OLD METHOD - Legacy):
 import importlib
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 from database.auth_db import get_auth_token_broker
 from database.symbol import SymToken, db_session
+from services.flow_node_contracts import parse_underlying_symbol
 from services.quotes_service import get_quotes
 from utils.constants import CRYPTO_EXCHANGES
 from utils.logging import get_logger
