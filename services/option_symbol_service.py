@@ -382,8 +382,24 @@ def find_option_in_database(option_symbol: str, exchange: str) -> dict[str, Any]
             .first()
         )
 
+        if not result and exchange.upper() == "MCX":
+            # Only allow alias resolution between equivalent mini names (e.g. NATGASMINI <-> NATURALGASMINI)
+            # Never fallback from a mini commodity (SILVERM, GOLDM, CRUDEOILM) to a standard macro commodity
+            alt_symbols = []
+            if option_symbol.startswith("NATGASMINI"):
+                alt_symbols.append("NATURALGASMINI" + option_symbol[10:])
+            elif option_symbol.startswith("NATURALGASMINI"):
+                alt_symbols.append("NATGASMINI" + option_symbol[14:])
+
+            if alt_symbols:
+                result = (
+                    db_session.query(SymToken)
+                    .filter(SymToken.symbol.in_(alt_symbols), SymToken.exchange == exchange)
+                    .first()
+                )
+
         if result:
-            logger.info(f"Found option in database: {option_symbol} on {exchange}")
+            logger.info(f"Found option in database: {result.symbol} on {exchange}")
             return {
                 "symbol": result.symbol,
                 "brsymbol": result.brsymbol,
@@ -473,18 +489,54 @@ def get_available_strikes(
             )
             strikes = [r.strike for r in results if r.strike is not None and r.strike > 0]
         else:
+            from sqlalchemy import or_
+
             # Construct symbol pattern: BASE + EXPIRY (without hyphens) + % wildcard
             # e.g., "NIFTY" + "18NOV25" + "%" = "NIFTY18NOV25%"
             symbol_pattern = f"{base_symbol}{expiry_no_hyphen}%{option_type.upper()}"
+
+            patterns = [symbol_pattern]
+            if exchange.upper() == "MCX":
+                # Support alias names for mini variants only (e.g. NATGASMINI <-> NATURALGASMINI)
+                # Never match big commodities when mini is requested
+                if base_symbol.upper() == "NATGASMINI":
+                    patterns.append(f"NATURALGASMINI{expiry_no_hyphen}%{option_type.upper()}")
+                elif base_symbol.upper() == "NATURALGASMINI":
+                    patterns.append(f"NATGASMINI{expiry_no_hyphen}%{option_type.upper()}")
+
+            expiry_filters = [
+                SymToken.expiry == expiry_formatted.upper(),
+                SymToken.expiry == expiry_no_hyphen.upper(),
+            ]
+            if len(expiry_no_hyphen) == 7 and expiry_no_hyphen[:2].isdigit() and expiry_no_hyphen[5:].isdigit():
+                day, month, yr2 = expiry_no_hyphen[:2], expiry_no_hyphen[2:5], expiry_no_hyphen[5:]
+                yr4 = f"20{yr2}" if int(yr2) < 70 else f"19{yr2}"
+                expiry_filters.extend([
+                    SymToken.expiry == f"{day}-{month}-{yr4}".upper(),
+                    SymToken.expiry == f"{day}{month}{yr4}".upper(),
+                ])
+
+            valid_inst_types = [
+                option_type.upper(),
+                "OPTFUT",
+                "OPTCOM",
+                "OPTIDX",
+                "OPTSTK",
+                "OPTCUR",
+                "OPTIRC",
+            ]
 
             # Query database for all strikes matching the criteria
             # Using LIKE to match symbol pattern and filter by exchange and instrumenttype
             results = (
                 db_session.query(SymToken.strike)
                 .filter(
-                    SymToken.symbol.like(symbol_pattern),
-                    SymToken.expiry == expiry_formatted.upper(),
-                    SymToken.instrumenttype == option_type.upper(),
+                    or_(*[SymToken.symbol.like(p) for p in patterns]),
+                    or_(*expiry_filters),
+                    or_(
+                        SymToken.instrumenttype.in_(valid_inst_types),
+                        SymToken.instrumenttype.is_(None),
+                    ),
                     SymToken.exchange == exchange.upper(),
                 )
                 .distinct()
