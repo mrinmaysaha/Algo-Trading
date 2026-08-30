@@ -453,16 +453,31 @@ def get_multi_timeframe_strategy_analytics(
                     if str(t.get("action") or t.get("trade_type")).upper() == "SELL"
                 )
 
+                from services.accounting_engine import IndianFOAccountingEngine
+
                 closed_qty = min(buy_qty, sell_qty)
                 net_qty = buy_qty - sell_qty
 
                 leg_realized = 0.0
+                leg_tax_charges = 0.0
                 if closed_qty > 0:
                     avg_buy = (buy_val / buy_qty) if buy_qty > 0 else 0.0
                     avg_sell = (sell_val / sell_qty) if sell_qty > 0 else 0.0
-                    leg_realized = (avg_sell - avg_buy) * closed_qty * mult
+                    # Determine whether this trade was initiated as Long (BUY first) or Short (SELL first)
+                    first_trade_action = str(tr_list[0].get("action") or tr_list[0].get("trade_type") or "BUY").upper()
+                    entry_p = avg_buy if first_trade_action == "BUY" else avg_sell
+                    exit_p = avg_sell if first_trade_action == "BUY" else avg_buy
+                    tax_calc = IndianFOAccountingEngine.calculate_closed_trade_pnl(
+                        entry_price=entry_p,
+                        exit_price=exit_p,
+                        qty=int(closed_qty * mult),
+                        direction=first_trade_action
+                    )
+                    leg_realized = tax_calc["gross_pnl"]
+                    leg_tax_charges = tax_calc["total_charges"]
 
                 leg_unrealized = 0.0
+                leg_net_unrealized = 0.0
                 ltp = ltp_by_key.get((sym, exch, prod))
                 if abs(net_qty) > 1e-9 and ltp is not None:
                     entry_avg = (
@@ -470,7 +485,15 @@ def get_multi_timeframe_strategy_analytics(
                         if net_qty > 0 and buy_qty > 0
                         else ((sell_val / sell_qty) if sell_qty > 0 else 0.0)
                     )
-                    leg_unrealized = net_qty * (ltp - entry_avg) * mult
+                    open_dir = "BUY" if net_qty > 0 else "SELL"
+                    mtm_calc = IndianFOAccountingEngine.calculate_open_position_mtm(
+                        entry_price=entry_avg,
+                        current_ltp=ltp,
+                        qty=int(abs(net_qty) * mult),
+                        direction=open_dir
+                    )
+                    leg_unrealized = mtm_calc["gross_mtm"]
+                    leg_net_unrealized = mtm_calc["net_mtm"]
 
                 trade_realized += leg_realized
                 trade_unrealized += leg_unrealized
@@ -488,6 +511,8 @@ def get_multi_timeframe_strategy_analytics(
                     "realized": round(leg_realized, 4),
                     "today_realized": round(leg_realized, 4),
                     "unrealized": round(leg_unrealized, 4),
+                    "net_unrealized": round(leg_net_unrealized, 4),
+                    "tax_charges": round(leg_tax_charges, 4),
                 })
 
             agg_today_realized = trade_realized
