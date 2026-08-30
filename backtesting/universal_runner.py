@@ -101,10 +101,7 @@ class UniversalStrategyRunner:
         self.slippage_pts = slippage_pts
         self.risk_manager = PortfolioRiskManager(self.config)
 
-        if strategy_instance is not None:
-            self.adapter: StrategyProtocol = LiveStrategyAdapter(strategy_instance, self.config)
-        else:
-            self.adapter: StrategyProtocol = GenericIndicatorStrategy(self.config)
+        self.adapter: StrategyProtocol = LiveStrategyAdapter(strategy_instance, self.config, strategy_path=self.strategy_path)
 
     def extract_parameters(self) -> dict:
         """Extracts CONFIG dictionary or os.getenv(...) parameters dynamically."""
@@ -210,8 +207,8 @@ class UniversalStrategyRunner:
 
             lot_sz = get_historical_lot_size(sym_upper, date_curr.strftime("%Y-%m-%d"), reg_lot_override) * default_lots
 
-            days_to_thursday = (3 - t_curr.weekday()) % 7
-            expiry_date = date_curr + datetime.timedelta(days=days_to_thursday)
+            from backtesting.config.asset_registry import resolve_expiry_date
+            expiry_date = resolve_expiry_date(sym_upper, date_curr)
             dte_days = calculate_exact_dte(t_curr.to_pydatetime(), expiry_date)
 
             # --- 1. EVALUATE EXITS FOR OPEN POSITIONS ---

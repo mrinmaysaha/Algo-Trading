@@ -2792,14 +2792,20 @@ def save_strategy(strategy_id):
 # Cleanup on shutdown
 def cleanup_on_exit():
     """Clean up all running processes on application exit"""
-    logger.info("Cleaning up running strategies...")
+    try:
+        logger.info("Cleaning up running strategies...")
+    except Exception:
+        pass
     with PROCESS_LOCK:
         for strategy_id in list(RUNNING_STRATEGIES.keys()):
             try:
                 stop_strategy_process(strategy_id)
             except Exception:
                 pass
-    logger.info("Cleanup complete")
+    try:
+        logger.info("Cleanup complete")
+    except Exception:
+        pass
 
 
 # Register cleanup handler

@@ -1,11 +1,13 @@
 # backtesting/adapters/strategy_protocol.py
 """
 Universal Strategy Protocol & Adapters for Live Classes and Script-Based Strategies.
+Provides strategy-family signal evaluation (ORB, Post10 OB+VWAP, SMC FVG, Liquidity Sweep, Scalper).
 """
 import math
 from abc import ABC, abstractmethod
 from typing import Dict, Optional, Tuple, Any, NamedTuple
 import pandas as pd
+import numpy as np
 
 
 class Signal(NamedTuple):
@@ -26,102 +28,179 @@ class StrategyProtocol(ABC):
 
 
 class LiveStrategyAdapter(StrategyProtocol):
-    """Wraps live strategy classes to ensure live and backtest paths stay unified."""
+    """Wraps live strategy classes and modules to ensure live and backtest paths stay unified."""
 
-    def __init__(self, live_instance: Any, config: Dict):
+    def __init__(self, live_instance: Any, config: Dict, strategy_path: str = ""):
         self.live = live_instance
-        self.cfg = config
+        self.cfg = config or {}
+        self.strategy_path = str(strategy_path or "").lower()
+        self.strategy_name = str(self.cfg.get("strategy_name", "")).lower()
+
+    def _determine_strategy_family(self) -> str:
+        ident = f"{self.strategy_path} {self.strategy_name}"
+        if "orb" in ident:
+            return "ORB"
+        elif any(k in ident for k in ["post10", "institutional", "ob_vwap", "vwap"]):
+            return "POST10"
+        elif any(k in ident for k in ["smc", "fvg", "zerolag"]):
+            return "SMC_FVG"
+        elif any(k in ident for k in ["sweep", "liquid"]):
+            return "LIQUID_SWEEP"
+        elif any(k in ident for k in ["prime", "scalp"]):
+            return "PRIME_SCALPER"
+        elif any(k in ident for k in ["commodity", "gold", "silver", "crude"]):
+            return "COMMODITY"
+        return "GENERAL"
 
     def evaluate_entry_signal(self, df_slice: pd.DataFrame, symbol: str) -> Optional[Signal]:
-        if len(df_slice) < 5:
+        if len(df_slice) < 4:
             return None
 
-        # 1. Automatically discover any strategy execution or signal method
-        possible_methods = [
-            "evaluate_signal_from_dataframe", "evaluate_signal", "get_signal", 
-            "generate_signal", "evaluate", "on_bar", "on_candle", "on_data", 
-            "process_bar", "evaluate_entry", "_execute_signal"
-        ]
-        
+        # 1. Inspect live instance / module for direct signal generation methods
         if self.live is not None:
-            for method_name in possible_methods:
-                if hasattr(self.live, method_name):
+            methods = [
+                "evaluate_signal_from_dataframe", "evaluate_signal", "get_signal",
+                "generate_signal", "evaluate", "on_bar", "on_candle", "on_data",
+                "process_bar", "evaluate_entry", "_execute_signal"
+            ]
+            for m in methods:
+                if hasattr(self.live, m):
                     try:
-                        sig_val = getattr(self.live, method_name)(df_slice, symbol)
+                        sig_val = getattr(self.live, m)(df_slice, symbol)
                         if isinstance(sig_val, str) and sig_val.upper() in ["CE", "PE", "LONG", "SHORT", "BUY", "SELL"]:
                             opt = "CE" if sig_val.upper() in ["CE", "LONG", "BUY"] else "PE"
-                            return Signal(action="ENTER", option_type=opt, reason=f"STRATEGY_{method_name.upper()}")
+                            return Signal(action="ENTER", option_type=opt, reason=f"METHOD_{m.upper()}")
                     except Exception:
                         pass
-            
-            # If strategy instance is present, NEVER fall back to generic ORB/confluence signals
-            return None
 
+        # 2. Evaluate Strategy-Family Specific Logic
+        strat_family = self._determine_strategy_family()
         latest = df_slice.iloc[-1]
         t_curr = pd.to_datetime(latest["datetime"])
         time_str = t_curr.strftime("%H:%M")
+        now_time = t_curr.time()
 
-        # --- ORB Breakout Signal Detection ---
         df_slice_copy = df_slice.copy()
-        if "datetime" in df_slice_copy.columns:
-            df_slice_copy["date_val"] = pd.to_datetime(df_slice_copy["datetime"]).dt.date
-            curr_date = t_curr.date()
-            today_bars = df_slice_copy[df_slice_copy["date_val"] == curr_date]
+        df_slice_copy["date_val"] = pd.to_datetime(df_slice_copy["datetime"]).dt.date
+        curr_date = t_curr.date()
+        today_bars = df_slice_copy[df_slice_copy["date_val"] == curr_date]
 
+        # -------------------------------------------------------------
+        # A. 3-Minute / 5-Minute Opening Range Breakout (ORB) Strategy
+        # -------------------------------------------------------------
+        if strat_family == "ORB":
             if not today_bars.empty:
                 first_bar = today_bars.iloc[0]
                 first_bar_time = pd.to_datetime(first_bar["datetime"]).strftime("%H:%M")
-                if first_bar_time in ["09:15", "09:18", "09:30"]:
-                    mother_high = float(first_bar["high"])
-                    mother_low = float(first_bar["low"])
-                    buffer_val = float(self.cfg.get("breakout_buffer", 3.0))
+                mother_high = float(first_bar["high"])
+                mother_low = float(first_bar["low"])
+                mother_range = mother_high - mother_low
 
-                    if time_str > first_bar_time and float(latest["close"]) > (mother_high + buffer_val):
-                        return Signal(action="ENTER", option_type="CE", reason="ORB_BULLISH_BREAKOUT")
-                    elif time_str > first_bar_time and float(latest["close"]) < (mother_low - buffer_val):
-                        return Signal(action="ENTER", option_type="PE", reason="ORB_BEARISH_BREAKOUT")
+                range_min = float(self.cfg.get("range_filter_min", 30.0))
+                range_max = float(self.cfg.get("range_filter_max", 300.0))
+                buffer_val = float(self.cfg.get("breakout_buffer", 3.0))
 
-        # Technical Confluence Fallback
-        ob_bull_mitigated = False
-        if len(df_slice) >= 4 and df_slice.iloc[-3].get('bullish_impulse', False):
-            ob_high = df_slice.iloc[-4]['high']
-            if latest['low'] <= ob_high and latest['close'] > ob_high:
-                ob_bull_mitigated = True
+                if range_min <= mother_range <= range_max:
+                    if time_str > first_bar_time and time_str <= "10:30":
+                        if float(latest["close"]) > (mother_high + buffer_val):
+                            return Signal(action="ENTER", option_type="CE", reason="ORB_BULLISH_BREAKOUT")
+                        elif float(latest["close"]) < (mother_low - buffer_val):
+                            return Signal(action="ENTER", option_type="PE", reason="ORB_BEARISH_BREAKOUT")
 
-        ob_bear_mitigated = False
-        if len(df_slice) >= 4 and df_slice.iloc[-3].get('bearish_impulse', False):
-            ob_low = df_slice.iloc[-4]['low']
-            if latest['high'] >= ob_low and latest['close'] < ob_low:
-                ob_bear_mitigated = True
+        # -------------------------------------------------------------
+        # B. Post10 Institutional Order Block & VWAP Multi-Confluence
+        # -------------------------------------------------------------
+        elif strat_family == "POST10":
+            # Session Time Check (Morning: 09:30-11:15 | Afternoon: 12:45-14:15)
+            is_morning = "09:30" <= time_str <= "11:15"
+            is_afternoon = "12:45" <= time_str <= "14:15"
 
-        long_zone = (latest['close'] >= latest['vwap']) or ob_bull_mitigated
-        short_zone = (latest['close'] <= latest['vwap']) or ob_bear_mitigated
+            if is_morning or is_afternoon:
+                ob_bull = False
+                ob_bear = False
+                if len(df_slice) >= 4 and df_slice.iloc[-3].get('bullish_impulse', False):
+                    ob_high = df_slice.iloc[-4]['high']
+                    if latest['low'] <= ob_high and latest['close'] > ob_high:
+                        ob_bull = True
 
-        ema_bull = (latest['ema_fast'] > latest['ema_slow'])
-        ema_bear = (latest['ema_fast'] < latest['ema_slow'])
+                if len(df_slice) >= 4 and df_slice.iloc[-3].get('bearish_impulse', False):
+                    ob_low = df_slice.iloc[-4]['low']
+                    if latest['high'] >= ob_low and latest['close'] < ob_low:
+                        ob_bear = True
 
-        rsi_bull = latest['rsi'] > 50
-        rsi_bear = latest['rsi'] < 50
+                vwap_val = float(latest.get('vwap', latest['close']))
+                long_zone = (latest['close'] >= vwap_val) or ob_bull
+                short_zone = (latest['close'] <= vwap_val) or ob_bear
 
-        macd_bull = (latest['macd_line'] > latest['macd_signal']) and (latest['macd_hist'] > 0)
-        macd_bear = (latest['macd_line'] < latest['macd_signal']) and (latest['macd_hist'] < 0)
+                ema_bull = latest['ema_fast'] > latest['ema_slow']
+                ema_bear = latest['ema_fast'] < latest['ema_slow']
+                rsi_bull = latest['rsi'] > 50
+                rsi_bear = latest['rsi'] < 50
+                macd_bull = (latest['macd_line'] > latest['macd_signal']) and (latest['macd_hist'] > 0)
+                macd_bear = (latest['macd_line'] < latest['macd_signal']) and (latest['macd_hist'] < 0)
+                st_bull = latest['st_direction'] == 1
+                st_bear = latest['st_direction'] == -1
 
-        vol_spike = latest.get('vol_spike', False)
-        adx_bull = (latest['adx'] > self.cfg.get("adx_threshold", 20)) and (latest['di_plus'] > latest['di_minus'])
-        adx_bear = (latest['adx'] > self.cfg.get("adx_threshold", 20)) and (latest['di_minus'] > latest['di_plus'])
+                buy_score = sum([ema_bull, rsi_bull, macd_bull, st_bull])
+                sell_score = sum([ema_bear, rsi_bear, macd_bear, st_bear])
+                req_score = self.cfg.get("min_confluence_score_global", 3)
 
-        buy_score = sum([ema_bull, rsi_bull, macd_bull, vol_spike, adx_bull])
-        sell_score = sum([ema_bear, rsi_bear, macd_bear, vol_spike, adx_bear])
+                if long_zone and st_bull and (buy_score >= req_score):
+                    return Signal(action="ENTER", option_type="CE", reason="POST10_INSTITUTIONAL_BUY")
+                elif short_zone and st_bear and (sell_score >= req_score):
+                    return Signal(action="ENTER", option_type="PE", reason="POST10_INSTITUTIONAL_SELL")
 
-        st_bull = latest['st_direction'] == 1
-        st_bear = latest['st_direction'] == -1
+        # -------------------------------------------------------------
+        # C. Smart Money Concepts / Fair Value Gap (SMC / FVG)
+        # -------------------------------------------------------------
+        elif strat_family == "SMC_FVG":
+            if len(df_slice) >= 4:
+                # Bullish FVG: Candle 1 High < Candle 3 Low
+                c1_high = df_slice.iloc[-3]["high"]
+                c3_low = latest["low"]
+                c2_open = df_slice.iloc[-2]["open"]
+                c2_close = df_slice.iloc[-2]["close"]
 
-        req_score = self.cfg.get("min_confluence_score_global", 2)
+                if c3_low > c1_high and (c2_close > c2_open) and latest["close"] > latest.get("vwap", latest["close"]):
+                    return Signal(action="ENTER", option_type="CE", reason="SMC_BULLISH_FVG")
 
-        if long_zone and st_bull and (buy_score >= req_score):
-            return Signal(action="ENTER", option_type="CE", reason="CONFLUENCE_BUY")
-        elif short_zone and st_bear and (sell_score >= req_score):
-            return Signal(action="ENTER", option_type="PE", reason="CONFLUENCE_SELL")
+                # Bearish FVG: Candle 1 Low > Candle 3 High
+                c1_low = df_slice.iloc[-3]["low"]
+                c3_high = latest["high"]
+                if c3_high < c1_low and (c2_close < c2_open) and latest["close"] < latest.get("vwap", latest["close"]):
+                    return Signal(action="ENTER", option_type="PE", reason="SMC_BEARISH_FVG")
+
+        # -------------------------------------------------------------
+        # D. Liquidity Sweep & Institutional Rejection
+        # -------------------------------------------------------------
+        elif strat_family == "LIQUID_SWEEP":
+            if len(df_slice) >= 10:
+                lookback_high = df_slice.iloc[-10:-1]["high"].max()
+                lookback_low = df_slice.iloc[-10:-1]["low"].min()
+
+                # Bullish sweep of lows (Liquidity grab below prior low with close back inside)
+                if latest["low"] < lookback_low and latest["close"] > lookback_low:
+                    return Signal(action="ENTER", option_type="CE", reason="LIQUIDITY_SWEEP_BUY")
+
+                # Bearish sweep of highs (Liquidity grab above prior high with close back inside)
+                if latest["high"] > lookback_high and latest["close"] < lookback_high:
+                    return Signal(action="ENTER", option_type="PE", reason="LIQUIDITY_SWEEP_SELL")
+
+        # -------------------------------------------------------------
+        # E. General / Scalper / Technical Confluence
+        # -------------------------------------------------------------
+        prev = df_slice.iloc[-2]
+        if "st_direction" in df_slice.columns:
+            if prev["st_direction"] == -1 and latest["st_direction"] == 1:
+                return Signal(action="ENTER", option_type="CE", reason="SUPERTREND_REVERSAL_BUY")
+            elif prev["st_direction"] == 1 and latest["st_direction"] == -1:
+                return Signal(action="ENTER", option_type="PE", reason="SUPERTREND_REVERSAL_SELL")
+
+        if "ema_fast" in df_slice.columns and "ema_slow" in df_slice.columns:
+            if prev["ema_fast"] <= prev["ema_slow"] and latest["ema_fast"] > latest["ema_slow"]:
+                return Signal(action="ENTER", option_type="CE", reason="EMA_CROSSOVER_BUY")
+            elif prev["ema_fast"] >= prev["ema_slow"] and latest["ema_fast"] < latest["ema_slow"]:
+                return Signal(action="ENTER", option_type="PE", reason="EMA_CROSSUNDER_SELL")
 
         return None
 
@@ -131,74 +210,57 @@ class LiveStrategyAdapter(StrategyProtocol):
         current_sl = pos_state["stop_loss"]
         tsl_activated = pos_state["tsl_activated"]
 
-        activation_mult = self.cfg.get("atr_activation_mult", self.cfg.get("tsl_activation_atr_mult", 1.0))
-        step_mult = self.cfg.get("atr_step_mult", self.cfg.get("trail_step_atr_mult", 0.5))
-        step_size = atr_val * step_mult
+        # Support both Range-based and ATR-based step-locking
+        unit_scale = pos_state.get("unit_range") or atr_val
+        activation_mult = float(self.cfg.get("act_mult", self.cfg.get("atr_activation_mult", self.cfg.get("tsl_activation_atr_mult", 0.75))))
+        step_mult = float(self.cfg.get("step_mult", self.cfg.get("atr_step_mult", self.cfg.get("trail_step_atr_mult", 0.35))))
+        step_size = max(0.5, unit_scale * step_mult)
+        activation_dist = unit_scale * activation_mult
 
         if position == "CE":
             if pos_state.get("last_step_high") is None:
                 pos_state["last_step_high"] = entry_spot
 
-            unrealized_profit_atr = (current_high - entry_spot) / max(0.1, atr_val)
+            if current_high > pos_state["last_step_high"]:
+                pos_state["last_step_high"] = current_high
 
-            if unrealized_profit_atr >= activation_mult:
+            favorable_gain = pos_state["last_step_high"] - entry_spot
+
+            if favorable_gain >= activation_dist:
                 if not tsl_activated:
+                    tsl_activated = True
                     pos_state["tsl_activated"] = True
-                    pos_state["last_step_high"] = current_high
 
-                price_advance = current_high - pos_state["last_step_high"]
-                if price_advance >= step_size:
-                    num_steps = math.floor(price_advance / step_size)
-                    pos_state["last_step_high"] += num_steps * step_size
-                    proposed_sl = current_sl + (num_steps * step_size)
-                    if proposed_sl > current_sl:
-                        return proposed_sl, True
+                extra_gain = favorable_gain - activation_dist
+                num_steps = int(math.floor(extra_gain / step_size))
+                proposed_sl = entry_spot + (0.20 * unit_scale) + (num_steps * step_size)
+                if proposed_sl > current_sl:
+                    return round(proposed_sl, 2), True
 
         elif position == "PE":
             if pos_state.get("last_step_low") is None:
                 pos_state["last_step_low"] = entry_spot
 
-            unrealized_profit_atr = (entry_spot - current_low) / max(0.1, atr_val)
+            if current_low < pos_state["last_step_low"]:
+                pos_state["last_step_low"] = current_low
 
-            if unrealized_profit_atr >= activation_mult:
+            favorable_gain = entry_spot - pos_state["last_step_low"]
+
+            if favorable_gain >= activation_dist:
                 if not tsl_activated:
+                    tsl_activated = True
                     pos_state["tsl_activated"] = True
-                    pos_state["last_step_low"] = current_low
 
-                price_decline = pos_state["last_step_low"] - current_low
-                if price_decline >= step_size:
-                    num_steps = math.floor(price_decline / step_size)
-                    pos_state["last_step_low"] -= num_steps * step_size
-                    proposed_sl = current_sl - (num_steps * step_size)
-                    if proposed_sl < current_sl:
-                        return proposed_sl, True
+                extra_gain = favorable_gain - activation_dist
+                num_steps = int(math.floor(extra_gain / step_size))
+                proposed_sl = entry_spot - (0.20 * unit_scale) - (num_steps * step_size)
+                if proposed_sl < current_sl:
+                    return round(proposed_sl, 2), True
 
         return current_sl, tsl_activated
 
 
-class GenericIndicatorStrategy(StrategyProtocol):
-    """Fallback Strategy Adapter for plain EMA / Supertrend scripts."""
-
+class GenericIndicatorStrategy(LiveStrategyAdapter):
+    """Fallback Strategy Adapter matching general technical confluence rules."""
     def __init__(self, config: Dict):
-        self.cfg = config
-
-    def evaluate_entry_signal(self, df_slice: pd.DataFrame, symbol: str) -> Optional[Signal]:
-        if len(df_slice) < 2:
-            return None
-
-        latest = df_slice.iloc[-1]
-        prev = df_slice.iloc[-2]
-
-        if "ema_fast" in df_slice.columns and "ema_slow" in df_slice.columns:
-            if prev["ema_fast"] <= prev["ema_slow"] and latest["ema_fast"] > latest["ema_slow"]:
-                return Signal(action="ENTER", option_type="CE", reason="EMA_CROSSOVER")
-            elif prev["ema_fast"] >= prev["ema_slow"] and latest["ema_fast"] < latest["ema_slow"]:
-                return Signal(action="ENTER", option_type="PE", reason="EMA_CROSSUNDER")
-
-        if "st_direction" in df_slice.columns:
-            if prev["st_direction"] == -1 and latest["st_direction"] == 1:
-                return Signal(action="ENTER", option_type="CE", reason="SUPERTREND_BULL")
-            elif prev["st_direction"] == 1 and latest["st_direction"] == -1:
-                return Signal(action="ENTER", option_type="PE", reason="SUPERTREND_BEAR")
-
-        return None
+        super().__init__(live_instance=None, config=config)

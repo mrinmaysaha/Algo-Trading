@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
 import pandas as pd
-from app import Flask
+from flask import Flask
 from blueprints.python_strategy import python_strategy_bp
 from backtesting.engine import run_python_strategy_backtest
 

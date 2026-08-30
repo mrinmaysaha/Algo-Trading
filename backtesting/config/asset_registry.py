@@ -44,20 +44,21 @@ LOT_SIZE_HISTORY: Dict[str, List[Tuple[str, str, int]]] = {
 }
 
 INDIAN_ASSET_SPECS = {
-    "NIFTY": {"exchange": "NSE_INDEX", "strike_step": 50, "pricing_model": "BSM", "default_iv": 0.16},
-    "BANKNIFTY": {"exchange": "NSE_INDEX", "strike_step": 100, "pricing_model": "BSM", "default_iv": 0.18},
-    "FINNIFTY": {"exchange": "NSE_INDEX", "strike_step": 50, "pricing_model": "BSM", "default_iv": 0.17},
-    "MIDCPNIFTY": {"exchange": "NSE_INDEX", "strike_step": 25, "pricing_model": "BSM", "default_iv": 0.18},
-    "SENSEX": {"exchange": "BSE_INDEX", "strike_step": 100, "pricing_model": "BSM", "default_iv": 0.16},
-    "CRUDEOIL": {"exchange": "MCX", "strike_step": 50, "pricing_model": "BLACK76", "default_iv": 0.32},
-    "CRUDEOILM": {"exchange": "MCX", "strike_step": 50, "pricing_model": "BLACK76", "default_iv": 0.32},
-    "NATURALGAS": {"exchange": "MCX", "strike_step": 5, "pricing_model": "BLACK76", "default_iv": 0.45},
-    "NATGASMINI": {"exchange": "MCX", "strike_step": 5, "pricing_model": "BLACK76", "default_iv": 0.45},
-    "NATURALGASMINI": {"exchange": "MCX", "strike_step": 5, "pricing_model": "BLACK76", "default_iv": 0.45},
-    "GOLD": {"exchange": "MCX", "strike_step": 100, "pricing_model": "BLACK76", "default_iv": 0.14},
-    "GOLDM": {"exchange": "MCX", "strike_step": 100, "pricing_model": "BLACK76", "default_iv": 0.14},
-    "SILVER": {"exchange": "MCX", "strike_step": 250, "pricing_model": "BLACK76", "default_iv": 0.22},
-    "SILVERM": {"exchange": "MCX", "strike_step": 250, "pricing_model": "BLACK76", "default_iv": 0.22},
+    "NIFTY": {"exchange": "NSE_INDEX", "strike_step": 50, "pricing_model": "BSM", "default_iv": 0.16, "expiry_weekday": 3},
+    "BANKNIFTY": {"exchange": "NSE_INDEX", "strike_step": 100, "pricing_model": "BSM", "default_iv": 0.18, "expiry_weekday": 2},
+    "FINNIFTY": {"exchange": "NSE_INDEX", "strike_step": 50, "pricing_model": "BSM", "default_iv": 0.17, "expiry_weekday": 1},
+    "MIDCPNIFTY": {"exchange": "NSE_INDEX", "strike_step": 25, "pricing_model": "BSM", "default_iv": 0.18, "expiry_weekday": 0},
+    "SENSEX": {"exchange": "BSE_INDEX", "strike_step": 100, "pricing_model": "BSM", "default_iv": 0.16, "expiry_weekday": 4},
+    "BANKEX": {"exchange": "BSE_INDEX", "strike_step": 100, "pricing_model": "BSM", "default_iv": 0.18, "expiry_weekday": 0},
+    "CRUDEOIL": {"exchange": "MCX", "strike_step": 50, "pricing_model": "BLACK76", "default_iv": 0.32, "expiry_weekday": 4},
+    "CRUDEOILM": {"exchange": "MCX", "strike_step": 50, "pricing_model": "BLACK76", "default_iv": 0.32, "expiry_weekday": 4},
+    "NATURALGAS": {"exchange": "MCX", "strike_step": 5, "pricing_model": "BLACK76", "default_iv": 0.45, "expiry_weekday": 1},
+    "NATGASMINI": {"exchange": "MCX", "strike_step": 5, "pricing_model": "BLACK76", "default_iv": 0.45, "expiry_weekday": 1},
+    "NATURALGASMINI": {"exchange": "MCX", "strike_step": 5, "pricing_model": "BLACK76", "default_iv": 0.45, "expiry_weekday": 1},
+    "GOLD": {"exchange": "MCX", "strike_step": 100, "pricing_model": "BLACK76", "default_iv": 0.14, "expiry_weekday": 4},
+    "GOLDM": {"exchange": "MCX", "strike_step": 100, "pricing_model": "BLACK76", "default_iv": 0.14, "expiry_weekday": 4},
+    "SILVER": {"exchange": "MCX", "strike_step": 250, "pricing_model": "BLACK76", "default_iv": 0.22, "expiry_weekday": 4},
+    "SILVERM": {"exchange": "MCX", "strike_step": 250, "pricing_model": "BLACK76", "default_iv": 0.22, "expiry_weekday": 4},
 }
 
 
@@ -86,6 +87,15 @@ def calculate_exact_dte(bar_timestamp: datetime.datetime, expiry_date: datetime.
     return max(0.0001, diff_seconds / 86400.0)
 
 
+def resolve_expiry_date(symbol: str, current_date: datetime.date) -> datetime.date:
+    """Resolves correct expiry date for weekly/monthly contracts based on exchange specifications."""
+    sym_upper = symbol.upper()
+    spec = INDIAN_ASSET_SPECS.get(sym_upper, {})
+    target_weekday = spec.get("expiry_weekday", 3)
+    days_to_expiry = (target_weekday - current_date.weekday()) % 7
+    return current_date + datetime.timedelta(days=days_to_expiry)
+
+
 def validate_strategy_config(config: Dict[str, Any]) -> Dict[str, Any]:
     """Validates configuration parameters to prevent runtime failures."""
     validated = config.copy()
@@ -93,5 +103,5 @@ def validate_strategy_config(config: Dict[str, Any]) -> Dict[str, Any]:
     validated["tp_atr_mult"] = float(config.get("tp_atr_mult", 3.0))
     validated["max_total_trades_per_day"] = int(config.get("max_total_trades_per_day", 10))
     validated["max_trades_per_index"] = int(config.get("max_trades_per_index", 3))
-    validated["max_daily_loss"] = float(config.get("max_daily_loss", 5000.0))
+    validated["max_daily_loss"] = float(config.get("max_daily_loss", 8000.0))
     return validated

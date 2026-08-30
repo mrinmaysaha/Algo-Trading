@@ -117,10 +117,34 @@ def run_python_strategy_backtest(
     if not isinstance(strategy_config, dict):
         strategy_config = {}
 
-    # Extract default os.getenv(...) parameters if CONFIG is sparse
-    parser = StrategyParser(strategy_path)
-    ast_params = parser.extract_parameters()
-    for k, v in ast_params.items():
+    default_indices_registry = {
+        "NIFTY": {"spot_symbol": "NIFTY", "underlying_fno": "NIFTY", "exchange": "NSE_INDEX", "lot_size": 65, "default_lots": 2, "tp_mult": 2.5, "act_mult": 0.80, "step_mult": 0.35},
+        "BANKNIFTY": {"spot_symbol": "BANKNIFTY", "underlying_fno": "BANKNIFTY", "exchange": "NSE_INDEX", "lot_size": 30, "default_lots": 2, "tp_mult": 2.5, "act_mult": 0.75, "step_mult": 0.35},
+        "FINNIFTY": {"spot_symbol": "FINNIFTY", "underlying_fno": "FINNIFTY", "exchange": "NSE_INDEX", "lot_size": 65, "default_lots": 2, "tp_mult": 2.5, "act_mult": 0.80, "step_mult": 0.35},
+        "MIDCPNIFTY": {"spot_symbol": "MIDCPNIFTY", "underlying_fno": "MIDCPNIFTY", "exchange": "NSE_INDEX", "lot_size": 120, "default_lots": 2, "tp_mult": 2.5, "act_mult": 0.80, "step_mult": 0.35},
+    }
+    if "indices_registry" not in strategy_config:
+        strategy_config["indices_registry"] = default_indices_registry
+
+    defaults = {
+        "timeframe_minutes": 5 if "5" in interval else (3 if "3" in interval else (15 if "15" in interval else 5)),
+        "supertrend_period": 10,
+        "supertrend_multiplier": 3.0,
+        "ema_fast": 20,
+        "ema_slow": 50,
+        "ema_macro": 200,
+        "rsi_period": 14,
+        "adx_period": 14,
+        "vol_ma_period": 20,
+        "vol_multiplier": 1.5,
+        "ob_impulse_mult": 1.2,
+        "min_confluence_score_global": 3,
+        "max_daily_loss": 8000.0,
+        "max_total_trades_per_day": 8,
+        "max_trades_per_index": 2,
+        "strategy_name": os.path.basename(strategy_path).replace(".py", "")
+    }
+    for k, v in defaults.items():
         if k not in strategy_config:
             strategy_config[k] = v
 
