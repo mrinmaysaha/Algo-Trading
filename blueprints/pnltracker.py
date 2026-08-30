@@ -353,6 +353,7 @@ def get_positions_pnl_breakdown():
     from services.accounting_engine import IndianFOAccountingEngine
     from services.positionbook_service import get_positionbook
     from database.strategy_book_db import get_strategy_legs
+    from utils.symbol_utils import get_contract_multiplier
 
     user_id = session.get("user_id")
     results = []
@@ -396,10 +397,13 @@ def get_positions_pnl_breakdown():
         direction = "BUY" if qty > 0 else "SELL"
         is_opt = ("CE" in sym or "PE" in sym) and "FUT" not in sym
 
+        mult = get_contract_multiplier(sym, exch)
+        total_contract_qty = abs(int(qty * mult))
+
         calc = IndianFOAccountingEngine.calculate_open_position_mtm(
             entry_price=entry_price,
             current_ltp=ltp,
-            qty=abs(int(qty)),
+            qty=total_contract_qty,
             direction=direction,
             is_option=is_opt
         )
@@ -413,7 +417,7 @@ def get_positions_pnl_breakdown():
             "strategy_name": strat_name,
             "symbol": sym,
             "direction": direction,
-            "quantity": abs(int(qty)),
+            "quantity": total_contract_qty,
             "entry_price": entry_price,
             "current_ltp": ltp,
             "entry_time": str(pos.get("entry_time") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
@@ -422,7 +426,7 @@ def get_positions_pnl_breakdown():
             "charges_breakdown": calc
         })
 
-    # DuckDB fallback if live position book is empty
+    # DuckDB fallback with NaN safety
     if not results:
         try:
             import duckdb
@@ -434,9 +438,13 @@ def get_positions_pnl_breakdown():
                 if "strategy_trades" in tables:
                     pos_df = con.execute("SELECT * FROM strategy_trades WHERE status = 'OPEN'").df()
                     for _, row in pos_df.iterrows():
+                        entry_p = float(row.get("entry_price", 0))
+                        raw_ltp = row.get("current_ltp")
+                        ltp = float(raw_ltp) if pd.notna(raw_ltp) and float(raw_ltp) > 0 else entry_p
+                        
                         calc = IndianFOAccountingEngine.calculate_open_position_mtm(
-                            entry_price=float(row.get("entry_price", 0)),
-                            current_ltp=float(row.get("current_ltp", row.get("entry_price", 0))),
+                            entry_price=entry_p,
+                            current_ltp=ltp,
                             qty=int(row.get("quantity", 1)),
                             direction=str(row.get("direction", "BUY")),
                             is_option=("CE" in str(row.get("symbol", "")) or "PE" in str(row.get("symbol", ""))) and "FUT" not in str(row.get("symbol", ""))
@@ -450,8 +458,8 @@ def get_positions_pnl_breakdown():
                             "symbol": str(row.get("symbol", "")),
                             "direction": str(row.get("direction", "BUY")),
                             "quantity": int(row.get("quantity", 1)),
-                            "entry_price": float(row.get("entry_price", 0)),
-                            "current_ltp": float(row.get("current_ltp", 0)),
+                            "entry_price": entry_p,
+                            "current_ltp": ltp,
                             "entry_time": str(row.get("entry_time", "")),
                             "gross_mtm": calc["gross_mtm"],
                             "net_mtm": calc["net_mtm"],
@@ -503,6 +511,7 @@ def get_historical_strategy_pnl_report():
             "total_trades": s.get("total_trades", 0),
             "win_rate": f"{s.get('win_rate', 0.0)}%",
             "profit_factor": s.get("profit_factor", 0.0),
+            "max_drawdown": s.get("max_drawdown", 0.0),
             "gross_pnl": s.get("gross_pnl", 0.0),
             "total_charges": s.get("total_charges", 0.0),
             "net_pnl": s.get("net_pnl", 0.0),

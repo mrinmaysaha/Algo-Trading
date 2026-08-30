@@ -7,14 +7,15 @@ from typing import Dict, Any, Optional
 
 
 class IndianFOAccountingEngine:
-    # Statutory Rates (Indian Equity Derivatives - 2026 Norms)
-    STT_OPTION_SELL_RATE = 0.0010       # 0.10% on Option Sell Turnover
-    STT_FUTURES_SELL_RATE = 0.0002      # 0.02% on Futures Sell Turnover
-    STAMP_DUTY_BUY_RATE = 0.00003      # 0.003% on Buy Turnover
-    EXCHANGE_TURNOVER_RATE = 0.0005    # 0.05% on Premium Turnover
-    SEBI_TURNOVER_RATE = 0.000001      # Rs 10 per Crore (0.0001%)
-    GST_RATE = 0.18                    # 18% on (Brokerage + Exchange + SEBI)
-    BROKERAGE_PER_ORDER = 20.0         # Default Rs. 20 per order
+    # Statutory Rates (Indian Equity & Commodity Derivatives - 2026 Norms)
+    STT_OPTION_SELL_RATE = 0.0010          # 0.10% on Option Sell Turnover
+    STT_FUTURES_SELL_RATE = 0.0002         # 0.02% on Futures Sell Turnover
+    STAMP_DUTY_BUY_RATE = 0.00003         # 0.003% on Buy Turnover
+    EXCHANGE_OPTION_RATE = 0.0005         # 0.05% on Option Premium Turnover
+    EXCHANGE_FUTURES_RATE = 0.000019      # 0.0019% on Futures Contract Turnover
+    SEBI_TURNOVER_RATE = 0.000001         # Rs 10 per Crore (0.0001%)
+    GST_RATE = 0.18                       # 18% on (Brokerage + Exchange + SEBI)
+    BROKERAGE_PER_ORDER = 20.0            # Default Rs. 20 per order
 
     @classmethod
     def calculate_closed_trade_pnl(
@@ -37,6 +38,7 @@ class IndianFOAccountingEngine:
 
         brokerage_rate = cls.BROKERAGE_PER_ORDER if brokerage_per_order is None else float(brokerage_per_order)
         stt_rate = cls.STT_OPTION_SELL_RATE if is_option else cls.STT_FUTURES_SELL_RATE
+        exch_rate = cls.EXCHANGE_OPTION_RATE if is_option else cls.EXCHANGE_FUTURES_RATE
         
         if str(direction).upper() in ["BUY", "LONG"]:
             buy_price = float(entry_price)
@@ -51,10 +53,11 @@ class IndianFOAccountingEngine:
         sell_turnover = sell_price * qty
         total_turnover = buy_turnover + sell_turnover
 
+        # Asymmetric tax calculation
         brokerage = 2.0 * brokerage_rate
         stt = round(sell_turnover * stt_rate, 2)
         stamp_duty = round(buy_turnover * cls.STAMP_DUTY_BUY_RATE, 2)
-        exchange_charges = round(total_turnover * cls.EXCHANGE_TURNOVER_RATE, 2)
+        exchange_charges = round(total_turnover * exch_rate, 2)
         sebi_charges = round(total_turnover * cls.SEBI_TURNOVER_RATE, 2)
         
         gst = round((brokerage + exchange_charges + sebi_charges) * cls.GST_RATE, 2)
@@ -96,6 +99,7 @@ class IndianFOAccountingEngine:
 
         brokerage_rate = cls.BROKERAGE_PER_ORDER if brokerage_per_order is None else float(brokerage_per_order)
         stt_rate = cls.STT_OPTION_SELL_RATE if is_option else cls.STT_FUTURES_SELL_RATE
+        exch_rate = cls.EXCHANGE_OPTION_RATE if is_option else cls.EXCHANGE_FUTURES_RATE
         is_long = str(direction).upper() in ["BUY", "LONG"]
         entry_p = float(entry_price)
         ltp = float(current_ltp)
@@ -109,7 +113,7 @@ class IndianFOAccountingEngine:
             entry_stt = 0.0
             est_exit_stt = est_exit_turnover * stt_rate
             est_exit_stamp_duty = 0.0
-        else:  # Option Short
+        else:  # Short / Option Seller
             gross_mtm = (entry_p - ltp) * qty
             entry_turnover = entry_p * qty
             est_exit_turnover = ltp * qty
@@ -123,7 +127,7 @@ class IndianFOAccountingEngine:
         brokerage = 2.0 * brokerage_rate
         total_stt = round(entry_stt + est_exit_stt, 2)
         total_stamp_duty = round(entry_stamp_duty + est_exit_stamp_duty, 2)
-        exchange_charges = round(total_est_turnover * cls.EXCHANGE_TURNOVER_RATE, 2)
+        exchange_charges = round(total_est_turnover * exch_rate, 2)
         sebi_charges = round(total_est_turnover * cls.SEBI_TURNOVER_RATE, 2)
         gst = round((brokerage + exchange_charges + sebi_charges) * cls.GST_RATE, 2)
 

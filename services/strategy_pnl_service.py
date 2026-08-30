@@ -430,6 +430,11 @@ def get_multi_timeframe_strategy_analytics(
         closed_trades_records = []
         trade_open_qty = 0.0
 
+        daily_pnl_map = {}
+        for i in range(min(days, 30) - 1, -1, -1):
+            d_str = (now_ist - timedelta(days=i)).strftime("%Y-%m-%d")
+            daily_pnl_map[d_str] = 0.0
+
         for (sym, exch, prod), tr_list in symbol_trade_groups.items():
             from utils.symbol_utils import get_contract_multiplier
             mult = get_contract_multiplier(sym, exch)
@@ -477,6 +482,10 @@ def get_multi_timeframe_strategy_analytics(
                     strat_charges[fee_k] += tax_calc[fee_k]
                 strat_charges["total"] += tax_calc["total_charges"]
 
+                # Extract execution timestamps for frontend trade receipt
+                entry_ts_raw = tr_list[0].get("trade_timestamp") or tr_list[0].get("timestamp") or tr_list[0].get("fill_time") or ""
+                exit_ts_raw = tr_list[-1].get("trade_timestamp") or tr_list[-1].get("timestamp") or tr_list[-1].get("fill_time") or ""
+
                 closed_trades_records.append({
                     "symbol": sym,
                     "strategy": disp_name,
@@ -484,12 +493,24 @@ def get_multi_timeframe_strategy_analytics(
                     "quantity": int(closed_qty * mult),
                     "entry_price": round(entry_p, 2),
                     "exit_price": round(exit_p, 2),
+                    "entry_time": str(entry_ts_raw),
+                    "exit_time": str(exit_ts_raw),
                     "gross_pnl": tax_calc["gross_pnl"],
                     "net_pnl": tax_calc["net_pnl"],
                     "total_charges": tax_calc["total_charges"],
-                    "stt": tax_calc["stt"],
                     "brokerage": tax_calc["brokerage"],
+                    "stt": tax_calc["stt"],
+                    "exchange_charges": tax_calc["exchange_charges"],
+                    "stamp_duty": tax_calc["stamp_duty"],
+                    "sebi_charges": tax_calc["sebi_charges"],
+                    "gst": tax_calc["gst"]
                 })
+
+                # Accumulate realized PnL into the daily timeline
+                exit_dt = parse_trade_timestamp(exit_ts_raw)
+                exit_d_str = exit_dt.strftime("%Y-%m-%d") if exit_dt else now_ist.strftime("%Y-%m-%d")
+                if exit_d_str in daily_pnl_map:
+                    daily_pnl_map[exit_d_str] += tax_calc["net_pnl"]
 
             leg_unrealized = 0.0
             leg_net_unrealized = 0.0
@@ -532,6 +553,7 @@ def get_multi_timeframe_strategy_analytics(
         winning_trades = sum(1 for t in closed_trades_records if t["net_pnl"] > 0)
         win_rate = round((winning_trades / len(closed_trades_records)) * 100.0, 1) if closed_trades_records else 0.0
 
+        # Mathematical Profit Factor: Gross Wins / Gross Losses
         gross_wins = sum(t["gross_pnl"] for t in closed_trades_records if t["gross_pnl"] > 0)
         gross_losses = abs(sum(t["gross_pnl"] for t in closed_trades_records if t["gross_pnl"] < 0))
         if gross_losses > 0:
@@ -541,26 +563,24 @@ def get_multi_timeframe_strategy_analytics(
         else:
             profit_factor = 0.0
 
+        # Sequence-based maximum drawdown
+        cum_pnl = 0.0
+        peak = 0.0
+        max_dd = 0.0
+        for tr in closed_trades_records:
+            cum_pnl += tr["net_pnl"]
+            if cum_pnl > peak:
+                peak = cum_pnl
+            dd = cum_pnl - peak
+            if dd < max_dd:
+                max_dd = dd
+
         eff_realized = strat_net_pnl
         eff_total = eff_realized + strat_unrealized_mtm
         active_legs_count = len([l for l in trade_legs if abs(_f(l.get("quantity", 0))) > 1e-9])
         has_activity = bool(trade_count > 0 or abs(eff_total) > 1e-6 or active_legs_count > 0)
 
-        daily_pnl_map = {}
-        for i in range(min(days, 30) - 1, -1, -1):
-            d_str = (now_ist - timedelta(days=i)).strftime("%Y-%m-%d")
-            daily_pnl_map[d_str] = 0.0
-
-        if matched_trades:
-            for t in matched_trades:
-                raw_ts = t.get("trade_timestamp") or t.get("timestamp") or t.get("created_at")
-                if raw_ts:
-                    t_date = str(raw_ts).split("T")[0].split(" ")[0]
-                else:
-                    t_date = now_ist.strftime("%Y-%m-%d")
-                if t_date in daily_pnl_map:
-                    daily_pnl_map[t_date] += _f(t.get("pnl") or t.get("realized_pnl") or 0.0)
-
+        # Include unrealized MTM into today's timeline
         today_iso = now_ist.strftime("%Y-%m-%d")
         if today_iso in daily_pnl_map:
             daily_pnl_map[today_iso] += strat_unrealized_mtm
@@ -581,7 +601,7 @@ def get_multi_timeframe_strategy_analytics(
             "total_trades": len(closed_trades_records) or trade_count,
             "win_rate": win_rate,
             "profit_factor": profit_factor,
-            "max_drawdown": 0.0,
+            "max_drawdown": round(max_dd, 2),
             "avg_trade_pnl": round(eff_total / (len(closed_trades_records) or 1), 2),
             "active_positions_count": active_legs_count,
             "has_activity": has_activity,
