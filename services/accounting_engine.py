@@ -51,7 +51,6 @@ class IndianFOAccountingEngine:
         sell_turnover = sell_price * qty
         total_turnover = buy_turnover + sell_turnover
 
-        # Asymmetric tax calculation
         brokerage = 2.0 * brokerage_rate
         stt = round(sell_turnover * stt_rate, 2)
         stamp_duty = round(buy_turnover * cls.STAMP_DUTY_BUY_RATE, 2)

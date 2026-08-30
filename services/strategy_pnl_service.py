@@ -1,29 +1,16 @@
 """
-Per-strategy realized / unrealized / total P&L.
-
-The broker - and OpenAlgo's own position book - nets positions per
-`(symbol, exchange, product)` and carries no strategy label, so a position
-alone cannot answer "how is *this* strategy doing?". Two strategies trading
-the same contract are indistinguishable downstream.
-
-`database/strategy_book_db.py` keeps a parallel book keyed by strategy, fed
-from the event bus. This module reads it:
-
-* **realized** - taken from the book, which accumulates across sessions and
-  survives restarts
-* **unrealized** - computed here by marking open quantity to the position
-  book's last traded price, because a stored value would be stale the instant
-  it was written
-* **total** - realized + unrealized (plus `today_realized` / `today_total`
-  for intraday exits)
-
-Accounting convention: weighted-average cost, where a position flipping
-through zero realizes the closed leg and reopens the remainder at the fill
-price.
+services/strategy_pnl_service.py
+Per-strategy realized / unrealized / total P&L with statutory tax accumulation.
 """
 
+import os
+import json
+import re
+from datetime import datetime, timedelta, time as dt_time
 from typing import Any
 
+import pandas as pd
+import pytz
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -36,23 +23,65 @@ def _f(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def parse_trade_timestamp(timestamp_str, fallback_date=None):
+    """Safely parse trade timestamps across all broker formats into IST datetime."""
+    ist = pytz.timezone("Asia/Kolkata")
+    if timestamp_str is None:
+        return None
+
+    if isinstance(timestamp_str, (int, float)):
+        try:
+            dt = pd.to_datetime(timestamp_str, unit="s")
+            return dt.tz_localize("UTC").tz_convert(ist) if dt.tz is None else dt.tz_convert(ist)
+        except Exception:
+            return None
+
+    if not isinstance(timestamp_str, str):
+        return None
+
+    timestamp_str = timestamp_str.strip()
+    if not timestamp_str:
+        return None
+
+    formats = [
+        "%d-%b-%Y %H:%M:%S",
+        "%H:%M:%S %d-%m-%Y",
+        "%d-%m-%Y %H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S",
+    ]
+    for fmt in formats:
+        try:
+            return ist.localize(datetime.strptime(timestamp_str, fmt))
+        except ValueError:
+            continue
+
+    if ":" in timestamp_str and " " not in timestamp_str:
+        try:
+            parts = timestamp_str.split(":")
+            if len(parts) >= 2 and len(parts[0]) <= 2:
+                today = fallback_date or datetime.now(ist).date()
+                dt = datetime.combine(
+                    today,
+                    dt_time(int(parts[0]), int(parts[1]), int(parts[2]) if len(parts) > 2 else 0),
+                )
+                return ist.localize(dt)
+        except (ValueError, IndexError):
+            pass
+
+    try:
+        dt = pd.to_datetime(timestamp_str)
+        return dt.tz_localize(ist) if dt.tz is None else dt.tz_convert(ist)
+    except Exception:
+        return None
+
+
 def pnl_from_book(
     legs: list[dict[str, Any]],
     positions: list[dict[str, Any]] | None = None,
     strategy: str | None = None,
 ) -> dict[str, Any]:
-    """Aggregate the persisted per-strategy legs into realized / unrealized /
-    total, marking open quantity to the position book's last traded price.
-
-    Realized comes from the book (it accumulates across sessions and survives
-    restarts). Unrealized is computed here rather than stored, because it is a
-    function of a price that changes continuously.
-    """
     positions = positions or []
-    # `ltp` is the standardized OpenAlgo position field (see
-    # docs/api/account-services/positionbook.md); every broker mapper converts
-    # its own raw field into it. `last_price` is accepted only as a fallback
-    # for a mapper that passes the broker's name through unchanged.
     ltp_by_key = {
         (p.get("symbol"), p.get("exchange"), p.get("product")): _f(
             p.get("ltp") if p.get("ltp") is not None else p.get("last_price")
@@ -89,13 +118,9 @@ def pnl_from_book(
         unrealized = 0.0
         if abs(qty) > 1e-9:
             if ltp is None:
-                # Open per the book but absent from the position book, so it
-                # cannot be marked to market. Surfaced rather than silently
-                # counted as zero.
                 entry["unpriced_legs"] += 1
             else:
                 from utils.symbol_utils import get_contract_multiplier
-
                 mult = get_contract_multiplier(leg.get("symbol"), leg.get("exchange"))
                 unrealized = qty * (ltp - avg) * mult
             entry["open_quantity"] += qty
@@ -103,28 +128,19 @@ def pnl_from_book(
         entry["realized"] += realized
         entry["today_realized"] += today_realized
         entry["unrealized"] += unrealized
-        entry["legs"].append(
-            {
-                "symbol": leg.get("symbol"),
-                "exchange": leg.get("exchange"),
-                "product": leg.get("product"),
-                "quantity": round(qty, 4),
-                "average_price": round(avg, 4),
-                "ltp": ltp,
-                "realized": round(realized, 4),
-                "today_realized": round(today_realized, 4),
-                "unrealized": round(unrealized, 4),
-            }
-        )
+        entry["legs"].append({
+            "symbol": leg.get("symbol"),
+            "exchange": leg.get("exchange"),
+            "product": leg.get("product"),
+            "quantity": round(qty, 4),
+            "average_price": round(avg, 4),
+            "ltp": ltp,
+            "realized": round(realized, 4),
+            "today_realized": round(today_realized, 4),
+            "unrealized": round(unrealized, 4),
+        })
 
     for entry in grouped.values():
-        # Open legs first, insertion order preserved within each group. Flow
-        # workflows address a leg positionally (`{{pnl.legs[0].average_price}}`)
-        # because the node vocabulary has no way to filter a list, and the
-        # strategy book never prunes a leg that has gone flat. Without this,
-        # `legs[0]` is the *oldest* row - a closed leg whose average price the
-        # book has reset to 0 - so a percentage exit divides by zero and stops
-        # firing from the strategy's second trading day onward.
         entry["legs"].sort(key=lambda leg: abs(leg["quantity"]) <= 1e-9)
         entry["realized"] = round(entry["realized"], 4)
         entry["today_realized"] = round(entry["today_realized"], 4)
@@ -151,36 +167,20 @@ def pnl_from_book(
     return grouped
 
 
-def get_strategy_pnl(
-    client, strategy: str | None = None, user_id: str | None = None
-) -> dict[str, Any]:
-    """Realized / unrealized / total P&L for one strategy, or all of them.
-
-    Reads the persisted strategy book (authoritative for realized P&L and
-    cost basis, and durable across restarts) and marks open quantity against
-    a single position-book call for last traded prices.
-    """
+def get_strategy_pnl(client, strategy: str | None = None, user_id: str | None = None) -> dict[str, Any]:
     from database.strategy_book_db import StrategyBookUnavailable, get_strategy_legs
 
     try:
         legs = get_strategy_legs(user_id=user_id, strategy=strategy)
     except StrategyBookUnavailable as exc:
-        # An unreadable book is unknown, not empty. Reporting zero here would
-        # look identical to a flat, healthy strategy to an exit trigger.
         logger.error(f"Strategy P&L unavailable: {exc}")
         return {"status": "error", "message": f"Strategy book unavailable: {exc}"}
 
     positions_resp = client.positionbook() or {}
-    # Propagate rather than pricing against an empty book. A transient broker
-    # failure would otherwise mark every open leg unpriced, report unrealized
-    # as zero, and still return success - letting a workflow act on a total
-    # that is materially wrong.
     if positions_resp.get("status") == "error":
         message = positions_resp.get("error") or positions_resp.get("message") or "unavailable"
-        return {
-            "status": "error",
-            "message": f"Position book unavailable, cannot value open legs: {message}",
-        }
+        return {"status": "error", "message": f"Position book unavailable: {message}"}
+    
     positions = positions_resp.get("data") or []
     if not isinstance(positions, list):
         positions = []
@@ -198,24 +198,10 @@ def get_multi_timeframe_strategy_analytics(
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> dict[str, Any]:
-    """Calculate multi-timeframe strategy P&L with exact statutory tax accumulation and custom date filtering.
-
-    Supported timeframes: '1D' (Today), '2D' (Last 2 Days), '1W' (7 Days), '2W' (14 Days), '1M' (30 Days), 'ALL', 'CUSTOM'.
-    """
-    from datetime import datetime, timedelta
-    import pytz
-    import re
-    import json
-    import os
+    """Calculate multi-timeframe strategy P&L with exact statutory tax accumulation and custom date filtering."""
     from database.strategy_book_db import (
-        StrategyBookUnavailable,
-        get_strategy_legs,
-        list_strategies,
-        db_session,
-        StrategyOrderTag,
-        StrategyPosition,
-        is_initialized,
-        init_strategy_book_db,
+        StrategyBookUnavailable, get_strategy_legs, list_strategies,
+        db_session, is_initialized, init_strategy_book_db,
     )
     from services.positionbook_service import get_positionbook
     from services.accounting_engine import IndianFOAccountingEngine
@@ -223,14 +209,13 @@ def get_multi_timeframe_strategy_analytics(
     ist = pytz.timezone("Asia/Kolkata")
     now_ist = datetime.now(ist)
 
-    # Ensure strategy book DB is initialized
     if not is_initialized():
         try:
             init_strategy_book_db()
         except Exception:
             pass
 
-    # Resolve date boundaries
+    # Calendar day boundaries
     tf_upper = str(timeframe or "1D").upper()
     days_map = {"1D": 1, "2D": 2, "1W": 7, "7D": 7, "2W": 14, "15D": 15, "1M": 30, "30D": 30, "ALL": 3650}
 
@@ -245,20 +230,18 @@ def get_multi_timeframe_strategy_analytics(
             days = max(1, (end_dt.date() - start_dt.date()).days + 1)
         except Exception:
             days = 7
-            start_dt = (now_ist - timedelta(days=days)).replace(tzinfo=None)
+            start_dt = (now_ist - timedelta(days=6)).replace(hour=0, minute=0, second=0, microsecond=0).replace(tzinfo=None)
             end_dt = now_ist.replace(tzinfo=None)
     else:
         days = days_map.get(tf_upper, 1)
-        start_dt = (now_ist - timedelta(days=days)).replace(tzinfo=None)
+        start_dt = (now_ist - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0).replace(tzinfo=None)
         end_dt = now_ist.replace(tzinfo=None)
 
-    # 1. Read strategy legs
     try:
         legs = get_strategy_legs(user_id=user_id, strategy=strategy)
     except StrategyBookUnavailable:
         legs = []
 
-    # 2. Get live position book for mark-to-market pricing
     try:
         ok, pos_resp, _ = get_positionbook()
         positions = pos_resp.get("data") if (ok and isinstance(pos_resp, dict)) else []
@@ -274,9 +257,7 @@ def get_multi_timeframe_strategy_analytics(
         for p in positions
     }
 
-    # 2b. Read executed trades from tradebook / sandbox with robust timestamp parsing
-    from blueprints.pnltracker import parse_trade_timestamp
-
+    # Tradebook ingestion with time filtering
     strategy_trades_map: dict[str, list[dict[str, Any]]] = {}
     try:
         from services.tradebook_service import get_tradebook
@@ -297,7 +278,7 @@ def get_multi_timeframe_strategy_analytics(
     except Exception:
         strategy_trades_map = {}
 
-    # Check SandboxTrades if available
+    # Sandbox trades ingestion
     try:
         from database.sandbox_db import SandboxTrades
         sb_trades = db_session.query(SandboxTrades)
@@ -327,9 +308,61 @@ def get_multi_timeframe_strategy_analytics(
     except Exception:
         pass
 
-    # Load configured strategies
+    # Built-in fallback alias configurations
+    configured_strategies: dict[str, dict[str, Any]] = {
+        "Post10_Institutional_OB_VWAP": {
+            "name": "Post10_Institutional_OB_VWAP",
+            "aliases": {
+                "Post10_Institutional_OB_VWAP",
+                "Post10_Institutional_OB_VWAP_Production",
+                "Post10_Institutional_OB_VWAP_Production_V3",
+                "Post10_Institutional_OB_VWAP_Production_V4",
+            },
+        },
+        "3Min_ORB_Quant": {
+            "name": "3Min_ORB_Quant",
+            "aliases": {
+                "3Min_ORB_Quant",
+                "3Min_ORB_2Lot_Quant_V2",
+                "3Min_ORB_Quant_20260801205330",
+            },
+        },
+        "SMC_FVG_ZeroLag_Options": {
+            "name": "SMC_FVG_ZeroLag_Options",
+            "aliases": {
+                "SMC_FVG_ZeroLag_Options",
+                "SMC_FVG_ZeroLag_Options_20260817232106",
+            },
+        },
+        "Prime Indicator Scalper Options": {
+            "name": "Prime Indicator Scalper Options",
+            "aliases": {
+                "Prime Indicator Scalper Options",
+                "Prime_Indicator_Scalper_Options",
+            },
+        },
+        "Liquid Sweep Options": {
+            "name": "Liquid Sweep Options",
+            "aliases": {
+                "Liquid Sweep Options",
+                "liquid_sweep_options_20260808185609",
+                "NSE_LiquiditySweepScalper_V43",
+            },
+        },
+        "Multi-commodity Institutional": {
+            "name": "Multi-commodity Institutional",
+            "aliases": {
+                "Multi-commodity Institutional",
+                "MCX_Institutional_MIS_V3.0",
+                "MCX_Institutional_MIS_V2.9",
+                "MCX_Institutional_MIS_V2.6",
+                "MCX_GOLDM_FVG_Options_Scalper",
+            },
+        },
+    }
+
+    # Overlay strategy_configs.json if present
     config_path = "strategies/strategy_configs.json"
-    configured_strategies: dict[str, dict[str, Any]] = {}
     if os.path.exists(config_path):
         try:
             with open(config_path, "r", encoding="utf-8") as f:
@@ -341,39 +374,21 @@ def get_multi_timeframe_strategy_analytics(
                     if file_path and os.path.exists(file_path):
                         with open(file_path, "r", encoding="utf-8", errors="ignore") as fp:
                             code = fp.read()
-                        matches = re.findall(
-                            r'strategy[^\n\r=:]*[:=]\s*["\']([^"\']+)["\']', code, re.IGNORECASE
-                        )
+                        matches = re.findall(r'strategy[^\n\r=:]*[:=]\s*["\']([^"\']+)["\']', code, re.IGNORECASE)
                         for m in matches:
                             if m and m.lower() not in ("utf-8", "options", "equity", "futures"):
                                 aliases.add(m)
-                    if "Post10" in disp_name:
-                        aliases.update([
-                            "Post10_Institutional_OB_VWAP_Production",
-                            "Post10_Institutional_OB_VWAP_Production_V3",
-                            "Post10_Institutional_OB_VWAP_Production_V4",
-                        ])
-                    if "Multi-commodity" in disp_name or "MCX" in disp_name:
-                        if "GOLDM" in disp_name:
-                            aliases.update(["MCX_GOLDM_FVG_Options_Scalper"])
-                        else:
-                            aliases.update([
-                                "MCX_Institutional_MIS_V3.0",
-                                "MCX_Institutional_MIS_V2.9",
-                                "MCX_Institutional_MIS_V2.6",
-                            ])
-                    configured_strategies[disp_name] = {
-                        "config": s_val,
-                        "aliases": aliases,
-                    }
+                    if disp_name in configured_strategies:
+                        configured_strategies[disp_name]["aliases"].update(aliases)
+                    else:
+                        configured_strategies[disp_name] = {"name": disp_name, "aliases": aliases}
         except Exception:
             pass
 
-    base_pnl_data = pnl_from_book(legs, positions, strategy=strategy)
-    strategy_metrics: dict[str, dict[str, Any]] = {}
     all_known_strategies = set(list_strategies(user_id=user_id)) | set(strategy_trades_map.keys()) | set(configured_strategies.keys())
-
     target_strategies = [strategy] if (strategy and strategy != "ALL") else sorted(list(all_known_strategies))
+
+    strategy_metrics: dict[str, dict[str, Any]] = {}
 
     for strat_key in target_strategies:
         disp_name = strat_key
@@ -396,7 +411,6 @@ def get_multi_timeframe_strategy_analytics(
             if alias in strategy_trades_map:
                 matched_trades.extend(strategy_trades_map[alias])
 
-        # Sort trades chronologically to guarantee correct entry/exit classification
         matched_trades.sort(key=lambda x: str(x.get("trade_timestamp") or x.get("timestamp") or x.get("fill_time") or ""))
         trade_count = len(matched_trades)
 
@@ -518,7 +532,6 @@ def get_multi_timeframe_strategy_analytics(
         winning_trades = sum(1 for t in closed_trades_records if t["net_pnl"] > 0)
         win_rate = round((winning_trades / len(closed_trades_records)) * 100.0, 1) if closed_trades_records else 0.0
 
-        # Mathematical Profit Factor: Gross Wins / Gross Losses
         gross_wins = sum(t["gross_pnl"] for t in closed_trades_records if t["gross_pnl"] > 0)
         gross_losses = abs(sum(t["gross_pnl"] for t in closed_trades_records if t["gross_pnl"] < 0))
         if gross_losses > 0:
@@ -533,7 +546,6 @@ def get_multi_timeframe_strategy_analytics(
         active_legs_count = len([l for l in trade_legs if abs(_f(l.get("quantity", 0))) > 1e-9])
         has_activity = bool(trade_count > 0 or abs(eff_total) > 1e-6 or active_legs_count > 0)
 
-        # Build daily timeline
         daily_pnl_map = {}
         for i in range(min(days, 30) - 1, -1, -1):
             d_str = (now_ist - timedelta(days=i)).strftime("%Y-%m-%d")
@@ -578,7 +590,6 @@ def get_multi_timeframe_strategy_analytics(
             "daily_pnl_history": daily_series,
         }
 
-    # Calculate portfolio aggregates
     active_strats = [s for s in strategy_metrics.values() if s.get("has_activity")]
     total_port_gross = sum(s["gross_pnl"] for s in strategy_metrics.values())
     total_port_charges = sum(s["total_charges"] for s in strategy_metrics.values())

@@ -52,26 +52,22 @@ def setup_test_data():
 
 def test_mcx_silverm_available_strikes():
     clear_strikes_cache()
-    # Query SILVERM PE with 28AUG26
     strikes = get_available_strikes("SILVERM", "28AUG26", "PE", "MCX")
     assert 240000.0 in strikes
-    assert 242000.0 in strikes  # Discovered even with OPTFUT and 4-digit year in expiry column
+    assert 242000.0 in strikes
 
 
 def test_mcx_silver_no_macro_variant_fallback():
     clear_strikes_cache()
-    # Query SILVERM CE when contracts are listed under SILVER - must return empty (no fallback to big SILVER)
     strikes = get_available_strikes("SILVERM", "28AUG26", "CE", "MCX")
     assert strikes == []
 
 
 def test_mcx_find_option_in_database_strict_mini():
-    # Exact match
     res1 = find_option_in_database("SILVERM28AUG26240000PE", "MCX")
     assert res1 is not None
     assert res1["strike"] == 240000.0
 
-    # No fallback: SILVERM requested but only big SILVER exists -> must return None
     res2 = find_option_in_database("SILVERM28AUG26245000CE", "MCX")
     assert res2 is None
 
@@ -79,7 +75,6 @@ def test_mcx_find_option_in_database_strict_mini():
 def test_strategy_pnl_reconciles_tradebook(monkeypatch):
     from services.strategy_pnl_service import get_multi_timeframe_strategy_analytics
 
-    # Mock tradebook response with the 20 real session trades
     mock_trades = [
         {"symbol": "FINNIFTY25AUG2626200CE", "strategy": "Post10_Institutional_OB_VWAP_Production_V4", "exchange": "NFO", "product": "MIS", "action": "SELL", "qty": 120, "price": 24.00},
         {"symbol": "NIFTY25AUG2624200CE", "strategy": "Post10_Institutional_OB_VWAP_Production_V4", "exchange": "NFO", "product": "MIS", "action": "SELL", "qty": 130, "price": 69.60},
