@@ -445,6 +445,7 @@ def run_production_backtest(
         "symbol": " / ".join(symbols_processed),
         "symbols": symbols_processed,
         "metrics": metrics,
+        "performance": metrics,
         "monthly_pnl_matrix": pnl_matrix.generate_matrix().to_dict(),
         "heatmap_html": pnl_matrix.to_html_heatmap(),
         "parameters": strategy_config,
