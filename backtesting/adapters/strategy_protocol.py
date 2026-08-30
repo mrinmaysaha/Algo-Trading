@@ -96,15 +96,21 @@ class LiveStrategyAdapter(StrategyProtocol):
                 mother_low = float(first_bar["low"])
                 mother_range = mother_high - mother_low
 
-                range_min = float(self.cfg.get("range_filter_min", 30.0))
-                range_max = float(self.cfg.get("range_filter_max", 300.0))
+                range_min = float(self.cfg.get("range_filter_min", 35.0))
+                range_max = float(self.cfg.get("range_filter_max", 250.0))
                 buffer_val = float(self.cfg.get("breakout_buffer", 3.0))
 
                 if range_min <= mother_range <= range_max:
-                    if time_str > first_bar_time and time_str <= "10:30":
-                        if float(latest["close"]) > (mother_high + buffer_val):
+                    # Strict 10:00 AM Cutoff for ORB Entries
+                    if time_str > first_bar_time and time_str <= "10:00":
+                        prev_bars = today_bars[today_bars["datetime"] < latest["datetime"]]
+                        # Ensure only the FIRST valid breakout triggers the daily trade
+                        prev_broken_ce = any(float(b["close"]) > (mother_high + buffer_val) for _, b in prev_bars.iloc[1:].iterrows()) if len(prev_bars) > 1 else False
+                        prev_broken_pe = any(float(b["close"]) < (mother_low - buffer_val) for _, b in prev_bars.iloc[1:].iterrows()) if len(prev_bars) > 1 else False
+
+                        if float(latest["close"]) > (mother_high + buffer_val) and not prev_broken_ce:
                             return Signal(action="ENTER", option_type="CE", reason="ORB_BULLISH_BREAKOUT")
-                        elif float(latest["close"]) < (mother_low - buffer_val):
+                        elif float(latest["close"]) < (mother_low - buffer_val) and not prev_broken_pe:
                             return Signal(action="ENTER", option_type="PE", reason="ORB_BEARISH_BREAKOUT")
 
         # -------------------------------------------------------------
