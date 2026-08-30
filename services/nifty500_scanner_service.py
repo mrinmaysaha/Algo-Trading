@@ -478,11 +478,46 @@ class Nifty500ScannerEngine:
             logger.debug(f"[WHATSAPP BROADCAST NOTICE]: {e}")
 
     @classmethod
+    def prune_expired_signals(cls, max_age_seconds: int = 1800) -> None:
+        """Purges signals older than 30 minutes to prevent unbounded memory growth."""
+        now = datetime.now(ist)
+        expired_ids = [
+            sig_id for sig_id, sig in active_signals_registry.items()
+            if (now - sig["created_at"]).total_seconds() > max_age_seconds
+        ]
+        for sig_id in expired_ids:
+            active_signals_registry.pop(sig_id, None)
+
+    @classmethod
+    def is_authorized_sender(cls, sender_phone: str) -> bool:
+        """Verifies that the incoming WhatsApp message is from an authorized linked user."""
+        if not sender_phone:
+            return True
+        try:
+            from database.whatsapp_db import get_all_whatsapp_users
+            users = get_all_whatsapp_users()
+            if not users:
+                return True
+            clean_sender = re.sub(r"\D", "", sender_phone)
+            for u in users:
+                u_phone = re.sub(r"\D", "", u.get("phone_number") or u.get("whatsapp_jid") or "")
+                if u_phone and (clean_sender.endswith(u_phone) or u_phone.endswith(clean_sender)):
+                    return True
+            return False
+        except Exception:
+            return True
+
+    @classmethod
     def execute_inbound_whatsapp_command(cls, message_body: str, sender_phone: str, api_key: Optional[str] = None) -> str:
         """
         Parses incoming WhatsApp replies (e.g. 'BUY 101', 'BUY 101 2L', 'BUY 101 EQ 100')
-        validates TTL, checks active broker session, and routes the order through OpenAlgo's unified place_order.
+        validates sender authenticity, checks TTL, and routes order through place_order.
         """
+        cls.prune_expired_signals()
+
+        if sender_phone and not cls.is_authorized_sender(sender_phone):
+            return "🔒 *Access Denied:* Your phone number is not registered with this OpenAlgo instance. Please link your number in `/whatsapp`."
+
         clean_msg = message_body.strip().upper()
         match = re.match(r"^BUY\s+(\d+)(?:\s+(EQ|\d+L|\d+))?(?:\s+(\d+))?$", clean_msg)
 
