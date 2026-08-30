@@ -192,14 +192,21 @@ def get_strategy_pnl(
 
 
 def get_multi_timeframe_strategy_analytics(
-    timeframe: str = "1D", user_id: str | None = None, strategy: str | None = None
+    timeframe: str = "1D",
+    user_id: str | None = None,
+    strategy: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
 ) -> dict[str, Any]:
-    """Calculate multi-timeframe strategy P&L, win-rates, profit factors, drawdowns, and trade counts.
+    """Calculate multi-timeframe strategy P&L with exact statutory tax accumulation and custom date filtering.
 
-    Supported timeframes: '1D' (Today), '2D' (Last 2 Days), '1W' (7 Days), '2W' (14 Days), '1M' (30 Days), 'ALL'.
+    Supported timeframes: '1D' (Today), '2D' (Last 2 Days), '1W' (7 Days), '2W' (14 Days), '1M' (30 Days), 'ALL', 'CUSTOM'.
     """
     from datetime import datetime, timedelta
     import pytz
+    import re
+    import json
+    import os
     from database.strategy_book_db import (
         StrategyBookUnavailable,
         get_strategy_legs,
@@ -211,6 +218,7 @@ def get_multi_timeframe_strategy_analytics(
         init_strategy_book_db,
     )
     from services.positionbook_service import get_positionbook
+    from services.accounting_engine import IndianFOAccountingEngine
 
     ist = pytz.timezone("Asia/Kolkata")
     now_ist = datetime.now(ist)
@@ -222,11 +230,23 @@ def get_multi_timeframe_strategy_analytics(
         except Exception:
             pass
 
-    # Resolve timeframe cutoff date
+    # Resolve date boundaries
     tf_upper = str(timeframe or "1D").upper()
-    days_map = {"1D": 1, "2D": 2, "1W": 7, "2W": 14, "1M": 30, "ALL": 3650}
-    days = days_map.get(tf_upper, 1)
-    cutoff_dt = (now_ist - timedelta(days=days)).replace(tzinfo=None)
+    days_map = {"1D": 1, "2D": 2, "1W": 7, "7D": 7, "2W": 14, "15D": 15, "1M": 30, "30D": 30, "ALL": 3650}
+
+    if tf_upper == "CUSTOM" and start_date and end_date:
+        try:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            end_dt = datetime.strptime(f"{end_date} 23:59:59", "%Y-%m-%d %H:%M:%S")
+            days = max(1, (end_dt.date() - start_dt.date()).days + 1)
+        except Exception:
+            days = 7
+            start_dt = (now_ist - timedelta(days=days)).replace(tzinfo=None)
+            end_dt = now_ist.replace(tzinfo=None)
+    else:
+        days = days_map.get(tf_upper, 1)
+        start_dt = (now_ist - timedelta(days=days)).replace(tzinfo=None)
+        end_dt = now_ist.replace(tzinfo=None)
 
     # 1. Read strategy legs
     try:
@@ -250,7 +270,7 @@ def get_multi_timeframe_strategy_analytics(
         for p in positions
     }
 
-    # 2b. Read executed trades from tradebook / sandbox for per-strategy trade reconciliation
+    # 2b. Read executed trades from tradebook / sandbox
     strategy_trades_map: dict[str, list[dict[str, Any]]] = {}
     try:
         from services.tradebook_service import get_tradebook
@@ -258,18 +278,46 @@ def get_multi_timeframe_strategy_analytics(
         raw_trades = tb_resp.get("data") if (ok_tb and isinstance(tb_resp, dict)) else []
         if isinstance(raw_trades, list):
             for tr in raw_trades:
+                t_time = tr.get("trade_timestamp") or tr.get("timestamp") or tr.get("fill_time")
+                parsed_dt = None
+                if t_time:
+                    try:
+                        parsed_dt = datetime.fromisoformat(str(t_time).replace("Z", "+00:00")).replace(tzinfo=None)
+                    except Exception:
+                        try:
+                            parsed_dt = datetime.strptime(str(t_time).split(".")[0], "%Y-%m-%d %H:%M:%S")
+                        except Exception:
+                            parsed_dt = None
+
+                if parsed_dt and not (start_dt <= parsed_dt <= end_dt):
+                    continue
+
                 strat_name = tr.get("strategy") or "untagged"
                 strategy_trades_map.setdefault(strat_name, []).append(tr)
     except Exception:
         strategy_trades_map = {}
 
-    # If sandbox / analyze mode, also check SandboxTrades directly
+    # Check SandboxTrades if available
     try:
         from database.sandbox_db import SandboxTrades
         sb_trades = db_session.query(SandboxTrades)
         if user_id:
             sb_trades = sb_trades.filter(SandboxTrades.user_id == user_id)
         for st in sb_trades.all():
+            t_time = st.trade_timestamp
+            parsed_dt = None
+            if t_time:
+                try:
+                    parsed_dt = datetime.fromisoformat(str(t_time).replace("Z", "+00:00")).replace(tzinfo=None)
+                except Exception:
+                    try:
+                        parsed_dt = datetime.strptime(str(t_time).split(".")[0], "%Y-%m-%d %H:%M:%S")
+                    except Exception:
+                        parsed_dt = None
+
+            if parsed_dt and not (start_dt <= parsed_dt <= end_dt):
+                continue
+
             strat_name = st.strategy or "untagged"
             tr_dict = {
                 "symbol": st.symbol,
@@ -279,23 +327,16 @@ def get_multi_timeframe_strategy_analytics(
                 "quantity": st.quantity,
                 "price": float(st.price or 0),
                 "strategy": strat_name,
-                "trade_timestamp": st.trade_timestamp,
+                "trade_timestamp": str(st.trade_timestamp),
             }
             if strat_name not in strategy_trades_map:
                 strategy_trades_map.setdefault(strat_name, []).append(tr_dict)
     except Exception:
         pass
 
-    # 3. Base P&L from book
-    base_pnl_data = pnl_from_book(legs, positions, strategy=strategy)
-
-    # 4. Load configured strategies if available (e.g. from strategies/strategy_configs.json)
+    # Load configured strategies
     config_path = "strategies/strategy_configs.json"
     configured_strategies: dict[str, dict[str, Any]] = {}
-    import json
-    import os
-    import re
-
     if os.path.exists(config_path):
         try:
             with open(config_path, "r", encoding="utf-8") as f:
@@ -328,244 +369,162 @@ def get_multi_timeframe_strategy_analytics(
                                 "MCX_Institutional_MIS_V2.9",
                                 "MCX_Institutional_MIS_V2.6",
                             ])
-                    if "Liquid" in disp_name:
-                        aliases.update(["NSE_LiquiditySweepScalper_V43"])
-                    if "3Min_ORB" in disp_name:
-                        aliases.update(["3Min_ORB_2Lot_Quant_V2"])
-
                     configured_strategies[disp_name] = {
-                        "name": disp_name,
-                        "key": s_key,
-                        "aliases": list(aliases),
+                        "config": s_val,
+                        "aliases": aliases,
                     }
         except Exception:
-            configured_strategies = {}
+            pass
 
+    base_pnl_data = pnl_from_book(legs, positions, strategy=strategy)
     strategy_metrics: dict[str, dict[str, Any]] = {}
+    all_known_strategies = set(list_strategies(user_id=user_id)) | set(strategy_trades_map.keys()) | set(configured_strategies.keys())
 
-    # Target strategies: If configured_strategies exists, evaluate only those. Otherwise fallback to database distinct strategies.
-    target_map = (
-        configured_strategies
-        if configured_strategies
-        else {s: {"name": s, "aliases": [s]} for s in list_strategies(user_id=user_id)}
-    )
+    target_strategies = [strategy] if (strategy and strategy != "ALL") else sorted(list(all_known_strategies))
 
-    for disp_name, conf in target_map.items():
-        if strategy and disp_name != strategy:
+    for strat_key in target_strategies:
+        disp_name = strat_key
+        aliases = {strat_key}
+        if strat_key in configured_strategies:
+            disp_name = strat_key
+            aliases = configured_strategies[strat_key]["aliases"]
+        else:
+            for cfg_name, cfg_info in configured_strategies.items():
+                if strat_key in cfg_info["aliases"]:
+                    disp_name = cfg_name
+                    aliases = cfg_info["aliases"]
+                    break
+
+        if disp_name in strategy_metrics and disp_name != strat_key:
             continue
 
-        aliases = conf.get("aliases", [disp_name])
-
-        agg_realized = 0.0
-        agg_today_realized = 0.0
-        agg_unrealized = 0.0
-        agg_open_qty = 0.0
-        agg_legs = []
-        seen_legs = set()
-
-        if isinstance(base_pnl_data, dict):
-            for alias in aliases:
-                pnl_entry = base_pnl_data.get(alias, {})
-                if not pnl_entry and "strategies" in base_pnl_data:
-                    pnl_entry = base_pnl_data["strategies"].get(alias, {})
-                if not pnl_entry and base_pnl_data.get("strategy") == alias:
-                    pnl_entry = base_pnl_data
-
-                agg_realized += _f(pnl_entry.get("realized", 0.0))
-                agg_today_realized += _f(pnl_entry.get("today_realized", 0.0))
-                agg_unrealized += _f(pnl_entry.get("unrealized", 0.0))
-                agg_open_qty += _f(pnl_entry.get("open_quantity", 0.0))
-                for l in pnl_entry.get("legs", []):
-                    leg_key = (l.get("symbol"), l.get("exchange"), l.get("product"))
-                    if leg_key not in seen_legs:
-                        seen_legs.add(leg_key)
-                        agg_legs.append(l)
-
-        # Match trades for this strategy across aliases and fuzzy naming
-        matched_trades = []
+        matched_trades: list[dict[str, Any]] = []
         for alias in aliases:
             if alias in strategy_trades_map:
                 matched_trades.extend(strategy_trades_map[alias])
 
-        if not matched_trades:
-            clean_disp = re.sub(r"[^a-zA-Z0-9]", "", disp_name).lower()
-            for st_name, t_list in strategy_trades_map.items():
-                clean_st = re.sub(r"[^a-zA-Z0-9]", "", st_name).lower()
-                if (
-                    clean_disp == clean_st
-                    or clean_disp in clean_st
-                    or clean_st in clean_disp
-                    or (clean_disp and clean_st.startswith(clean_disp[:8]))
-                    or (clean_st and clean_disp.startswith(clean_st[:8]))
-                ):
-                    matched_trades.extend(t_list)
-
-        # Query order tags for trade count in evaluation timeframe
+        # Sort trades chronologically to guarantee correct entry/exit classification
+        matched_trades.sort(key=lambda x: str(x.get("trade_timestamp") or x.get("timestamp") or x.get("fill_time") or ""))
         trade_count = len(matched_trades)
-        if trade_count == 0:
-            try:
-                q = db_session.query(StrategyOrderTag).filter(StrategyOrderTag.strategy.in_(aliases))
-                if user_id:
-                    q = q.filter(StrategyOrderTag.user_id == user_id)
-                if tf_upper != "ALL":
-                    q = q.filter(StrategyOrderTag.created_at >= cutoff_dt)
-                trade_count = q.count()
-            except Exception:
-                pass
 
-        # If matched trades exist, calculate exact trade-level P&L
-        if matched_trades:
-            symbol_trade_groups = {}
-            for t in matched_trades:
-                sym = t.get("symbol")
-                exch = t.get("exchange") or "NFO"
-                prod = t.get("product") or "MIS"
-                key = (sym, exch, prod)
-                symbol_trade_groups.setdefault(key, []).append(t)
+        symbol_trade_groups = {}
+        for t in matched_trades:
+            k = (t.get("symbol"), t.get("exchange") or "NFO", t.get("product") or "MIS")
+            symbol_trade_groups.setdefault(k, []).append(t)
 
-            trade_realized = 0.0
-            trade_unrealized = 0.0
-            trade_open_qty = 0.0
-            trade_legs = []
+        strat_gross_pnl = 0.0
+        strat_net_pnl = 0.0
+        strat_unrealized_mtm = 0.0
+        strat_charges = {
+            "brokerage": 0.0, "stt": 0.0, "exchange_charges": 0.0,
+            "stamp_duty": 0.0, "sebi_charges": 0.0, "gst": 0.0, "total": 0.0
+        }
+        trade_legs = []
+        closed_trades_records = []
+        trade_open_qty = 0.0
 
-            for (sym, exch, prod), tr_list in symbol_trade_groups.items():
-                from utils.symbol_utils import get_contract_multiplier
-                mult = get_contract_multiplier(sym, exch)
+        for (sym, exch, prod), tr_list in symbol_trade_groups.items():
+            from utils.symbol_utils import get_contract_multiplier
+            mult = get_contract_multiplier(sym, exch)
 
-                buy_qty = sum(
-                    _f(t.get("quantity") if t.get("quantity") is not None else t.get("qty"))
-                    for t in tr_list
-                    if str(t.get("action") or t.get("trade_type")).upper() == "BUY"
-                )
-                buy_val = sum(
-                    _f(t.get("price")) * _f(t.get("quantity") if t.get("quantity") is not None else t.get("qty"))
-                    for t in tr_list
-                    if str(t.get("action") or t.get("trade_type")).upper() == "BUY"
-                )
-                sell_qty = sum(
-                    _f(t.get("quantity") if t.get("quantity") is not None else t.get("qty"))
-                    for t in tr_list
-                    if str(t.get("action") or t.get("trade_type")).upper() == "SELL"
-                )
-                sell_val = sum(
-                    _f(t.get("price")) * _f(t.get("quantity") if t.get("quantity") is not None else t.get("qty"))
-                    for t in tr_list
-                    if str(t.get("action") or t.get("trade_type")).upper() == "SELL"
+            buy_qty = sum(_f(t.get("quantity") or t.get("qty")) for t in tr_list if str(t.get("action") or t.get("trade_type")).upper() == "BUY")
+            buy_val = sum(_f(t.get("price")) * _f(t.get("quantity") or t.get("qty")) for t in tr_list if str(t.get("action") or t.get("trade_type")).upper() == "BUY")
+            sell_qty = sum(_f(t.get("quantity") or t.get("qty")) for t in tr_list if str(t.get("action") or t.get("trade_type")).upper() == "SELL")
+            sell_val = sum(_f(t.get("price")) * _f(t.get("quantity") or t.get("qty")) for t in tr_list if str(t.get("action") or t.get("trade_type")).upper() == "SELL")
+
+            closed_qty = min(buy_qty, sell_qty)
+            net_qty = buy_qty - sell_qty
+            trade_open_qty += net_qty
+
+            leg_realized = 0.0
+            leg_tax_charges = 0.0
+            if closed_qty > 0 and tr_list:
+                avg_buy = (buy_val / buy_qty) if buy_qty > 0 else 0.0
+                avg_sell = (sell_val / sell_qty) if sell_qty > 0 else 0.0
+                first_action = str(tr_list[0].get("action") or tr_list[0].get("trade_type") or "BUY").upper()
+
+                entry_p = avg_buy if first_action == "BUY" else avg_sell
+                exit_p = avg_sell if first_action == "BUY" else avg_buy
+                is_opt = not ("FUT" in str(sym) or exch == "MCX")
+
+                tax_calc = IndianFOAccountingEngine.calculate_closed_trade_pnl(
+                    entry_price=entry_p,
+                    exit_price=exit_p,
+                    qty=int(closed_qty * mult),
+                    direction=first_action,
+                    is_option=is_opt
                 )
 
-                from services.accounting_engine import IndianFOAccountingEngine
+                leg_realized = tax_calc["gross_pnl"]
+                leg_tax_charges = tax_calc["total_charges"]
+                strat_gross_pnl += tax_calc["gross_pnl"]
+                strat_net_pnl += tax_calc["net_pnl"]
 
-                closed_qty = min(buy_qty, sell_qty)
-                net_qty = buy_qty - sell_qty
+                for fee_k in ["brokerage", "stt", "exchange_charges", "stamp_duty", "sebi_charges", "gst"]:
+                    strat_charges[fee_k] += tax_calc[fee_k]
+                strat_charges["total"] += tax_calc["total_charges"]
 
-                leg_realized = 0.0
-                leg_tax_charges = 0.0
-                if closed_qty > 0:
-                    avg_buy = (buy_val / buy_qty) if buy_qty > 0 else 0.0
-                    avg_sell = (sell_val / sell_qty) if sell_qty > 0 else 0.0
-                    # Determine whether this trade was initiated as Long (BUY first) or Short (SELL first)
-                    first_trade_action = str(tr_list[0].get("action") or tr_list[0].get("trade_type") or "BUY").upper()
-                    entry_p = avg_buy if first_trade_action == "BUY" else avg_sell
-                    exit_p = avg_sell if first_trade_action == "BUY" else avg_buy
-                    tax_calc = IndianFOAccountingEngine.calculate_closed_trade_pnl(
-                        entry_price=entry_p,
-                        exit_price=exit_p,
-                        qty=int(closed_qty * mult),
-                        direction=first_trade_action
-                    )
-                    leg_realized = tax_calc["gross_pnl"]
-                    leg_tax_charges = tax_calc["total_charges"]
-
-                leg_unrealized = 0.0
-                leg_net_unrealized = 0.0
-                ltp = ltp_by_key.get((sym, exch, prod))
-                if abs(net_qty) > 1e-9 and ltp is not None:
-                    entry_avg = (
-                        (buy_val / buy_qty)
-                        if net_qty > 0 and buy_qty > 0
-                        else ((sell_val / sell_qty) if sell_qty > 0 else 0.0)
-                    )
-                    open_dir = "BUY" if net_qty > 0 else "SELL"
-                    mtm_calc = IndianFOAccountingEngine.calculate_open_position_mtm(
-                        entry_price=entry_avg,
-                        current_ltp=ltp,
-                        qty=int(abs(net_qty) * mult),
-                        direction=open_dir
-                    )
-                    leg_unrealized = mtm_calc["gross_mtm"]
-                    leg_net_unrealized = mtm_calc["net_mtm"]
-
-                trade_realized += leg_realized
-                trade_unrealized += leg_unrealized
-                trade_open_qty += net_qty
-
-                trade_legs.append({
+                closed_trades_records.append({
                     "symbol": sym,
-                    "exchange": exch,
-                    "product": prod,
-                    "quantity": round(net_qty, 4),
-                    "average_price": round(
-                        (buy_val / buy_qty) if net_qty > 0 and buy_qty > 0 else ((sell_val / sell_qty) if net_qty < 0 and sell_qty > 0 else 0.0), 4
-                    ),
-                    "ltp": ltp,
-                    "realized": round(leg_realized, 4),
-                    "today_realized": round(leg_realized, 4),
-                    "unrealized": round(leg_unrealized, 4),
-                    "net_unrealized": round(leg_net_unrealized, 4),
-                    "tax_charges": round(leg_tax_charges, 4),
+                    "strategy": disp_name,
+                    "direction": first_action,
+                    "quantity": int(closed_qty * mult),
+                    "entry_price": round(entry_p, 2),
+                    "exit_price": round(exit_p, 2),
+                    "gross_pnl": tax_calc["gross_pnl"],
+                    "net_pnl": tax_calc["net_pnl"],
+                    "total_charges": tax_calc["total_charges"],
+                    "stt": tax_calc["stt"],
+                    "brokerage": tax_calc["brokerage"],
                 })
 
-            agg_today_realized = trade_realized
-            if tf_upper == "1D":
-                agg_realized = trade_realized
-            else:
-                agg_realized = agg_realized if abs(agg_realized) > 1e-9 else trade_realized
-            agg_unrealized = trade_unrealized
-            agg_open_qty = trade_open_qty
-            agg_legs = trade_legs
+            leg_unrealized = 0.0
+            leg_net_unrealized = 0.0
+            ltp = ltp_by_key.get((sym, exch, prod))
+            if abs(net_qty) > 1e-9 and ltp is not None:
+                entry_avg = (
+                    (buy_val / buy_qty)
+                    if net_qty > 0 and buy_qty > 0
+                    else ((sell_val / sell_qty) if sell_qty > 0 else 0.0)
+                )
+                open_dir = "BUY" if net_qty > 0 else "SELL"
+                is_opt = not ("FUT" in str(sym) or exch == "MCX")
+                mtm_calc = IndianFOAccountingEngine.calculate_open_position_mtm(
+                    entry_price=entry_avg,
+                    current_ltp=ltp,
+                    qty=int(abs(net_qty) * mult),
+                    direction=open_dir,
+                    is_option=is_opt
+                )
+                leg_unrealized = mtm_calc["gross_mtm"]
+                leg_net_unrealized = mtm_calc["net_mtm"]
+                strat_unrealized_mtm += leg_unrealized
 
-        # Timeframe-adjusted realized PnL
-        eff_realized = agg_today_realized if tf_upper == "1D" else agg_realized
-        eff_total = eff_realized + agg_unrealized
+            trade_legs.append({
+                "symbol": sym,
+                "exchange": exch,
+                "product": prod,
+                "quantity": round(net_qty, 4),
+                "average_price": round(
+                    (buy_val / buy_qty) if net_qty > 0 and buy_qty > 0 else ((sell_val / sell_qty) if net_qty < 0 and sell_qty > 0 else 0.0), 4
+                ),
+                "ltp": ltp,
+                "realized": round(leg_realized, 4),
+                "today_realized": round(leg_realized, 4),
+                "unrealized": round(leg_unrealized, 4),
+                "net_unrealized": round(leg_net_unrealized, 4),
+                "tax_charges": round(leg_tax_charges, 4),
+            })
 
-        # Closed legs stats for win rate and profit factor
-        pnl_field = "today_realized" if tf_upper == "1D" else "realized"
-        winning_legs = sum(1 for l in agg_legs if _f(l.get(pnl_field, 0)) > 0)
-        losing_legs = sum(1 for l in agg_legs if _f(l.get(pnl_field, 0)) < 0)
-        closed_legs_count = winning_legs + losing_legs
+        winning_trades = sum(1 for t in closed_trades_records if t["net_pnl"] > 0)
+        win_rate = round((winning_trades / len(closed_trades_records)) * 100.0, 1) if closed_trades_records else 0.0
 
-        gross_profit = sum(
-            _f(l.get(pnl_field, 0)) for l in agg_legs if _f(l.get(pnl_field, 0)) > 0
-        )
-        gross_loss = abs(
-            sum(_f(l.get(pnl_field, 0)) for l in agg_legs if _f(l.get(pnl_field, 0)) < 0)
-        )
+        eff_realized = strat_net_pnl
+        eff_total = eff_realized + strat_unrealized_mtm
+        active_legs_count = len([l for l in trade_legs if abs(_f(l.get("quantity", 0))) > 1e-9])
+        has_activity = bool(trade_count > 0 or abs(eff_total) > 1e-6 or active_legs_count > 0)
 
-        if closed_legs_count > 0:
-            win_rate = round((winning_legs / closed_legs_count) * 100.0, 1)
-        elif trade_count > 0 and eff_realized > 0:
-            win_rate = 100.0
-        elif trade_count > 0 and eff_realized < 0:
-            win_rate = 0.0
-        else:
-            win_rate = 0.0
-
-        if gross_loss > 0:
-            profit_factor = round(gross_profit / gross_loss, 2)
-        elif gross_profit > 0:
-            profit_factor = 99.0
-        else:
-            profit_factor = 0.0
-
-        active_legs_count = len([l for l in agg_legs if abs(_f(l.get("quantity", 0))) > 1e-9])
-        has_activity = bool(
-            trade_count > 0
-            or abs(eff_total) > 1e-6
-            or abs(agg_open_qty) > 1e-6
-            or active_legs_count > 0
-        )
-
-        # Generate daily timeline points from actual trade timestamps
+        # Build daily timeline
         daily_pnl_map = {}
         for i in range(min(days, 30) - 1, -1, -1):
             d_str = (now_ist - timedelta(days=i)).strftime("%Y-%m-%d")
@@ -575,41 +534,15 @@ def get_multi_timeframe_strategy_analytics(
             for t in matched_trades:
                 raw_ts = t.get("trade_timestamp") or t.get("timestamp") or t.get("created_at")
                 if raw_ts:
-                    try:
-                        if isinstance(raw_ts, str):
-                            t_date = raw_ts.split("T")[0].split(" ")[0]
-                        elif isinstance(raw_ts, (datetime, pd.Timestamp)):
-                            t_date = raw_ts.strftime("%Y-%m-%d")
-                        else:
-                            t_date = now_ist.strftime("%Y-%m-%d")
-                    except Exception:
-                        t_date = now_ist.strftime("%Y-%m-%d")
+                    t_date = str(raw_ts).split("T")[0].split(" ")[0]
                 else:
                     t_date = now_ist.strftime("%Y-%m-%d")
-
-                # If trade is within daily map window, allocate realized PnL
                 if t_date in daily_pnl_map:
-                    # If trade record contains direct pnl or can be computed
-                    pnl_val = _f(t.get("pnl") or t.get("realized_pnl") or 0.0)
-                    daily_pnl_map[t_date] += pnl_val
+                    daily_pnl_map[t_date] += _f(t.get("pnl") or t.get("realized_pnl") or 0.0)
 
-        # Today's date always incorporates today's live realized + unrealized
         today_iso = now_ist.strftime("%Y-%m-%d")
         if today_iso in daily_pnl_map:
-            if abs(daily_pnl_map[today_iso]) < 1e-6:
-                daily_pnl_map[today_iso] = eff_total
-            else:
-                daily_pnl_map[today_iso] += agg_unrealized
-        elif days == 1:
-            daily_pnl_map[today_iso] = eff_total
-
-        # If no granular trade timestamps were found for historical days, fall back to proportional non-zero distribution
-        if all(abs(v) < 1e-6 for k, v in daily_pnl_map.items() if k != today_iso) and abs(eff_realized - agg_today_realized) > 1e-6:
-            hist_remainder = eff_realized - agg_today_realized
-            hist_days = max(1, len(daily_pnl_map) - 1)
-            for k in daily_pnl_map:
-                if k != today_iso:
-                    daily_pnl_map[k] = round(hist_remainder / hist_days, 2)
+            daily_pnl_map[today_iso] += strat_unrealized_mtm
 
         daily_series = [{"date": d, "pnl": round(daily_pnl_map[d], 2)} for d in sorted(daily_pnl_map.keys())]
 
@@ -617,23 +550,30 @@ def get_multi_timeframe_strategy_analytics(
             "strategy": disp_name,
             "timeframe": tf_upper,
             "realized_pnl": round(eff_realized, 2),
-            "unrealized_pnl": round(agg_unrealized, 2),
+            "unrealized_pnl": round(strat_unrealized_mtm, 2),
             "total_pnl": round(eff_total, 2),
-            "today_realized_pnl": round(agg_today_realized, 2),
-            "open_quantity": round(agg_open_qty, 2),
-            "total_trades": trade_count,
+            "gross_pnl": round(strat_gross_pnl, 2),
+            "net_pnl": round(strat_net_pnl, 2),
+            "total_charges": round(strat_charges["total"], 2),
+            "tax_breakdown": {k: round(v, 2) for k, v in strat_charges.items()},
+            "open_quantity": round(trade_open_qty, 2),
+            "total_trades": len(closed_trades_records) or trade_count,
             "win_rate": win_rate,
-            "profit_factor": profit_factor,
-            "max_drawdown": round(min(0.0, -abs(eff_realized) * 0.4 if eff_realized < 0 else 0.0), 2),
-            "avg_trade_pnl": round(eff_total / trade_count, 2) if trade_count > 0 else round(eff_total, 2),
+            "profit_factor": round(strat_gross_pnl / abs(strat_charges["total"]) if strat_charges["total"] > 0 else 1.0, 2),
+            "max_drawdown": 0.0,
+            "avg_trade_pnl": round(eff_total / (len(closed_trades_records) or 1), 2),
             "active_positions_count": active_legs_count,
             "has_activity": has_activity,
-            "legs": agg_legs,
+            "legs": trade_legs,
+            "closed_trades": closed_trades_records,
             "daily_pnl_history": daily_series,
         }
 
     # Calculate portfolio aggregates
     active_strats = [s for s in strategy_metrics.values() if s.get("has_activity")]
+    total_port_gross = sum(s["gross_pnl"] for s in strategy_metrics.values())
+    total_port_charges = sum(s["total_charges"] for s in strategy_metrics.values())
+    total_port_net = sum(s["net_pnl"] for s in strategy_metrics.values())
     total_port_pnl = sum(s["total_pnl"] for s in strategy_metrics.values())
     total_port_trades = sum(s["total_trades"] for s in strategy_metrics.values())
     winning_strats = len([s for s in strategy_metrics.values() if s["total_pnl"] > 0])
@@ -645,12 +585,19 @@ def get_multi_timeframe_strategy_analytics(
         else (max(strategy_metrics.values(), key=lambda s: s["total_trades"])["strategy"] if strategy_metrics else "None")
     )
 
+    all_trades = []
+    for s in strategy_metrics.values():
+        all_trades.extend(s.get("closed_trades", []))
+
     return {
         "status": "success",
         "timeframe": tf_upper,
         "days": days,
         "as_of": now_ist.strftime("%Y-%m-%d %H:%M:%S IST"),
         "portfolio_summary": {
+            "gross_profit": round(total_port_gross, 2),
+            "total_deductions": round(total_port_charges, 2),
+            "net_realized_profit": round(total_port_net, 2),
             "total_pnl": round(total_port_pnl, 2),
             "total_trades": total_port_trades,
             "active_strategies_count": len(active_strats) if active_strats else len(strategy_metrics),
@@ -660,5 +607,5 @@ def get_multi_timeframe_strategy_analytics(
             "top_performer": top_performer,
         },
         "strategies": strategy_metrics,
+        "all_trades": all_trades,
     }
-

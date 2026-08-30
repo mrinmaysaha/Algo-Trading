@@ -104,11 +104,9 @@ def _load_state() -> dict:
 
 
 def _save_state(state: dict) -> None:
-    tmp = _STATE_FILE + ".tmp"
     try:
-        with open(tmp, "w", encoding="utf-8") as f:
+        with open(_STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2)
-        os.replace(tmp, _STATE_FILE)
     except OSError as exc:
         logger.error("[CB STATE WRITE ERROR] %s", exc)
 

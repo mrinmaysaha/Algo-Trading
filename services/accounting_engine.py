@@ -1,32 +1,16 @@
 """
 services/accounting_engine.py
-================================================================================
 Indian F&O Derivatives Accounting & Asymmetric Taxation Engine (2026 Regulations)
-================================================================================
-
-Implements exact statutory contract-note calculations:
-1. Option Buying (Long):
-   - Entry: Stamp Duty (0.003%) on Buy Turnover. STT is 0.00%.
-   - Exit: STT (0.10%) on Sell Turnover. Stamp Duty is 0.00%.
-2. Option Selling (Short):
-   - Entry: STT (0.10%) on Sell Turnover. Stamp Duty is 0.00%.
-   - Exit: Stamp Duty (0.003%) on Buy Turnover. STT is 0.00%.
-3. Statutory Charges & Turnover:
-   - Exchange Turnover: 0.05% on total premium turnover (Buy + Sell).
-   - SEBI Turnover: Rs. 10 per Crore (0.0001% of total turnover).
-   - GST: 18% on (Brokerage + Exchange Turnover + SEBI Charges).
-   - Brokerage: Rs. 20 per executed order (or custom broker rate).
-================================================================================
 """
 
-import math
 from typing import Dict, Any, Optional
 
 
 class IndianFOAccountingEngine:
     # Statutory Rates (Indian Equity Derivatives - 2026 Norms)
     STT_OPTION_SELL_RATE = 0.0010       # 0.10% on Option Sell Turnover
-    STAMP_DUTY_BUY_RATE = 0.00003      # 0.003% on Option Buy Turnover
+    STT_FUTURES_SELL_RATE = 0.0002      # 0.02% on Futures Sell Turnover
+    STAMP_DUTY_BUY_RATE = 0.00003      # 0.003% on Buy Turnover
     EXCHANGE_TURNOVER_RATE = 0.0005    # 0.05% on Premium Turnover
     SEBI_TURNOVER_RATE = 0.000001      # Rs 10 per Crore (0.0001%)
     GST_RATE = 0.18                    # 18% on (Brokerage + Exchange + SEBI)
@@ -38,12 +22,21 @@ class IndianFOAccountingEngine:
         entry_price: float, 
         exit_price: float, 
         qty: int, 
-        direction: str = "BUY",  # 'BUY' / 'LONG' (Option Buyer) or 'SELL' / 'SHORT' (Option Seller)
-        brokerage_per_order: Optional[float] = None
+        direction: str = "BUY",
+        brokerage_per_order: Optional[float] = None,
+        is_option: bool = True
     ) -> Dict[str, Any]:
         """Calculates exact gross and net realized P&L for a closed trade with asymmetric F&O taxes."""
-        brokerage_rate = cls.BROKERAGE_PER_ORDER if brokerage_per_order is None else float(brokerage_per_order)
         qty = abs(int(qty))
+        if qty == 0:
+            return {
+                "gross_pnl": 0.0, "net_pnl": 0.0, "brokerage": 0.0, "stt": 0.0,
+                "stamp_duty": 0.0, "exchange_charges": 0.0, "sebi_charges": 0.0,
+                "gst": 0.0, "total_charges": 0.0, "buy_turnover": 0.0, "sell_turnover": 0.0
+            }
+
+        brokerage_rate = cls.BROKERAGE_PER_ORDER if brokerage_per_order is None else float(brokerage_per_order)
+        stt_rate = cls.STT_OPTION_SELL_RATE if is_option else cls.STT_FUTURES_SELL_RATE
         
         if str(direction).upper() in ["BUY", "LONG"]:
             buy_price = float(entry_price)
@@ -60,12 +53,11 @@ class IndianFOAccountingEngine:
 
         # Asymmetric tax calculation
         brokerage = 2.0 * brokerage_rate
-        stt = round(sell_turnover * cls.STT_OPTION_SELL_RATE, 2)
+        stt = round(sell_turnover * stt_rate, 2)
         stamp_duty = round(buy_turnover * cls.STAMP_DUTY_BUY_RATE, 2)
         exchange_charges = round(total_turnover * cls.EXCHANGE_TURNOVER_RATE, 2)
         sebi_charges = round(total_turnover * cls.SEBI_TURNOVER_RATE, 2)
         
-        # GST applies on Brokerage, Exchange Charges, and SEBI Charges
         gst = round((brokerage + exchange_charges + sebi_charges) * cls.GST_RATE, 2)
         total_charges = round(brokerage + stt + stamp_duty + exchange_charges + sebi_charges + gst, 2)
         net_pnl = round(gross_pnl - total_charges, 2)
@@ -91,12 +83,21 @@ class IndianFOAccountingEngine:
         current_ltp: float, 
         qty: int, 
         direction: str = "BUY",
-        brokerage_per_order: Optional[float] = None
+        brokerage_per_order: Optional[float] = None,
+        is_option: bool = True
     ) -> Dict[str, Any]:
-        """Calculates live Gross MTM and Estimated Net MTM factoring accrued entry taxes and estimated exit taxes."""
-        brokerage_rate = cls.BROKERAGE_PER_ORDER if brokerage_per_order is None else float(brokerage_per_order)
-        is_long = str(direction).upper() in ["BUY", "LONG"]
+        """Calculates live Gross MTM and Estimated Net MTM factoring accrued entry and estimated exit taxes."""
         qty = abs(int(qty))
+        if qty == 0:
+            return {
+                "gross_mtm": 0.0, "net_mtm": 0.0, "accrued_and_exit_charges": 0.0,
+                "stt": 0.0, "stamp_duty": 0.0, "exchange_charges": 0.0, "sebi_charges": 0.0,
+                "gst": 0.0, "brokerage": 0.0, "entry_turnover": 0.0, "est_exit_turnover": 0.0
+            }
+
+        brokerage_rate = cls.BROKERAGE_PER_ORDER if brokerage_per_order is None else float(brokerage_per_order)
+        stt_rate = cls.STT_OPTION_SELL_RATE if is_option else cls.STT_FUTURES_SELL_RATE
+        is_long = str(direction).upper() in ["BUY", "LONG"]
         entry_p = float(entry_price)
         ltp = float(current_ltp)
 
@@ -105,18 +106,16 @@ class IndianFOAccountingEngine:
             entry_turnover = entry_p * qty
             est_exit_turnover = ltp * qty
             
-            # Option Buyer: Entry pays Stamp Duty; Exit pays STT
             entry_stamp_duty = entry_turnover * cls.STAMP_DUTY_BUY_RATE
             entry_stt = 0.0
-            est_exit_stt = est_exit_turnover * cls.STT_OPTION_SELL_RATE
+            est_exit_stt = est_exit_turnover * stt_rate
             est_exit_stamp_duty = 0.0
         else:  # Option Short
             gross_mtm = (entry_p - ltp) * qty
             entry_turnover = entry_p * qty
             est_exit_turnover = ltp * qty
             
-            # Option Seller: Entry pays STT; Exit pays Stamp Duty
-            entry_stt = entry_turnover * cls.STT_OPTION_SELL_RATE
+            entry_stt = entry_turnover * stt_rate
             entry_stamp_duty = 0.0
             est_exit_stamp_duty = est_exit_turnover * cls.STAMP_DUTY_BUY_RATE
             est_exit_stt = 0.0

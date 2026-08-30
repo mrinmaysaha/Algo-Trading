@@ -110,23 +110,25 @@ def test_strategy_pnl_reconciles_tradebook(monkeypatch):
     assert analytics["status"] == "success"
 
     summary = analytics["portfolio_summary"]
-    assert summary["total_pnl"] == 3015.50
-    assert summary["total_trades"] == 20
+    assert summary["gross_profit"] == 3015.50
+    assert summary["net_realized_profit"] == 2410.53
+    assert summary["total_deductions"] == 604.97
+    assert summary["total_trades"] == 10
     assert summary["winning_strategies_count"] == 2
     assert summary["losing_strategies_count"] == 2
 
     strats = analytics["strategies"]
-    assert strats["Post10_Institutional_OB_VWAP"]["realized_pnl"] == 7900.00
-    assert strats["Post10_Institutional_OB_VWAP"]["total_trades"] == 10
+    assert strats["Post10_Institutional_OB_VWAP"]["gross_pnl"] == 7900.00
+    assert strats["Post10_Institutional_OB_VWAP"]["total_trades"] == 5
 
-    assert strats["3Min_ORB_Quant"]["realized_pnl"] == 4482.00
-    assert strats["3Min_ORB_Quant"]["total_trades"] == 2
+    assert strats["3Min_ORB_Quant"]["gross_pnl"] == 4482.00
+    assert strats["3Min_ORB_Quant"]["total_trades"] == 1
 
-    assert strats["Prime Indicator Scalper Options"]["realized_pnl"] == -2757.00
-    assert strats["Prime Indicator Scalper Options"]["total_trades"] == 2
+    assert strats["Prime Indicator Scalper Options"]["gross_pnl"] == -2757.00
+    assert strats["Prime Indicator Scalper Options"]["total_trades"] == 1
 
-    assert strats["SMC_FVG_ZeroLag_Options"]["realized_pnl"] == -6609.50
-    assert strats["SMC_FVG_ZeroLag_Options"]["total_trades"] == 6
+    assert strats["SMC_FVG_ZeroLag_Options"]["gross_pnl"] == -6609.50
+    assert strats["SMC_FVG_ZeroLag_Options"]["total_trades"] == 3
 
 
 if __name__ == "__main__":
