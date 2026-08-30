@@ -49,7 +49,7 @@ class Nifty500ScannerEngine:
 
     @staticmethod
     def calculate_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
-        """Calculates EMA20, EMA50, EMA200, VWAP, RSI(14), ADX(14), and ATR(14)."""
+        """Calculates EMA20, EMA50, EMA200, VWAP, RSI(14), ADX(14), ATR(14), and Donchian(20)."""
         df = df.copy()
         if len(df) < 25:
             return df
@@ -118,11 +118,12 @@ class Nifty500ScannerEngine:
         symbol: str, 
         spot_price: float, 
         setup_type: str = "INTRADAY",
-        option_type: str = "CE"
+        option_type: str = "CE",
+        api_key: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Picks the exact contract:
-        - INTRADAY: 1-Strike ITM Call/Put (Delta ~0.60, high liquidity, low theta loss).
+        - INTRADAY: 1-Strike ITM Call/Put (Delta ~0.60, high liquidity, low theta decay).
         - SWING: ATM Call/Put (Delta ~0.50).
         """
         try:
@@ -135,7 +136,7 @@ class Nifty500ScannerEngine:
             if not options:
                 return None
 
-            # Get nearest monthly/weekly expiry sorted by actual calendar date
+            # Sort expiry dates by actual calendar date
             def parse_expiry_date(exp_str):
                 try:
                     return datetime.strptime(exp_str.strip(), "%d-%b-%y").date()
@@ -190,6 +191,17 @@ class Nifty500ScannerEngine:
             if not selected_contract:
                 return None
 
+            # Try to fetch live option quote if broker API session is available
+            live_opt_ltp = None
+            if api_key:
+                try:
+                    from services.quotes_service import get_quotes
+                    q_ok, q_res, _ = get_quotes(selected_contract.symbol, "NFO", api_key=api_key)
+                    if q_ok and q_res.get("data") and q_res["data"].get("ltp"):
+                        live_opt_ltp = float(q_res["data"]["ltp"])
+                except Exception as q_err:
+                    logger.debug(f"Live quote fetch for {selected_contract.symbol} skipped: {q_err}")
+
             return {
                 "symbol": selected_contract.symbol,
                 "token": selected_contract.token,
@@ -199,11 +211,41 @@ class Nifty500ScannerEngine:
                 "option_type": option_type.upper(),
                 "expiry": front_expiry,
                 "lot_size": int(selected_contract.lotsize or 1),
-                "estimated_delta": estimated_delta
+                "estimated_delta": estimated_delta,
+                "live_ltp": live_opt_ltp
             }
         except Exception as e:
             logger.error(f"Error resolving option for {symbol}: {e}")
             return None
+
+    @classmethod
+    def _fetch_history_dual_source(
+        cls, 
+        symbol: str, 
+        exchange: str, 
+        interval: str, 
+        start_date: str, 
+        end_date: str, 
+        api_key: Optional[str] = None
+    ) -> tuple[bool, Dict[str, Any], int]:
+        """
+        Smart dual-source fetcher:
+        1. First tries local Historify DuckDB ('db') for instant zero-latency retrieval without consuming API quotas.
+        2. If data is not in local DB, automatically falls back to live Broker API ('api').
+        """
+        # 1. Try DuckDB
+        ok_db, resp_db, code_db = get_history(
+            symbol=symbol, exchange=exchange, interval=interval,
+            start_date=start_date, end_date=end_date, source="db"
+        )
+        if ok_db and resp_db.get("data") and len(resp_db["data"]) >= 25:
+            return ok_db, resp_db, code_db
+
+        # 2. Fallback to Broker API
+        return get_history(
+            symbol=symbol, exchange=exchange, interval=interval,
+            start_date=start_date, end_date=end_date, api_key=api_key, source="api"
+        )
 
     @classmethod
     def scan_symbol(cls, symbol: str, api_key: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -215,7 +257,7 @@ class Nifty500ScannerEngine:
 
         # 1. Intraday Momentum Scan (5-Minute Bars)
         try:
-            ok_5m, resp_5m, _ = get_history(
+            ok_5m, resp_5m, _ = cls._fetch_history_dual_source(
                 symbol=symbol, exchange="NSE", interval="5m",
                 start_date=(datetime.now(ist) - timedelta(days=5)).strftime("%Y-%m-%d"),
                 end_date=today_str, api_key=api_key
@@ -245,10 +287,12 @@ class Nifty500ScannerEngine:
                     fo_eligible = cls.check_fo_eligibility(symbol)
                     opt_details = None
                     if fo_eligible:
-                        opt_details = cls.resolve_option_contract(symbol, spot_entry, setup_type="INTRADAY", option_type="CE")
+                        opt_details = cls.resolve_option_contract(
+                            symbol, spot_entry, setup_type="INTRADAY", option_type="CE", api_key=api_key
+                        )
                         if opt_details:
                             delta = opt_details["estimated_delta"]
-                            est_opt_entry = round(max(5.0, (spot_entry - opt_details["strike"]) + (atr * 0.8)), 2)
+                            est_opt_entry = opt_details.get("live_ltp") or round(max(5.0, (spot_entry - opt_details["strike"]) + (atr * 0.8)), 2)
                             opt_details["opt_entry"] = est_opt_entry
                             opt_details["opt_sl"] = round(max(0.5, est_opt_entry - ((spot_entry - spot_sl) * delta)), 2)
                             opt_details["opt_tp1"] = round(est_opt_entry + ((spot_tp1 - spot_entry) * delta), 2)
@@ -282,7 +326,7 @@ class Nifty500ScannerEngine:
 
         # 2. Swing Breakout Scan (Daily Bars)
         try:
-            ok_1d, resp_1d, _ = get_history(
+            ok_1d, resp_1d, _ = cls._fetch_history_dual_source(
                 symbol=symbol, exchange="NSE", interval="D",
                 start_date=start_history, end_date=today_str, api_key=api_key
             )
@@ -312,10 +356,12 @@ class Nifty500ScannerEngine:
                     fo_eligible = cls.check_fo_eligibility(symbol)
                     opt_details = None
                     if fo_eligible:
-                        opt_details = cls.resolve_option_contract(symbol, spot_entry, setup_type="SWING", option_type="CE")
+                        opt_details = cls.resolve_option_contract(
+                            symbol, spot_entry, setup_type="SWING", option_type="CE", api_key=api_key
+                        )
                         if opt_details:
                             delta = opt_details["estimated_delta"]
-                            est_opt_entry = round(max(10.0, atr * 1.2), 2)
+                            est_opt_entry = opt_details.get("live_ltp") or round(max(10.0, atr * 1.2), 2)
                             opt_details["opt_entry"] = est_opt_entry
                             opt_details["opt_sl"] = round(max(1.0, est_opt_entry - ((spot_entry - spot_sl) * delta)), 2)
                             opt_details["opt_tp1"] = round(est_opt_entry + ((spot_tp1 - spot_entry) * delta), 2)
@@ -456,7 +502,6 @@ class Nifty500ScannerEngine:
         if age_seconds > 300:
             return f"⏳ *Signal #{sig_id} Expired* ({int(age_seconds)}s old).\nTo prevent slippage, orders must be placed within 5 minutes."
 
-        from services.place_order_service import place_order
         from database.auth_db import get_api_key_for_tradingview
 
         if not api_key:
@@ -481,6 +526,7 @@ class Nifty500ScannerEngine:
             }
 
             try:
+                from services.place_order_service import place_order
                 success, resp, code = place_order(order_payload)
                 if success:
                     return (
@@ -530,6 +576,7 @@ class Nifty500ScannerEngine:
             }
 
             try:
+                from services.place_order_service import place_order
                 success, resp, code = place_order(order_payload)
                 if success:
                     return (
