@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenAlgo - Nifty 500 Scanner & Option Radar</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @keyframes pulse-glow {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.6; transform: scale(1.05); }
+        }
+        .glow-dot { animation: pulse-glow 2s infinite ease-in-out; }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen p-4 md:p-6 font-sans">
+
+    <!-- Top Navigation Header -->
+    <header class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 border-b border-slate-800 pb-5 gap-4">
+        <div>
+            <div class="flex items-center space-x-3">
+                <span class="w-3 h-3 rounded-full bg-emerald-400 glow-dot shadow-lg shadow-emerald-500/50"></span>
+                <h1 class="text-xl md:text-2xl font-black text-emerald-400 tracking-wide uppercase">Nifty 500 Radar & Two-Way WhatsApp Desk</h1>
+            </div>
+            <p class="text-xs text-slate-400 mt-1">Multi-Timeframe Breakout Scanner • 1-Strike ITM Option Radar • Automated WhatsApp 2-Way Execution</p>
+        </div>
+
+        <div class="flex items-center space-x-3">
+            <span id="scan-status" class="text-xs px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 font-mono">Status: Ready</span>
+            <button onclick="triggerNewScan()" id="btn-scan" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-xs font-bold transition flex items-center space-x-2 shadow-lg shadow-emerald-950 active:scale-95">
+                <i data-lucide="scan" class="w-4 h-4"></i>
+                <span>Scan Universe Now</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- Filter Navigation Bar -->
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-slate-900 border border-slate-800 p-2.5 rounded-xl mb-6 gap-3">
+        <div class="flex flex-wrap gap-1.5">
+            <button onclick="setFilter('ALL')" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition bg-emerald-600 text-white shadow" id="filter-ALL">All Signals</button>
+            <button onclick="setFilter('INTRADAY')" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition bg-slate-800 text-slate-300 hover:bg-slate-700" id="filter-INTRADAY">Intraday (5M)</button>
+            <button onclick="setFilter('SWING')" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition bg-slate-800 text-slate-300 hover:bg-slate-700" id="filter-SWING">Swing (1D)</button>
+            <button onclick="setFilter('OPTIONS')" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition bg-slate-800 text-slate-300 hover:bg-slate-700" id="filter-OPTIONS">F&O Options Only</button>
+        </div>
+        <span class="text-xs text-slate-400 font-mono pr-2" id="last-updated-time">Last Updated: --</span>
+    </div>
+
+    <!-- Signals Table -->
+    <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-2xl">
+        <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs">
+                <thead class="bg-slate-850 border-b border-slate-800 uppercase text-[11px] text-slate-400 font-bold tracking-wider">
+                    <tr>
+                        <th class="p-3.5">ID</th>
+                        <th class="p-3.5">Stock</th>
+                        <th class="p-3.5">Setup</th>
+                        <th class="p-3.5">Spot Price</th>
+                        <th class="p-3.5">Stop Loss</th>
+                        <th class="p-3.5">Target 1 (1:1.5)</th>
+                        <th class="p-3.5">Target 2 (1:3.0)</th>
+                        <th class="p-3.5">Momentum & Surge</th>
+                        <th class="p-3.5">Option Recommendation</th>
+                        <th class="p-3.5 text-center">1-Click Action</th>
+                    </tr>
+                </thead>
+                <tbody id="signals-tbody" class="divide-y divide-slate-800/60 font-mono">
+                    <tr>
+                        <td colspan="10" class="p-8 text-center text-slate-500 font-sans">
+                            No signals active. Click "Scan Universe Now" to screen Nifty 500 stocks.
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- 1-Click Order Confirmation Modal -->
+    <div id="execution-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm hidden flex items-center justify-center z-50 p-4">
+        <div class="bg-slate-900 border border-slate-700 p-6 rounded-2xl max-w-md w-full shadow-2xl font-sans">
+            <h3 class="text-lg font-bold text-emerald-400 mb-1 flex items-center space-x-2">
+                <i data-lucide="zap" class="w-5 h-5 text-emerald-400"></i>
+                <span>Confirm 1-Click Execution</span>
+            </h3>
+            <p class="text-xs text-slate-400 mb-4">Routes immediate order through OpenAlgo to your active broker session and broadcasts confirmation.</p>
+            
+            <div id="modal-details" class="bg-slate-950 p-4 rounded-xl border border-slate-800 text-xs space-y-2 mb-5 font-mono"></div>
+
+            <div class="flex justify-end space-x-3">
+                <button onclick="closeModal()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs font-semibold text-slate-300">Cancel</button>
+                <button onclick="confirmOrderExecution()" id="btn-confirm-exec" class="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-xs font-bold text-white shadow-lg shadow-emerald-950">Confirm & Route</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentFilter = 'ALL';
+        let activeOrderPayload = null;
+
+        async function fetchSignals() {
+            try {
+                const res = await fetch(`/api/scanner/signals?filter=${currentFilter}`);
+                const data = await res.json();
+                
+                document.getElementById('last-updated-time').textContent = `Updated: ${data.last_updated || 'Never'}`;
+                const scanStatus = document.getElementById('scan-status');
+                if (data.is_scanning) {
+                    scanStatus.textContent = "Status: Scanning Universe...";
+                    scanStatus.className = "text-xs px-3 py-1.5 rounded-lg bg-amber-950/40 border border-amber-800 text-amber-400 font-mono animate-pulse";
+                } else {
+                    scanStatus.textContent = "Status: Radar Active";
+                    scanStatus.className = "text-xs px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-emerald-400 font-mono";
+                }
+
+                const tbody = document.getElementById('signals-tbody');
+                if (!data.signals || data.signals.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="10" class="p-8 text-center text-slate-500 font-sans">No active breakout signals matching filter. Click "Scan Universe Now" to screen stocks.</td></tr>`;
+                    return;
+                }
+
+                tbody.innerHTML = '';
+                data.signals.forEach(sig => {
+                    const isIntra = sig.setup_type === 'INTRADAY';
+                    const badge = isIntra ? 
+                        '<span class="px-2 py-0.5 rounded text-[10px] bg-cyan-950/50 border border-cyan-800 text-cyan-400 font-sans font-bold">5M INTRADAY</span>' : 
+                        '<span class="px-2 py-0.5 rounded text-[10px] bg-purple-950/50 border border-purple-800 text-purple-400 font-sans font-bold">1D SWING</span>';
+
+                    let optionHtml = '<span class="text-slate-500 text-[11px] font-sans">Cash Equity Only</span>';
+                    if (sig.option_recommendation) {
+                        const opt = sig.option_recommendation;
+                        optionHtml = `
+                            <div class="text-[11px]">
+                                <span class="text-amber-400 font-bold">${opt.symbol}</span>
+                                <span class="text-slate-400">(${opt.strike_type})</span><br>
+                                <span class="text-slate-400">Est: ₹${opt.opt_entry} | SL: ₹${opt.opt_sl}</span>
+                            </div>
+                        `;
+                    }
+
+                    tbody.innerHTML += `
+                        <tr class="hover:bg-slate-850/50 transition">
+                            <td class="p-3.5 text-slate-500 font-bold">#${sig.signal_id}</td>
+                            <td class="p-3.5 font-bold text-slate-100 text-sm">${sig.symbol}</td>
+                            <td class="p-3.5">${badge}</td>
+                            <td class="p-3.5 font-bold text-emerald-400">₹${sig.spot_price.toFixed(2)}</td>
+                            <td class="p-3.5 text-rose-400">₹${sig.sl.toFixed(2)}</td>
+                            <td class="p-3.5 text-cyan-400">₹${sig.tp1.toFixed(2)}</td>
+                            <td class="p-3.5 text-emerald-300">₹${sig.tp2.toFixed(2)}</td>
+                            <td class="p-3.5 text-slate-300">RSI: ${sig.rsi} | Vol: ${sig.volume_surge}x</td>
+                            <td class="p-3.5">${optionHtml}</td>
+                            <td class="p-3.5 text-center">
+                                <div class="flex items-center justify-center space-x-2">
+                                    ${sig.option_recommendation ? `
+                                        <button onclick='openExecutionModal(${JSON.stringify(sig)}, true)' class="px-2.5 py-1.5 bg-amber-600 hover:bg-amber-500 rounded text-[11px] font-bold text-white shadow active:scale-95 font-sans">
+                                            Option 1-Click
+                                        </button>
+                                    ` : ''}
+                                    <button onclick='openExecutionModal(${JSON.stringify(sig)}, false)' class="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded text-[11px] font-bold text-white shadow active:scale-95 font-sans">
+                                        Equity 1-Click
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                });
+                lucide.createIcons();
+            } catch (err) {
+                console.error("Signal fetch failed:", err);
+            }
+        }
+
+        async function triggerNewScan() {
+            const btn = document.getElementById('btn-scan');
+            btn.disabled = true;
+            btn.classList.add('opacity-50');
+            try {
+                await fetch('/api/scanner/run', { method: 'POST' });
+            } catch (err) {
+                console.error(err);
+            }
+            setTimeout(() => {
+                btn.disabled = false;
+                btn.classList.remove('opacity-50');
+            }, 3000);
+            fetchSignals();
+        }
+
+        function setFilter(filter) {
+            currentFilter = filter;
+            ['ALL', 'INTRADAY', 'SWING', 'OPTIONS'].forEach(f => {
+                const b = document.getElementById(`filter-${f}`);
+                if (b) b.className = (f === filter) ? 
+                    "px-3.5 py-1.5 rounded-lg text-xs font-semibold transition bg-emerald-600 text-white shadow" : 
+                    "px-3.5 py-1.5 rounded-lg text-xs font-semibold transition bg-slate-800 text-slate-300 hover:bg-slate-700";
+            });
+            fetchSignals();
+        }
+
+        function openExecutionModal(signal, isOption) {
+            const sym = isOption ? signal.option_recommendation.symbol : signal.symbol;
+            const exch = isOption ? "NFO" : "NSE";
+            const qty = isOption ? signal.option_recommendation.lot_size : 10;
+            const prod = signal.setup_type === 'INTRADAY' ? 'MIS' : (isOption ? 'NRML' : 'CNC');
+
+            activeOrderPayload = {
+                symbol: sym,
+                exchange: exch,
+                quantity: qty,
+                order_type: "BUY",
+                price_type: "MARKET",
+                product: prod,
+                signal_data: signal
+            };
+
+            const details = document.getElementById('modal-details');
+            details.innerHTML = `
+                <div><span class="text-slate-400">Signal ID:</span> #${signal.signal_id} (${signal.setup_type})</div>
+                <div><span class="text-slate-400">Contract / Stock:</span> <span class="text-amber-400 font-bold">${sym}</span></div>
+                <div><span class="text-slate-400">Exchange:</span> ${exch} | <span class="text-slate-400">Product:</span> ${prod}</div>
+                <div><span class="text-slate-400">Order Quantity:</span> ${qty} units</div>
+                <div><span class="text-slate-400">Stop Loss:</span> ₹${isOption ? signal.option_recommendation.opt_sl : signal.sl}</div>
+                <div><span class="text-slate-400">Target 1:</span> ₹${isOption ? signal.option_recommendation.opt_tp1 : signal.tp1}</div>
+                <div><span class="text-slate-400">Target 2:</span> ₹${isOption ? signal.option_recommendation.opt_tp2 : signal.tp2}</div>
+            `;
+
+            document.getElementById('execution-modal').classList.remove('hidden');
+        }
+
+        function closeModal() {
+            document.getElementById('execution-modal').classList.add('hidden');
+            activeOrderPayload = null;
+        }
+
+        async function confirmOrderExecution() {
+            if (!activeOrderPayload) return;
+            const btn = document.getElementById('btn-confirm-exec');
+            btn.textContent = "Routing Order...";
+            btn.disabled = true;
+
+            try {
+                const res = await fetch('/api/scanner/execute_1click', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(activeOrderPayload)
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    alert("Order Placed Successfully!\n" + (data.message || ""));
+                } else {
+                    alert("Order Execution Error: " + (data.message || "Failed"));
+                }
+            } catch (err) {
+                alert("Execution Request Failed: " + err);
+            } finally {
+                btn.textContent = "Confirm & Route";
+                btn.disabled = false;
+                closeModal();
+            }
+        }
+
+        setInterval(fetchSignals, 10000);
+        fetchSignals();
+        lucide.createIcons();
+    </script>
+</body>
+</html>
