@@ -234,7 +234,11 @@ def get_multi_timeframe_strategy_analytics(
     tf_upper = str(timeframe or "1D").upper()
     days_map = {"1D": 1, "2D": 2, "1W": 7, "7D": 7, "2W": 14, "15D": 15, "1M": 30, "30D": 30, "ALL": 3650}
 
-    if tf_upper == "CUSTOM" and start_date and end_date:
+    if tf_upper == "1D":
+        start_dt = now_ist.replace(hour=0, minute=0, second=0, microsecond=0).replace(tzinfo=None)
+        end_dt = now_ist.replace(tzinfo=None)
+        days = 1
+    elif tf_upper == "CUSTOM" and start_date and end_date:
         try:
             start_dt = datetime.strptime(start_date, "%Y-%m-%d")
             end_dt = datetime.strptime(f"{end_date} 23:59:59", "%Y-%m-%d %H:%M:%S")
@@ -270,7 +274,9 @@ def get_multi_timeframe_strategy_analytics(
         for p in positions
     }
 
-    # 2b. Read executed trades from tradebook / sandbox
+    # 2b. Read executed trades from tradebook / sandbox with robust timestamp parsing
+    from blueprints.pnltracker import parse_trade_timestamp
+
     strategy_trades_map: dict[str, list[dict[str, Any]]] = {}
     try:
         from services.tradebook_service import get_tradebook
@@ -278,19 +284,13 @@ def get_multi_timeframe_strategy_analytics(
         raw_trades = tb_resp.get("data") if (ok_tb and isinstance(tb_resp, dict)) else []
         if isinstance(raw_trades, list):
             for tr in raw_trades:
-                t_time = tr.get("trade_timestamp") or tr.get("timestamp") or tr.get("fill_time")
-                parsed_dt = None
-                if t_time:
-                    try:
-                        parsed_dt = datetime.fromisoformat(str(t_time).replace("Z", "+00:00")).replace(tzinfo=None)
-                    except Exception:
-                        try:
-                            parsed_dt = datetime.strptime(str(t_time).split(".")[0], "%Y-%m-%d %H:%M:%S")
-                        except Exception:
-                            parsed_dt = None
+                raw_ts = tr.get("trade_timestamp") or tr.get("timestamp") or tr.get("fill_time")
+                parsed_tz = parse_trade_timestamp(raw_ts) if raw_ts else None
+                parsed_dt = parsed_tz.replace(tzinfo=None) if parsed_tz else None
 
-                if parsed_dt and not (start_dt <= parsed_dt <= end_dt):
-                    continue
+                if parsed_dt is not None:
+                    if not (start_dt <= parsed_dt <= end_dt):
+                        continue
 
                 strat_name = tr.get("strategy") or "untagged"
                 strategy_trades_map.setdefault(strat_name, []).append(tr)
@@ -304,19 +304,13 @@ def get_multi_timeframe_strategy_analytics(
         if user_id:
             sb_trades = sb_trades.filter(SandboxTrades.user_id == user_id)
         for st in sb_trades.all():
-            t_time = st.trade_timestamp
-            parsed_dt = None
-            if t_time:
-                try:
-                    parsed_dt = datetime.fromisoformat(str(t_time).replace("Z", "+00:00")).replace(tzinfo=None)
-                except Exception:
-                    try:
-                        parsed_dt = datetime.strptime(str(t_time).split(".")[0], "%Y-%m-%d %H:%M:%S")
-                    except Exception:
-                        parsed_dt = None
+            raw_ts = st.trade_timestamp
+            parsed_tz = parse_trade_timestamp(raw_ts) if raw_ts else None
+            parsed_dt = parsed_tz.replace(tzinfo=None) if parsed_tz else None
 
-            if parsed_dt and not (start_dt <= parsed_dt <= end_dt):
-                continue
+            if parsed_dt is not None:
+                if not (start_dt <= parsed_dt <= end_dt):
+                    continue
 
             strat_name = st.strategy or "untagged"
             tr_dict = {
@@ -329,8 +323,7 @@ def get_multi_timeframe_strategy_analytics(
                 "strategy": strat_name,
                 "trade_timestamp": str(st.trade_timestamp),
             }
-            if strat_name not in strategy_trades_map:
-                strategy_trades_map.setdefault(strat_name, []).append(tr_dict)
+            strategy_trades_map.setdefault(strat_name, []).append(tr_dict)
     except Exception:
         pass
 
@@ -519,6 +512,16 @@ def get_multi_timeframe_strategy_analytics(
         winning_trades = sum(1 for t in closed_trades_records if t["net_pnl"] > 0)
         win_rate = round((winning_trades / len(closed_trades_records)) * 100.0, 1) if closed_trades_records else 0.0
 
+        # Mathematical Profit Factor: Gross Wins / Gross Losses
+        gross_wins = sum(t["gross_pnl"] for t in closed_trades_records if t["gross_pnl"] > 0)
+        gross_losses = abs(sum(t["gross_pnl"] for t in closed_trades_records if t["gross_pnl"] < 0))
+        if gross_losses > 0:
+            profit_factor = round(gross_wins / gross_losses, 2)
+        elif gross_wins > 0:
+            profit_factor = 99.0
+        else:
+            profit_factor = 0.0
+
         eff_realized = strat_net_pnl
         eff_total = eff_realized + strat_unrealized_mtm
         active_legs_count = len([l for l in trade_legs if abs(_f(l.get("quantity", 0))) > 1e-9])
@@ -559,7 +562,7 @@ def get_multi_timeframe_strategy_analytics(
             "open_quantity": round(trade_open_qty, 2),
             "total_trades": len(closed_trades_records) or trade_count,
             "win_rate": win_rate,
-            "profit_factor": round(strat_gross_pnl / abs(strat_charges["total"]) if strat_charges["total"] > 0 else 1.0, 2),
+            "profit_factor": profit_factor,
             "max_drawdown": 0.0,
             "avg_trade_pnl": round(eff_total / (len(closed_trades_records) or 1), 2),
             "active_positions_count": active_legs_count,

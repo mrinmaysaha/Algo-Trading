@@ -138,13 +138,13 @@ if __name__ == "__main__":
         test_mcx_silverm_available_strikes()
         print("PASSED test_mcx_silverm_available_strikes")
 
-        print("Running test_mcx_silver_variant_discovery...")
-        test_mcx_silver_variant_discovery()
-        print("PASSED test_mcx_silver_variant_discovery")
+        print("Running test_mcx_silver_no_macro_variant_fallback...")
+        test_mcx_silver_no_macro_variant_fallback()
+        print("PASSED test_mcx_silver_no_macro_variant_fallback")
 
-        print("Running test_mcx_find_option_in_database_variant...")
-        test_mcx_find_option_in_database_variant()
-        print("PASSED test_mcx_find_option_in_database_variant")
+        print("Running test_mcx_find_option_in_database_strict_mini...")
+        test_mcx_find_option_in_database_strict_mini()
+        print("PASSED test_mcx_find_option_in_database_strict_mini")
 
         class MockMonkeypatch:
             def setattr(self, target, name, value):
