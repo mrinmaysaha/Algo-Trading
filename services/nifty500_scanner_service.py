@@ -519,10 +519,49 @@ class Nifty500ScannerEngine:
             return "🔒 *Access Denied:* Your phone number is not registered with this OpenAlgo instance. Please link your number in `/whatsapp`."
 
         clean_msg = message_body.strip().upper()
+
+        # Handle /help, /menu, /start
+        if clean_msg in ("/HELP", "HELP", "/MENU", "MENU", "/START", "START"):
+            return (
+                "🤖 *OpenAlgo WhatsApp Trading Desk*\n"
+                "━━━━━━━━━━━━━━━━━━━━━━\n"
+                "📊 *Account Commands:*\n"
+                "• `/status` - Connection status\n"
+                "• `/positions` - Open positions & P&L\n"
+                "• `/pnl` - Today's net P&L\n"
+                "• `/orderbook` - Today's orders\n"
+                "• `/tradebook` - Executed trades\n"
+                "• `/holdings` - Demat holdings\n"
+                "• `/funds` - Available balance\n"
+                "• `/signals` - List currently active radar signals\n\n"
+                "⚡ *Radar 1-Click Order Execution:*\n"
+                "• `BUY <ID>` - Buy 1 Lot option on radar alert (e.g. `BUY 101`)\n"
+                "• `BUY <ID> <N>L` - Buy N lots option (e.g. `BUY 101 2L`)\n"
+                "• `BUY <ID> EQ <Qty>` - Buy cash equity (e.g. `BUY 101 EQ 50`)\n"
+                "━━━━━━━━━━━━━━━━━━━━━━"
+            )
+
+        # Handle /signals
+        if clean_msg in ("/SIGNALS", "SIGNALS", "/RADAR", "RADAR"):
+            now = datetime.now(ist)
+            valid_signals = [
+                sig for sig in active_signals_registry.values()
+                if (now - sig["created_at"]).total_seconds() <= 300
+            ]
+            if not valid_signals:
+                return "📡 *Radar Status:* No active breakout signals in the last 5 minutes.\nUse `/help` to see all commands."
+            
+            lines = ["📡 *Active Radar Breakout Signals:*", "━━━━━━━━━━━━━━━━━━━━━━"]
+            for s in valid_signals[-5:]:
+                opt_txt = f" | {s['option_recommendation']['symbol']}" if s.get("option_recommendation") else " | Cash"
+                lines.append(f"• *#{s['signal_id']}*: {s['symbol']} ({s['setup_type']}){opt_txt} - ₹{s['spot_price']:.2f}")
+            lines.append("━━━━━━━━━━━━━━━━━━━━━━\nReply `BUY <ID>` to execute.")
+            return "\n".join(lines)
+
         match = re.match(r"^BUY\s+(\d+)(?:\s+(EQ|\d+L|\d+))?(?:\s+(\d+))?$", clean_msg)
 
         if not match:
-            return "❌ *Invalid Command Format.*\nReply `BUY <ID>` (e.g. `BUY 101`) or `BUY <ID> EQ 50`."
+            return "❌ *Invalid Command Format.*\nReply `BUY <ID>` (e.g. `BUY 101`), `BUY <ID> EQ 50`, or send `/help` for commands."
 
         sig_id = match.group(1)
         param1 = match.group(2)

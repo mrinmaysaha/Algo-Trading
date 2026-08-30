@@ -116,6 +116,15 @@ def test_whatsapp_alert_format_and_inbound_execution():
         assert "OPTION ORDER EXECUTED VIA WHATSAPP" in res_text
         assert "RELIANCE28AUG262980CE" in res_text
 
+        # Test /help
+        help_text = Nifty500ScannerEngine.execute_inbound_whatsapp_command("/help", "+919876543210")
+        assert "Trading Desk" in help_text
+        assert "BUY <ID>" in help_text
+
+        # Test /signals
+        sig_text = Nifty500ScannerEngine.execute_inbound_whatsapp_command("/signals", "+919876543210")
+        assert "RELIANCE" in sig_text
+
 
 def test_scanner_api_endpoints(client):
     """Test Flask Blueprint routes for scanner."""

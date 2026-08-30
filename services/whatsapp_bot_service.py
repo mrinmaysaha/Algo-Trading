@@ -1048,17 +1048,25 @@ class WhatsAppBotService:
     def _cmd_help(self, wa, msg, chat, sender_jid, args) -> None:
         self.send_sync(
             chat,
-            "OpenAlgo WhatsApp Bot\n"
-            "/status - connection + paired status\n"
-            "/orderbook - today's orders\n"
-            "/tradebook - today's trades\n"
-            "/positions - open positions\n"
-            "/holdings - holdings\n"
-            "/funds - account funds\n"
-            "/pnl - net P&L\n"
-            "/quote <symbol> [exchange] - last traded price\n"
-            "/closeall - square off all positions\n"
-            "/mode - live or analyze mode",
+            "🤖 *OpenAlgo WhatsApp Trading Desk*\n"
+            "━━━━━━━━━━━━━━━━━━━━━━\n"
+            "📊 *Account & Positions:*\n"
+            "• `/status` - Connection & paired status\n"
+            "• `/positions` - Current open positions & P&L\n"
+            "• `/pnl` - Today's net realized & unrealized P&L\n"
+            "• `/orderbook` - Today's open & closed orders\n"
+            "• `/tradebook` - Executed trades & fill details\n"
+            "• `/holdings` - Demat portfolio holdings\n"
+            "• `/funds` - Available balance & margin limits\n\n"
+            "⚡ *Trading & Radar Commands:*\n"
+            "• `/quote <sym> [exch]` - Live market price (e.g. `/quote RELIANCE NSE`)\n"
+            "• `/closeall` - Emergency square-off all open positions\n"
+            "• `/mode` - View live or analyze paper trading mode\n"
+            "• `BUY <ID>` - Buy 1 Lot option on radar alert (e.g. `BUY 101`)\n"
+            "• `BUY <ID> <N>L` - Buy N lots option (e.g. `BUY 101 2L`)\n"
+            "• `BUY <ID> EQ <Qty>` - Buy cash equity (e.g. `BUY 101 EQ 50`)\n"
+            "━━━━━━━━━━━━━━━━━━━━━━\n"
+            "Type `/help` anytime to view this command list.",
         )
 
     def _cmd_status(self, wa, msg, chat, sender_jid, args) -> None:
