@@ -438,13 +438,19 @@ def get_multi_timeframe_strategy_analytics(
 
                 entry_p = avg_buy if first_action == "BUY" else avg_sell
                 exit_p = avg_sell if first_action == "BUY" else avg_buy
-                is_opt = not ("FUT" in str(sym) or exch == "MCX")
+                is_opt = ("CE" in str(sym) or "PE" in str(sym)) and "FUT" not in str(sym)
+
+                buy_orders = len([t for t in tr_list if str(t.get("action") or t.get("trade_type")).upper() == "BUY"])
+                sell_orders = len([t for t in tr_list if str(t.get("action") or t.get("trade_type")).upper() == "SELL"])
+                round_trip_count = max(1, min(buy_orders, sell_orders))
+                custom_brok_per_order = round_trip_count * IndianFOAccountingEngine.BROKERAGE_PER_ORDER
 
                 tax_calc = IndianFOAccountingEngine.calculate_closed_trade_pnl(
                     entry_price=entry_p,
                     exit_price=exit_p,
                     qty=int(closed_qty * mult),
                     direction=first_action,
+                    brokerage_per_order=custom_brok_per_order,
                     is_option=is_opt
                 )
 
@@ -481,7 +487,7 @@ def get_multi_timeframe_strategy_analytics(
                     else ((sell_val / sell_qty) if sell_qty > 0 else 0.0)
                 )
                 open_dir = "BUY" if net_qty > 0 else "SELL"
-                is_opt = not ("FUT" in str(sym) or exch == "MCX")
+                is_opt = ("CE" in str(sym) or "PE" in str(sym)) and "FUT" not in str(sym)
                 mtm_calc = IndianFOAccountingEngine.calculate_open_position_mtm(
                     entry_price=entry_avg,
                     current_ltp=ltp,

@@ -1160,7 +1160,7 @@ def get_positions_pnl_breakdown():
         entry_price = float(pos.get("average_price") or pos.get("buy_price") or pos.get("price") or 0.0)
         ltp = float(pos.get("ltp") if pos.get("ltp") is not None else pos.get("last_price") or entry_price)
         direction = "BUY" if qty > 0 else "SELL"
-        is_opt = not ("FUT" in sym or exch == "MCX")
+        is_opt = ("CE" in sym or "PE" in sym) and "FUT" not in sym
 
         calc = IndianFOAccountingEngine.calculate_open_position_mtm(
             entry_price=entry_price,
@@ -1205,7 +1205,7 @@ def get_positions_pnl_breakdown():
                             current_ltp=float(row.get("current_ltp", row.get("entry_price", 0))),
                             qty=int(row.get("quantity", 1)),
                             direction=str(row.get("direction", "BUY")),
-                            is_option=not ("FUT" in str(row.get("symbol", "")) or row.get("exchange") == "MCX")
+                            is_option=("CE" in str(row.get("symbol", "")) or "PE" in str(row.get("symbol", ""))) and "FUT" not in str(row.get("symbol", ""))
                         )
                         total_gross_mtm += calc["gross_mtm"]
                         total_net_mtm += calc["net_mtm"]
@@ -1271,9 +1271,12 @@ def get_historical_strategy_pnl_report():
             "strategy_name": name,
             "total_trades": s.get("total_trades", 0),
             "win_rate": f"{s.get('win_rate', 0.0)}%",
+            "profit_factor": s.get("profit_factor", 0.0),
             "gross_pnl": s.get("gross_pnl", 0.0),
             "total_charges": s.get("total_charges", 0.0),
             "net_pnl": s.get("net_pnl", 0.0),
+            "unrealized_pnl": s.get("unrealized_pnl", 0.0),
+            "total_pnl": s.get("total_pnl", 0.0),
             "tax_breakdown": s.get("tax_breakdown", {})
         })
 
