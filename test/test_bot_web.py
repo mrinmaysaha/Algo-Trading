@@ -3,7 +3,10 @@
 Test script to verify bot starts properly from web UI
 """
 
+import pytest
 import time
+
+pytestmark = pytest.mark.skip(reason="Manual CLI testing script")
 
 from database.telegram_db import get_bot_config
 from services.telegram_bot_service import (
