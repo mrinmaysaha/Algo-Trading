@@ -431,9 +431,16 @@ def get_multi_timeframe_strategy_analytics(
         trade_open_qty = 0.0
 
         daily_pnl_map = {}
-        for i in range(min(days, 30) - 1, -1, -1):
-            d_str = (now_ist - timedelta(days=i)).strftime("%Y-%m-%d")
-            daily_pnl_map[d_str] = 0.0
+        if tf_upper == "CUSTOM" and start_date and end_date:
+            curr_d = start_dt.date()
+            end_d = end_dt.date()
+            while curr_d <= end_d and len(daily_pnl_map) < 90:
+                daily_pnl_map[curr_d.strftime("%Y-%m-%d")] = 0.0
+                curr_d += timedelta(days=1)
+        else:
+            for i in range(min(days, 30) - 1, -1, -1):
+                d_str = (now_ist - timedelta(days=i)).strftime("%Y-%m-%d")
+                daily_pnl_map[d_str] = 0.0
 
         for (sym, exch, prod), tr_list in symbol_trade_groups.items():
             from utils.symbol_utils import get_contract_multiplier
@@ -619,6 +626,13 @@ def get_multi_timeframe_strategy_analytics(
     winning_strats = len([s for s in strategy_metrics.values() if s["total_pnl"] > 0])
     losing_strats = len([s for s in strategy_metrics.values() if s["total_pnl"] < 0])
 
+    port_wins = sum(s["gross_pnl"] for s in strategy_metrics.values() if s["gross_pnl"] > 0)
+    port_losses = abs(sum(s["gross_pnl"] for s in strategy_metrics.values() if s["gross_pnl"] < 0))
+    port_profit_factor = round(port_wins / port_losses, 2) if port_losses > 0 else (99.0 if port_wins > 0 else 0.0)
+
+    port_win_trades = sum(sum(1 for t in s.get("closed_trades", []) if t["net_pnl"] > 0) for s in strategy_metrics.values())
+    port_win_rate = round((port_win_trades / total_port_trades) * 100.0, 1) if total_port_trades > 0 else 0.0
+
     top_performer = (
         max(strategy_metrics.values(), key=lambda s: s["total_pnl"])["strategy"]
         if strategy_metrics and any(s["total_pnl"] > 0 for s in strategy_metrics.values())
@@ -640,6 +654,8 @@ def get_multi_timeframe_strategy_analytics(
             "net_realized_profit": round(total_port_net, 2),
             "total_pnl": round(total_port_pnl, 2),
             "total_trades": total_port_trades,
+            "win_rate": f"{port_win_rate}%",
+            "profit_factor": port_profit_factor,
             "active_strategies_count": len(active_strats) if active_strats else len(strategy_metrics),
             "total_strategies_count": len(strategy_metrics),
             "winning_strategies_count": winning_strats,
