@@ -311,7 +311,7 @@ def get_multi_timeframe_strategy_analytics(
                 parsed_tz = parse_trade_timestamp(raw_ts) if raw_ts else None
                 parsed_dt = parsed_tz.replace(tzinfo=None) if parsed_tz else None
 
-                if parsed_dt is None or not (start_dt <= parsed_dt <= end_dt):
+                if parsed_dt is not None and not (start_dt <= parsed_dt <= end_dt):
                     continue
 
                 strat_name = tr.get("strategy") or "untagged"
@@ -339,7 +339,7 @@ def get_multi_timeframe_strategy_analytics(
             parsed_tz = parse_trade_timestamp(raw_ts) if raw_ts else None
             parsed_dt = parsed_tz.replace(tzinfo=None) if parsed_tz else None
 
-            if parsed_dt is None or not (start_dt <= parsed_dt <= end_dt):
+            if parsed_dt is not None and not (start_dt <= parsed_dt <= end_dt):
                 continue
 
             strat_name = (st.strategy or "").strip()

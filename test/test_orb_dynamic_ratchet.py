@@ -1,3 +1,4 @@
+import os
 import sys
 import importlib
 from unittest.mock import MagicMock
@@ -5,112 +6,102 @@ sys.path.insert(0, '/app')
 
 import unittest
 
+os.environ.setdefault("OPENALGO_API_KEY", "mock_test_key")
+
 # Dynamic import for files starting with digits
 bn_mod = importlib.import_module("strategies.scripts.3Min_ORB_Quant_20260801205330")
 BankNiftyORBStrategy = getattr(bn_mod, "BankNiftyORBStrategy")
 load_bn_cfg = getattr(bn_mod, "load_config")
 
 sx_mod = importlib.import_module("strategies.scripts.Sensex_3Min_ORB_Quant_20260831230000")
-SensexORBStrategy = getattr(sx_mod, "SensexORBStrategy")
+UnifiedBSEORBStrategy = getattr(sx_mod, "UnifiedBSEORBStrategy")
 load_sx_cfg = getattr(sx_mod, "load_config")
+
 
 class TestDynamicRatchetExecution(unittest.TestCase):
     def test_banknifty_ratchet_lifecycle(self):
-        print("\n--- Testing BankNifty Dynamic Ratchet Lifecycle ---")
+        print("\n--- Testing BankNifty 50% Milestone Risk Halver & Scaling ---")
         cfg = load_bn_cfg()
         strat = BankNiftyORBStrategy(cfg)
         strat.order_manager = MagicMock()
-        
+        strat.order_manager.place_order.return_value = {"status": "success", "orderid": "MOCK_ORD_1"}
+
         # Simulate active trade state
         entry_p = 500.0
-        atr = 50.0
+        risk_pts = 50.0
         strat.state.trade_active = True
         strat.state.option_symbol = "BANKNIFTY26SEP57000CE"
         strat.state.entry_premium = entry_p
-        strat.state.option_atr = atr
-        strat.state.current_sl = entry_p - (atr * 1.0) # 450.0
-        strat.state.target_premium = 700.0 # High target to test dynamic ratchet
-        strat.state.highest_opt = entry_p
-        strat.state.sl_activated = False
+        strat.state.initial_risk_pts = risk_pts
+        strat.state.remaining_quantity = cfg.get("quantity", 30)
+        strat.state.current_sl = entry_p - risk_pts  # 450.0 (-1.0R)
+        strat.state.tp1_premium = entry_p + (risk_pts * 2.0)  # 600.0 (+2.0R)
+        strat.state.tp2_premium = entry_p + (risk_pts * 3.0)  # 650.0 (+3.0R)
+        strat.state.target_premium = strat.state.tp2_premium
+        strat.state.risk_halved = False
         strat.state.tp1_hit = False
         strat.state.tp2_hit = False
-        strat.state.last_step_trigger = None
 
-        # 1. Price moves to 550 (+1.0 ATR) -> Under TP1 (1.8 ATR = 590), SL should NOT activate yet
-        strat._manage_position(550.0, strat.state.option_symbol)
-        self.assertFalse(strat.state.tp1_hit)
+        # 1. Under 50% distance to TP1 (Trigger is 500 + 0.5 * 100 = 550)
+        strat._manage_position(540.0, strat.state.option_symbol)
+        self.assertFalse(strat.state.risk_halved)
         self.assertEqual(strat.state.current_sl, 450.0)
-        print("  [Pass] Under TP1: SL preserved at initial SL (450.0)")
 
-        # 2. Price reaches 592 (+1.84 ATR) -> Triggers TP1! SL moves to Breakeven+ (500 + 0.15*50 = 507.5)
-        strat._manage_position(592.0, strat.state.option_symbol)
+        # 2. Reaches 50% distance to TP1 (>= 550.0) -> Halves initial risk to -0.5R (475.0)
+        strat._manage_position(552.0, strat.state.option_symbol)
+        self.assertTrue(strat.state.risk_halved)
+        self.assertEqual(strat.state.current_sl, 475.0)
+
+        # 3. Price reaches TP1 (600.0) -> Triggers TP1 partial lot close & moves SL to Breakeven
+        strat._manage_position(602.0, strat.state.option_symbol)
         self.assertTrue(strat.state.tp1_hit)
-        self.assertTrue(strat.state.sl_activated)
-        self.assertGreaterEqual(strat.state.current_sl, 507.5)
-        print(f"  [Pass] TP1 Hit: SL ratcheted to Breakeven+ ({strat.state.current_sl})")
+        self.assertEqual(strat.state.current_sl, entry_p)
 
-        # 3. Price reaches 615 (+2.3 ATR) -> Triggers TP2! SL locks in profit (500 + 0.75*90 = 567.5)
-        strat._manage_position(615.0, strat.state.option_symbol)
-        self.assertTrue(strat.state.tp2_hit)
-        self.assertGreaterEqual(strat.state.current_sl, 567.5)
-        print(f"  [Pass] TP2 Hit: SL ratcheted to Lock Profit ({strat.state.current_sl})")
-
-        # 4. Tight breather (0.6 ATR = 30 pts): High is 615, tight trail should be 615 - 30 = 585.0
-        self.assertGreaterEqual(strat.state.current_sl, 585.0)
-        print(f"  [Pass] Tight Breather (0.6 ATR): SL dynamically trailed to {strat.state.current_sl}")
-
-        # 5. Price pulls back to 584 -> Triggers Trailing SL exit!
-        strat._manage_position(584.0, strat.state.option_symbol)
+        # 4. Price reaches TP2 (650.0) -> Triggers runner close
+        strat._manage_position(652.0, strat.state.option_symbol)
         strat.order_manager.place_order.assert_called()
-        print("  [Pass] Pullback below tight breather triggered trailing SL exit successfully.")
 
-    def test_sensex_ratchet_lifecycle(self):
-        print("\n--- Testing Sensex Dynamic Ratchet Lifecycle ---")
+    def test_bse_sensex_ratchet_lifecycle(self):
+        print("\n--- Testing BSE Sensex 50% Milestone Risk Halver & Scaling ---")
         cfg = load_sx_cfg()
-        strat = SensexORBStrategy(cfg)
+        strat = UnifiedBSEORBStrategy(cfg)
         strat.order_manager = MagicMock()
+        strat.order_manager.close_market_order.return_value = True
 
+        inst = strat.instruments["SENSEX"]
         entry_p = 400.0
-        atr = 60.0
-        strat.state.trade_active = True
-        strat.state.option_symbol = "SENSEX26SEP80000CE"
-        strat.state.entry_premium = entry_p
-        strat.state.option_atr = atr
-        strat.state.current_sl = entry_p - (atr * 1.2) # 328.0
-        strat.state.target_premium = 700.0 # High target to test dynamic ratchet
-        strat.state.highest_opt = entry_p
-        strat.state.sl_activated = False
-        strat.state.tp1_hit = False
-        strat.state.tp2_hit = False
-        strat.state.last_step_trigger = None
+        risk_pts = 60.0
+        inst.trade_active = True
+        inst.option_symbol = "SENSEX26SEP80000CE"
+        inst.entry_premium = entry_p
+        inst.initial_risk_pts = risk_pts
+        inst.remaining_qty = inst.total_quantity
+        inst.current_sl = entry_p - risk_pts  # 340.0 (-1.0R)
+        inst.tp1_premium = entry_p + (risk_pts * inst.spec["rr_ratio_tp1"])  # 400 + 60*1.5 = 490.0
+        inst.tp2_premium = entry_p + (risk_pts * inst.spec["rr_ratio_tp2"])  # 400 + 60*2.5 = 550.0
+        inst.risk_halved = False
+        inst.tp1_hit = False
+        inst.tp2_hit = False
 
-        # 1. Price moves to 480 (+1.33 ATR) -> Under TP1 (1.8 ATR = 508), SL preserved
-        strat._manage_position(480.0)
-        self.assertFalse(strat.state.tp1_hit)
-        self.assertEqual(strat.state.current_sl, 328.0)
-        print("  [Pass] Under TP1: SL preserved at initial SL (328.0)")
+        # 1. Price moves to 430 -> Under 50% to TP1 (Trigger: 400 + 0.5*90 = 445), SL preserved
+        strat._manage_position(inst, 430.0)
+        self.assertFalse(inst.risk_halved)
+        self.assertEqual(inst.current_sl, 340.0)
 
-        # 2. Price reaches 510 (+1.83 ATR) -> Triggers TP1! SL moves to Breakeven+ (400 + 0.15*60 = 409.0)
-        strat._manage_position(510.0)
-        self.assertTrue(strat.state.tp1_hit)
-        self.assertTrue(strat.state.sl_activated)
-        self.assertGreaterEqual(strat.state.current_sl, 409.0)
-        print(f"  [Pass] TP1 Hit: SL ratcheted to Breakeven+ ({strat.state.current_sl})")
+        # 2. Price reaches 446 (>= 445) -> Triggers 50% Milestone Risk Halver to -0.5R (370.0)
+        strat._manage_position(inst, 446.0)
+        self.assertTrue(inst.risk_halved)
+        self.assertEqual(inst.current_sl, 370.0)
 
-        # 3. Price reaches 555 (+2.58 ATR) -> Triggers TP2! SL locks in profit (400 + 0.75*108 = 481.0)
-        strat._manage_position(555.0)
-        self.assertTrue(strat.state.tp2_hit)
-        self.assertGreaterEqual(strat.state.current_sl, 481.0)
-        print(f"  [Pass] TP2 Hit: SL ratcheted to Lock Profit ({strat.state.current_sl})")
+        # 3. Price reaches TP1 (490.0) -> Triggers TP1 partial lot close & moves SL to Breakeven (400.0)
+        strat._manage_position(inst, 492.0)
+        self.assertTrue(inst.tp1_hit)
+        self.assertEqual(inst.current_sl, entry_p)
 
-        # 4. Tight breather (0.6 ATR = 36 pts): High is 555, tight trail should be 555 - 36 = 519.0
-        self.assertGreaterEqual(strat.state.current_sl, 519.0)
-        print(f"  [Pass] Tight Breather (0.6 ATR): SL dynamically trailed to {strat.state.current_sl}")
+        # 4. Price reaches TP2 (550.0) -> Triggers runner close
+        strat._manage_position(inst, 552.0)
+        self.assertTrue(inst.tp2_hit)
 
-        # 5. Price pulls back to 518 -> Triggers Trailing SL exit!
-        strat._manage_position(518.0)
-        strat.order_manager.close_market_order.assert_called()
-        print("  [Pass] Pullback below tight breather triggered trailing SL exit successfully.")
 
 if __name__ == '__main__':
     unittest.main()

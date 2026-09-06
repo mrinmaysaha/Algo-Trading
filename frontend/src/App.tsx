@@ -101,6 +101,12 @@ const StrategyWizard = lazy(() => import('@/pages/strategy/Wizard'))
 const StrategyDetail = lazy(() => import('@/pages/strategy/Detail'))
 const StrategyEdit = lazy(() => import('@/pages/strategy/Edit'))
 
+// Webhook Strategy pages (TradingView Alerts)
+const WebhookStrategyIndex = lazy(() => import('@/pages/webhook-strategy/WebhookStrategyIndex'))
+const NewWebhookStrategy = lazy(() => import('@/pages/webhook-strategy/NewWebhookStrategy'))
+const ViewWebhookStrategy = lazy(() => import('@/pages/webhook-strategy/ViewWebhookStrategy'))
+const ConfigureWebhookSymbols = lazy(() => import('@/pages/webhook-strategy/ConfigureWebhookSymbols'))
+
 // Chartink pages
 const ChartinkIndex = lazy(() => import('@/pages/chartink/ChartinkIndex'))
 const NewChartinkStrategy = lazy(() => import('@/pages/chartink/NewChartinkStrategy'))
@@ -264,6 +270,12 @@ function App() {
                 <Route path="/strategy/new" element={<StrategyWizard />} />
                 <Route path="/strategy/:strategyId" element={<StrategyDetail />} />
                 <Route path="/strategy/:strategyId/edit" element={<StrategyEdit />} />
+
+                {/* Webhook Strategies (TradingView Alerts) */}
+                <Route path="/webhook-strategy" element={<WebhookStrategyIndex />} />
+                <Route path="/webhook-strategy/new" element={<NewWebhookStrategy />} />
+                <Route path="/webhook-strategy/:strategyId" element={<ViewWebhookStrategy />} />
+                <Route path="/webhook-strategy/:strategyId/configure" element={<ConfigureWebhookSymbols />} />
 
                 {/* Phase 6: Python Strategies */}
                 <Route path="/python" element={<PythonStrategyIndex />} />

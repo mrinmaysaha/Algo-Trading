@@ -1885,6 +1885,16 @@ def webhook(token):
             }
         ), 413
 
+    # Backward compatibility: check if this token belongs to a legacy webhook strategy
+    try:
+        from database.strategy_db import get_strategy_by_webhook_id
+        legacy_strat = get_strategy_by_webhook_id(token)
+        if legacy_strat:
+            from blueprints.strategy import process_legacy_webhook
+            return process_legacy_webhook(legacy_strat, request)
+    except Exception as e:
+        logger.warning(f"Failed checking legacy webhook strategy for token {token}: {e}")
+
     outcome = handle_webhook(
         token,
         request.get_data(cache=False),
@@ -1897,6 +1907,19 @@ def webhook(token):
     )
     body, status = outcome.as_response()
     return jsonify(body), status
+
+
+@strategy_module_bp.route("/api/analytics", methods=["GET"])
+@strategy_module_bp.route("/analytics", methods=["GET"])
+def strategy_analytics():
+    """Multi-timeframe strategy P&L analytics fallback route."""
+    try:
+        from blueprints.strategy_portfolio import get_strategy_analytics_api
+        return get_strategy_analytics_api()
+    except Exception as e:
+        logger.error(f"Error in strategy module analytics route: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 
 
 # ---------------------------------------------------------------------------

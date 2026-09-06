@@ -99,6 +99,7 @@ from blueprints.search import search_bp
 from blueprints.security import security_bp  # Import the security blueprint
 from blueprints.settings import settings_bp  # Import the settings blueprint
 from blueprints.straddle_chart import straddle_bp  # Import the straddle chart blueprint
+from blueprints.strategy import webhook_strategy_bp  # Webhook strategy (TradingView alerts)
 from blueprints.strategy_chart import strategy_chart_bp  # Import the strategy chart blueprint
 from blueprints.strategy_module import strategy_module_bp  # Multi-leg options strategies with RMS
 from blueprints.strategy_portfolio import strategy_portfolio_bp  # Strategy Builder portfolio
@@ -128,6 +129,7 @@ from database.leverage_db import init_db as ensure_leverage_tables_exists
 from database.sandbox_db import init_db as ensure_sandbox_tables_exists
 from database.scalping_db import init_db as ensure_scalping_tables_exists
 from database.settings_db import init_db as ensure_settings_tables_exists
+from database.strategy_db import init_db as ensure_strategy_tables_exists
 from database.strategy_module_db import init_db as ensure_strategy_module_tables_exists
 from database.symbol import init_db as ensure_master_contract_tables_exists
 from database.telegram_db import get_bot_config
@@ -347,6 +349,8 @@ def create_app():
     app.register_blueprint(postback_bp)  # Register broker postback (order-update webhook) blueprint
     app.register_blueprint(scanner_bp)  # Register Nifty 500 Scanner and Two-Way WhatsApp blueprint
     csrf.exempt(scanner_bp)
+    app.register_blueprint(webhook_strategy_bp)  # Register Webhook Strategy (TradingView) blueprint
+    csrf.exempt(webhook_strategy_bp)
 
     # Remote MCP (HTTP + OAuth) — opt-in via MCP_HTTP_ENABLED. Off by default.
     # Pre-flight refusal: must NEVER coexist with FLASK_DEBUG=True (debug-mode
@@ -756,6 +760,7 @@ def setup_environment(app):
                 ("Latency DB", ensure_latency_tables_exists),
                 ("Sandbox DB", ensure_sandbox_tables_exists),
                 ("Strategy Module DB", ensure_strategy_module_tables_exists),
+                ("Webhook Strategy DB", ensure_strategy_tables_exists),
                 ("Action Center DB", ensure_action_center_tables_exists),
                 ("Chart Prefs DB", ensure_chart_prefs_tables_exists),
                 ("Market Calendar DB", ensure_market_calendar_tables_exists),

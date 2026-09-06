@@ -21,6 +21,7 @@ export interface AlertCategories {
   positions: boolean // Position close/update operations
 
   // User-initiated operations (Tier 2 - Medium Impact)
+  strategy: boolean // Strategy operations (webhook and options)
   chartink: boolean // Chartink strategy operations (26 toasts)
   pythonStrategy: boolean // Python strategy operations (34 toasts)
   telegram: boolean // Telegram bot operations (19 toasts)
@@ -76,6 +77,7 @@ const DEFAULT_STATE = {
     historify: true,
     positions: true,
     // Tier 2
+    strategy: true,
     chartink: true,
     pythonStrategy: true,
     telegram: true,

@@ -28,6 +28,20 @@ export const tools: Tool[] = [
     color: 'bg-violet-500',
   },
   {
+    title: 'Webhook Strategies',
+    description:
+      'Automate trading signals from TradingView, Amibroker, Python, or Excel via incoming webhooks with custom symbol mappings',
+    href: '/webhook-strategy',
+    color: 'bg-teal-500',
+  },
+  {
+    title: 'Strategy P&L Analytics',
+    description:
+      'Multi-timeframe performance analytics, win-rates, Sharpe ratios, and net MTM accounting across all execution engines',
+    href: '/strategy-analytics',
+    color: 'bg-indigo-500',
+  },
+  {
     title: 'Python Strategy Backtester',
     description:
       'Select a python strategy, test it across multiple symbols/intervals, and generate OpenStatz tearsheets with AI parameter optimization',

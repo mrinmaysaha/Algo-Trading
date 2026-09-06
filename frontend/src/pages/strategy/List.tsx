@@ -10,6 +10,7 @@ import {
   strategyQueryKeys,
   useStrategyListPnl,
 } from '@/api/strategy_module'
+import { BarChart3, Webhook } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -83,7 +84,7 @@ export default function StrategyList() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Strategies</h1>
           <p className="text-sm text-muted-foreground">
@@ -91,7 +92,17 @@ export default function StrategyList() {
             mode requires explicit per-strategy opt-in.
           </p>
         </div>
-        <Button onClick={() => navigate('/strategy/new')}>+ New strategy</Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" onClick={() => navigate('/strategy-analytics')}>
+            <BarChart3 className="mr-2 h-4 w-4 text-indigo-500" />
+            P&amp;L Analytics
+          </Button>
+          <Button variant="outline" onClick={() => navigate('/webhook-strategy')}>
+            <Webhook className="mr-2 h-4 w-4 text-emerald-500" />
+            TradingView Webhooks
+          </Button>
+          <Button onClick={() => navigate('/strategy/new')}>+ New strategy</Button>
+        </div>
       </div>
 
       <Card>
