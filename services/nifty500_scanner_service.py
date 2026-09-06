@@ -576,10 +576,10 @@ class Nifty500ScannerEngine:
         if age_seconds > 300:
             return f"⏳ *Signal #{sig_id} Expired* ({int(age_seconds)}s old).\nTo prevent slippage, orders must be placed within 5 minutes."
 
-        from database.auth_db import get_api_key_for_tradingview
+        from database.auth_db import get_api_key_for_tradingview, get_first_available_api_key
 
         if not api_key:
-            api_key = get_api_key_for_tradingview("admin") or ""
+            api_key = get_first_available_api_key() or get_api_key_for_tradingview("admin") or ""
 
         # Order Type Resolution
         if param1 == "EQ":

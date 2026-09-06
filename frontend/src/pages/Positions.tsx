@@ -234,11 +234,48 @@ function computeChargesForTrade(trade: Trade): Omit<TradeCharges, 'grossPnl' | '
   }
 }
 
+function canonicalizeStrategyName(name?: string): string {
+  if (!name) return 'Untagged'
+  const trimmed = name.trim()
+  const lower = trimmed.toLowerCase()
+  if (lower.startsWith('post10')) return 'Post10_Institutional_OB_VWAP'
+  if (lower.startsWith('3min_orb') || lower.startsWith('3min orb')) return '3Min_ORB_2Lot_Quant_V2'
+  if (lower.startsWith('smc_fvg') || lower.startsWith('smc fvg')) return 'SMC_FVG_ZeroLag_Options'
+  if (lower.startsWith('prime_indicator') || lower.startsWith('prime indicator')) return 'Prime Indicator Scalper Options'
+  if (lower.startsWith('liquid_sweep') || lower.startsWith('liquid sweep') || lower.startsWith('nse_liquidity')) return 'Liquid Sweep Options'
+  if (lower.startsWith('mcx_institutional') || lower.startsWith('mcx institutional') || lower.startsWith('multi-commodity') || lower.startsWith('mcx_goldm')) return 'Multi-commodity Institutional'
+  if (lower.startsWith('index_options_step') || lower.startsWith('multi-index step')) return 'Index_Options_StepTrailing_Quant'
+  return trimmed
+}
+
 function buildStrategyChargesSummaries(trades: Trade[]): StrategyChargesSummary[] {
+  // Pass 1: Resolve known strategies for symbols (e.g. if AUTO_SQUARE_OFF or untagged exit closed a strategy trade)
+  const symbolToStrategyMap: Record<string, string> = {}
+  for (const t of trades) {
+    const strat = t.strategy?.trim()
+    if (strat && strat !== 'AUTO_SQUARE_OFF' && strat !== 'Untagged' && strat !== 'manual' && strat !== 'UNKNOWN') {
+      symbolToStrategyMap[`${t.symbol}||${t.exchange}`] = canonicalizeStrategyName(strat)
+    }
+  }
+
+  // Pass 2: Normalize trades so auto-square-off/untagged exits adopt the strategy that opened the position
+  // And canonicalize all strategy names so version suffixes (e.g. _Production_V5) merge into the same strategy
+  const normalizedTrades = trades.map((t) => {
+    let strat = t.strategy?.trim() || 'Untagged'
+    if (strat === 'AUTO_SQUARE_OFF' || strat === 'Untagged' || strat === 'manual' || strat === 'UNKNOWN') {
+      const parentStrat = symbolToStrategyMap[`${t.symbol}||${t.exchange}`]
+      if (parentStrat) {
+        strat = parentStrat
+      }
+    }
+    const canonStrat = canonicalizeStrategyName(strat)
+    return { ...t, strategy: canonStrat }
+  })
+
   // Only consider fully-closed trade pairs: group by (strategy, symbol, exchange)
   // For each group: match BUY qty vs SELL qty; realized P&L on closed portion
   const groups: Record<string, Trade[]> = {}
-  for (const t of trades) {
+  for (const t of normalizedTrades) {
     const key = `${t.strategy || 'Untagged'}||${t.symbol}||${t.exchange}`
     ;(groups[key] ??= []).push(t)
   }

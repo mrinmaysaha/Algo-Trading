@@ -29,6 +29,17 @@ def parse_trade_timestamp(timestamp_str, fallback_date=None):
     if timestamp_str is None:
         return None
 
+    if isinstance(timestamp_str, datetime):
+        if timestamp_str.tzinfo is None:
+            return ist.localize(timestamp_str)
+        return timestamp_str.astimezone(ist)
+
+    if isinstance(timestamp_str, pd.Timestamp):
+        pydt = timestamp_str.to_pydatetime()
+        if pydt.tzinfo is None:
+            return ist.localize(pydt)
+        return pydt.astimezone(ist)
+
     if isinstance(timestamp_str, (int, float)):
         try:
             dt = pd.to_datetime(timestamp_str, unit="s")
@@ -216,9 +227,11 @@ def get_multi_timeframe_strategy_analytics(
             pass
 
     # Calendar day boundaries
-    tf_upper = str(timeframe or "1D").upper()
+    tf_upper = str(timeframe or "1D").upper().strip()
     days_map = {"1D": 1, "2D": 2, "1W": 7, "7D": 7, "2W": 14, "15D": 15, "1M": 30, "30D": 30, "ALL": 3650}
 
+    # Match dynamic day/week/month formats: e.g., 3D, 4D, 5D, 10D, 3W, 4W, 2M, or raw integer
+    m = re.match(r"^(\d+)\s*([DWM]?)$", tf_upper)
     if tf_upper == "1D":
         start_dt = now_ist.replace(hour=0, minute=0, second=0, microsecond=0).replace(tzinfo=None)
         end_dt = now_ist.replace(tzinfo=None)
@@ -232,6 +245,19 @@ def get_multi_timeframe_strategy_analytics(
             days = 7
             start_dt = (now_ist - timedelta(days=6)).replace(hour=0, minute=0, second=0, microsecond=0).replace(tzinfo=None)
             end_dt = now_ist.replace(tzinfo=None)
+    elif m:
+        val = int(m.group(1))
+        unit = m.group(2) or "D"
+        if unit == "D":
+            days = max(1, val)
+        elif unit == "W":
+            days = max(1, val * 7)
+        elif unit == "M":
+            days = max(1, val * 30)
+        else:
+            days = max(1, val)
+        start_dt = (now_ist - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0).replace(tzinfo=None)
+        end_dt = now_ist.replace(tzinfo=None)
     else:
         days = days_map.get(tf_upper, 1)
         start_dt = (now_ist - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0).replace(tzinfo=None)
@@ -242,8 +268,24 @@ def get_multi_timeframe_strategy_analytics(
     except StrategyBookUnavailable:
         legs = []
 
+    # Resolve API Key / Auth Token for user if available
+    api_key = None
+    auth_token = None
+    broker = None
     try:
-        ok, pos_resp, _ = get_positionbook()
+        from database.auth_db import get_api_key_for_tradingview, get_auth_token
+        from flask import session
+        curr_user = user_id or (session.get("user") if session else None)
+        if curr_user:
+            api_key = get_api_key_for_tradingview(curr_user)
+            auth_token = get_auth_token(curr_user)
+            broker = session.get("broker") if session else None
+    except Exception:
+        pass
+
+    try:
+        from services.positionbook_service import get_positionbook
+        ok, pos_resp, _ = get_positionbook(api_key=api_key, auth_token=auth_token, broker=broker)
         positions = pos_resp.get("data") if (ok and isinstance(pos_resp, dict)) else []
         if not isinstance(positions, list):
             positions = []
@@ -261,7 +303,7 @@ def get_multi_timeframe_strategy_analytics(
     strategy_trades_map: dict[str, list[dict[str, Any]]] = {}
     try:
         from services.tradebook_service import get_tradebook
-        ok_tb, tb_resp, _ = get_tradebook()
+        ok_tb, tb_resp, _ = get_tradebook(api_key=api_key, auth_token=auth_token, broker=broker)
         raw_trades = tb_resp.get("data") if (ok_tb and isinstance(tb_resp, dict)) else []
         if isinstance(raw_trades, list):
             for tr in raw_trades:
@@ -269,9 +311,8 @@ def get_multi_timeframe_strategy_analytics(
                 parsed_tz = parse_trade_timestamp(raw_ts) if raw_ts else None
                 parsed_dt = parsed_tz.replace(tzinfo=None) if parsed_tz else None
 
-                if parsed_dt is not None:
-                    if not (start_dt <= parsed_dt <= end_dt):
-                        continue
+                if parsed_dt is None or not (start_dt <= parsed_dt <= end_dt):
+                    continue
 
                 strat_name = tr.get("strategy") or "untagged"
                 strategy_trades_map.setdefault(strat_name, []).append(tr)
@@ -280,20 +321,31 @@ def get_multi_timeframe_strategy_analytics(
 
     # Sandbox trades ingestion
     try:
-        from database.sandbox_db import SandboxTrades
-        sb_trades = db_session.query(SandboxTrades)
+        from database.sandbox_db import SandboxTrades, db_session as sandbox_db_session
+        sb_trades_query = sandbox_db_session.query(SandboxTrades)
         if user_id:
-            sb_trades = sb_trades.filter(SandboxTrades.user_id == user_id)
-        for st in sb_trades.all():
+            sb_trades_query = sb_trades_query.filter(SandboxTrades.user_id == user_id)
+        raw_sb_list = sb_trades_query.all()
+
+        # Build symbol -> strategy map for resolving closing trades (e.g. AUTO_SQUARE_OFF)
+        sym_to_strat: dict[tuple[str, str], str] = {}
+        for st in raw_sb_list:
+            strat_name = (st.strategy or "").strip()
+            if strat_name and strat_name not in ("AUTO_SQUARE_OFF", "Untagged", "manual", "UNKNOWN"):
+                sym_to_strat[(st.symbol, st.exchange)] = strat_name
+
+        for st in raw_sb_list:
             raw_ts = st.trade_timestamp
             parsed_tz = parse_trade_timestamp(raw_ts) if raw_ts else None
             parsed_dt = parsed_tz.replace(tzinfo=None) if parsed_tz else None
 
-            if parsed_dt is not None:
-                if not (start_dt <= parsed_dt <= end_dt):
-                    continue
+            if parsed_dt is None or not (start_dt <= parsed_dt <= end_dt):
+                continue
 
-            strat_name = st.strategy or "untagged"
+            strat_name = (st.strategy or "").strip()
+            if not strat_name or strat_name in ("AUTO_SQUARE_OFF", "Untagged", "manual", "UNKNOWN"):
+                strat_name = sym_to_strat.get((st.symbol, st.exchange), strat_name or "untagged")
+
             tr_dict = {
                 "symbol": st.symbol,
                 "exchange": st.exchange,
@@ -305,8 +357,8 @@ def get_multi_timeframe_strategy_analytics(
                 "trade_timestamp": str(st.trade_timestamp),
             }
             strategy_trades_map.setdefault(strat_name, []).append(tr_dict)
-    except Exception:
-        pass
+    except Exception as sb_err:
+        logger.debug(f"Sandbox trade ingestion error: {sb_err}")
 
     # Built-in fallback alias configurations
     configured_strategies: dict[str, dict[str, Any]] = {
@@ -317,6 +369,7 @@ def get_multi_timeframe_strategy_analytics(
                 "Post10_Institutional_OB_VWAP_Production",
                 "Post10_Institutional_OB_VWAP_Production_V3",
                 "Post10_Institutional_OB_VWAP_Production_V4",
+                "Post10_Institutional_OB_VWAP_Production_V5",
             },
         },
         "3Min_ORB_Quant": {
@@ -653,6 +706,7 @@ def get_multi_timeframe_strategy_analytics(
             "total_deductions": round(total_port_charges, 2),
             "net_realized_profit": round(total_port_net, 2),
             "total_pnl": round(total_port_pnl, 2),
+            "total_net_pnl": round(total_port_net, 2),
             "total_trades": total_port_trades,
             "win_rate": f"{port_win_rate}%",
             "profit_factor": port_profit_factor,

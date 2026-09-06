@@ -361,6 +361,12 @@ def react_arbitrage():
     return serve_react_app()
 
 
+# Nifty 500 Scanner & Option Radar
+@react_bp.route("/scanner", strict_slashes=False)
+def react_scanner():
+    return serve_react_app()
+
+
 # Option Chain - live chain with Greeks and click-to-trade
 @react_bp.route("/optionchain", strict_slashes=False)
 def react_optionchain():

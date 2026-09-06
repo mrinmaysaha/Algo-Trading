@@ -1,5 +1,7 @@
 import {
   BarChart3,
+  CalendarDays,
+  Check,
   ChevronDown,
   ChevronUp,
   Clock,
@@ -22,6 +24,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
   Table,
   TableBody,
@@ -35,16 +38,17 @@ import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { StrategyAnalyticsResponse, StrategyPerformanceMetric } from '@/types/trading'
 import { showToast } from '@/utils/toast'
+import { webClient } from '@/api/client'
 
-type TimeframeOption = '1D' | '2D' | '1W' | '2W' | '1M' | 'ALL'
+type TimeframeOption = string
 
 interface TimeframeMeta {
-  id: TimeframeOption
+  id: string
   label: string
   description: string
 }
 
-const TIMEFRAMES: TimeframeMeta[] = [
+const PRESET_TIMEFRAMES: TimeframeMeta[] = [
   { id: '1D', label: 'Today (1D)', description: "Today's live session P&L" },
   { id: '2D', label: '2 Days (2D)', description: 'Last 48 hours rolling performance' },
   { id: '1W', label: '1 Week (1W)', description: 'Last 7 days performance' },
@@ -53,11 +57,47 @@ const TIMEFRAMES: TimeframeMeta[] = [
   { id: 'ALL', label: 'All-Time', description: 'Cumulative historical ledger' },
 ]
 
+const QUICK_CUSTOM_PRESETS = [
+  { id: '3D', label: '3 Days (3D)' },
+  { id: '4D', label: '4 Days (4D)' },
+  { id: '5D', label: '5 Days (5D)' },
+  { id: '3W', label: '3 Weeks (3W)' },
+  { id: '4W', label: '4 Weeks (4W)' },
+]
+
+function formatTimeframeDisplay(tf: string): string {
+  const preset = PRESET_TIMEFRAMES.find((p) => p.id === tf)
+  if (preset) return preset.label
+  const quick = QUICK_CUSTOM_PRESETS.find((q) => q.id === tf)
+  if (quick) return quick.label
+  const match = tf.match(/^(\d+)([DWM])$/i)
+  if (match) {
+    const val = match[1]
+    const unit = match[2].toUpperCase()
+    const unitWord =
+      unit === 'D'
+        ? val === '1' ? 'Day' : 'Days'
+        : unit === 'W'
+        ? val === '1' ? 'Week' : 'Weeks'
+        : val === '1' ? 'Month' : 'Months'
+    return `${val} ${unitWord} (${tf.toUpperCase()})`
+  }
+  return tf
+}
+
 export default function StrategyAnalytics() {
   const { user } = useAuthStore()
   const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
 
   const [timeframe, setTimeframe] = useState<TimeframeOption>('1D')
+  const [customNum, setCustomNum] = useState<number>(3)
+  const [customUnit, setCustomUnit] = useState<'D' | 'W' | 'M'>('D')
+  const [isCustomOpen, setIsCustomOpen] = useState(false)
+
+  const isCustomActive = useMemo(() => {
+    return !PRESET_TIMEFRAMES.some((p) => p.id === timeframe)
+  }, [timeframe])
+
   const [analyticsData, setAnalyticsData] = useState<StrategyAnalyticsResponse | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
@@ -69,20 +109,14 @@ export default function StrategyAnalytics() {
     async (showRefresh = false) => {
       if (showRefresh) setIsRefreshing(true)
       try {
-        const res = await fetch(`/api/strategy-analytics?timeframe=${timeframe}`, {
-          credentials: 'include',
-        })
-        const json = await res.json()
-        if (json.status === 'success') {
-          setAnalyticsData(json)
+        const res = await webClient.get(`/api/strategy-analytics?timeframe=${timeframe}`)
+        if (res.data && res.data.status === 'success') {
+          setAnalyticsData(res.data)
         } else {
           // Fallback to strategy route
-          const resFallback = await fetch(`/strategy/api/analytics?timeframe=${timeframe}`, {
-            credentials: 'include',
-          })
-          const jsonFallback = await resFallback.json()
-          if (jsonFallback.status === 'success') {
-            setAnalyticsData(jsonFallback)
+          const resFallback = await webClient.get(`/strategy/api/analytics?timeframe=${timeframe}`)
+          if (resFallback.data && resFallback.data.status === 'success') {
+            setAnalyticsData(resFallback.data)
           }
         }
       } catch (err) {
@@ -289,7 +323,7 @@ export default function StrategyAnalytics() {
         {/* Timeframe Buttons */}
         <div className="flex items-center gap-1.5 flex-wrap justify-end">
           <Clock className="h-3.5 w-3.5 text-muted-foreground mr-1 hidden sm:inline" />
-          {TIMEFRAMES.map((tf) => (
+          {PRESET_TIMEFRAMES.map((tf) => (
             <Button
               key={tf.id}
               variant={timeframe === tf.id ? 'default' : 'ghost'}
@@ -303,6 +337,134 @@ export default function StrategyAnalytics() {
               {tf.label}
             </Button>
           ))}
+
+          {/* Custom Days / Weeks Popover */}
+          <Popover open={isCustomOpen} onOpenChange={setIsCustomOpen}>
+            <PopoverTrigger asChild>
+              <Button
+                variant={isCustomActive ? 'default' : 'outline'}
+                size="sm"
+                className={cn(
+                  'rounded-lg text-xs font-medium transition-all h-8 gap-1.5',
+                  isCustomActive && 'bg-primary text-primary-foreground shadow-sm'
+                )}
+              >
+                <CalendarDays className="h-3.5 w-3.5" />
+                <span>{isCustomActive ? formatTimeframeDisplay(timeframe) : 'Custom Days / Weeks'}</span>
+                <ChevronDown className="h-3 w-3 opacity-60" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent
+              align="end"
+              className="w-80 p-3.5 space-y-3 bg-popover text-popover-foreground border shadow-xl rounded-xl z-50"
+            >
+              <div>
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                  <Sliders className="h-3.5 w-3.5 text-primary" />
+                  Custom Timeframe
+                </h4>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  Select predefined days/weeks or specify any custom duration
+                </p>
+              </div>
+
+              {/* Quick Picks */}
+              <div>
+                <span className="text-[11px] font-medium text-foreground/80 block mb-1.5">Quick Picks</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {QUICK_CUSTOM_PRESETS.map((q) => (
+                    <Button
+                      key={q.id}
+                      variant={timeframe === q.id ? 'default' : 'outline'}
+                      size="sm"
+                      onClick={() => {
+                        setTimeframe(q.id)
+                        setIsCustomOpen(false)
+                      }}
+                      className={cn(
+                        'h-7 px-2.5 text-xs rounded-md',
+                        timeframe === q.id && 'bg-primary text-primary-foreground font-semibold'
+                      )}
+                    >
+                      {q.label}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Custom Input */}
+              <div className="border-t pt-2.5 space-y-2">
+                <span className="text-[11px] font-medium text-foreground/80 block">Specify Duration</span>
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number"
+                    min={1}
+                    max={365}
+                    value={customNum || ''}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value, 10)
+                      setCustomNum(isNaN(val) ? 1 : Math.max(1, Math.min(365, val)))
+                    }}
+                    placeholder="e.g. 3"
+                    className="h-8 text-xs w-20 font-mono text-center"
+                  />
+
+                  <div className="flex rounded-md border p-0.5 bg-muted/30 flex-1">
+                    <button
+                      type="button"
+                      onClick={() => setCustomUnit('D')}
+                      className={cn(
+                        'flex-1 py-1 text-xs rounded transition-colors text-center font-medium',
+                        customUnit === 'D'
+                          ? 'bg-background shadow-xs text-foreground font-semibold'
+                          : 'text-muted-foreground hover:text-foreground'
+                      )}
+                    >
+                      Days
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCustomUnit('W')}
+                      className={cn(
+                        'flex-1 py-1 text-xs rounded transition-colors text-center font-medium',
+                        customUnit === 'W'
+                          ? 'bg-background shadow-xs text-foreground font-semibold'
+                          : 'text-muted-foreground hover:text-foreground'
+                      )}
+                    >
+                      Weeks
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCustomUnit('M')}
+                      className={cn(
+                        'flex-1 py-1 text-xs rounded transition-colors text-center font-medium',
+                        customUnit === 'M'
+                          ? 'bg-background shadow-xs text-foreground font-semibold'
+                          : 'text-muted-foreground hover:text-foreground'
+                      )}
+                    >
+                      Months
+                    </button>
+                  </div>
+                </div>
+
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    const cleanNum = Math.max(1, customNum || 1)
+                    const tf = `${cleanNum}${customUnit}`
+                    setTimeframe(tf)
+                    setIsCustomOpen(false)
+                  }}
+                  className="w-full h-8 text-xs gap-1.5 font-medium mt-1"
+                >
+                  <Check className="h-3.5 w-3.5" />
+                  Apply {customNum || 1} {customUnit === 'D' ? (customNum === 1 ? 'Day' : 'Days') : customUnit === 'W' ? (customNum === 1 ? 'Week' : 'Weeks') : (customNum === 1 ? 'Month' : 'Months')}
+                </Button>
+              </div>
+            </PopoverContent>
+          </Popover>
         </div>
       </div>
 

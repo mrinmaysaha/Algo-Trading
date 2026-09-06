@@ -1592,7 +1592,7 @@ def _process_download_job(job_id: str, api_key: str):
                                 logger.debug(
                                     f"Incremental (before): {item['symbol']} from {requested_start} to {before_end}"
                                 )
-                                success_before, response_before, _ = download_data(
+                                success_before, response_before, status_before = download_data(
                                     symbol=item["symbol"],
                                     exchange=item["exchange"],
                                     interval=job["interval"],
@@ -1602,6 +1602,10 @@ def _process_download_job(job_id: str, api_key: str):
                                 )
                                 if success_before:
                                     total_records += response_before.get("records", 0)
+                                elif status_before == 404:
+                                    logger.info(
+                                        f"Incremental (before): no earlier data for {item['symbol']} ({requested_start} to {before_end})"
+                                    )
                                 else:
                                     download_error = response_before.get(
                                         "message", "Error downloading earlier data"
@@ -1621,7 +1625,7 @@ def _process_download_job(job_id: str, api_key: str):
                                 logger.debug(
                                     f"Incremental (after): {item['symbol']} from {after_start} to {requested_end}"
                                 )
-                                success_after, response_after, _ = download_data(
+                                success_after, response_after, status_after = download_data(
                                     symbol=item["symbol"],
                                     exchange=item["exchange"],
                                     interval=job["interval"],
@@ -1631,6 +1635,10 @@ def _process_download_job(job_id: str, api_key: str):
                                 )
                                 if success_after:
                                     total_records += response_after.get("records", 0)
+                                elif status_after == 404:
+                                    logger.info(
+                                        f"Incremental (after): no newer data for {item['symbol']} ({after_start} to {requested_end}) - already up to date"
+                                    )
                                 else:
                                     download_error = response_after.get(
                                         "message", "Error downloading later data"

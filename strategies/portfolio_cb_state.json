@@ -1,15 +1,24 @@
 {
-  "date": "2026-08-29",
+  "date": "2026-09-06",
   "nse": {
     "session_pnl": 0.0,
     "halted": false,
     "halt_reason": "",
     "strategies": {}
   },
+  "bse": {
+    "session_pnl": -100.0,
+    "halted": false,
+    "halt_reason": "",
+    "strategies": {
+      "Sensex_3Min_ORB_Quant": -100.0
+    }
+  },
   "mcx": {
     "session_pnl": 0.0,
     "halted": false,
     "halt_reason": "",
     "strategies": {}
-  }
+  },
+  "active_positions": {}
 }

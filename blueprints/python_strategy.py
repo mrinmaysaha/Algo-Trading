@@ -369,7 +369,7 @@ def create_subprocess_args():
 #   - 4GB container (3 strategies): STRATEGY_MEMORY_LIMIT_MB=512
 #   - 8GB+ container: STRATEGY_MEMORY_LIMIT_MB=1024 (default)
 STRATEGY_MEMORY_LIMIT_MB = int(os.environ.get('STRATEGY_MEMORY_LIMIT_MB', '1024'))
-STRATEGY_CPU_TIME_LIMIT_SEC = 3600  # Max CPU time (1 hour) - resets on each run
+STRATEGY_CPU_TIME_LIMIT_SEC = int(os.environ.get('STRATEGY_CPU_TIME_LIMIT_SEC', '28800'))  # Max CPU time (8 hours default) - resets on each run
 
 
 def set_resource_limits():
@@ -2363,6 +2363,7 @@ def api_get_exchanges():
 @check_session_validity
 def api_get_strategies():
     """API: Get all strategies as JSON"""
+    load_configs()
     cleanup_dead_processes()
     strategies = []
 

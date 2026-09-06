@@ -139,4 +139,11 @@ export const tools: Tool[] = [
     href: '/arbitrage',
     color: 'bg-green-600',
   },
+  {
+    title: 'Nifty 500 Scanner',
+    description:
+      'Multi-timeframe breakout scanner with 1-strike ITM option radar & automated two-way WhatsApp execution desk',
+    href: '/scanner',
+    color: 'bg-emerald-600',
+  },
 ]

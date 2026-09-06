@@ -68,7 +68,7 @@ def get_strategy_analytics_api():
     """Get multi-timeframe strategy P&L analytics, win rates, and metrics."""
     timeframe = request.args.get("timeframe", "1D")
     strategy_name = request.args.get("strategy")
-    user_id = getattr(request, "user_id", None)
+    user_id = getattr(request, "user_id", None) or session.get("user")
 
     try:
         from services.strategy_pnl_service import get_multi_timeframe_strategy_analytics

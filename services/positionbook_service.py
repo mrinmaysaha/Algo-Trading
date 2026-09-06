@@ -178,20 +178,28 @@ def _enrich_positions_with_strategy_tags(
         legs = get_strategy_legs()
         leg_map = {}
         if legs:
-            for l in legs:
+            # Prioritize open positions (qty > 0), then most recently updated legs
+            sorted_legs = sorted(
+                legs,
+                key=lambda l: (
+                    abs(float(l.get("quantity") or 0)) > 0,
+                    l.get("updated_at") or "",
+                ),
+                reverse=True,
+            )
+            for l in sorted_legs:
                 strat = l.get("strategy")
                 if not strat or strat in ("UI Exit Position", "AUTO_SQUARE_OFF"):
                     continue
                 sym = l.get("symbol")
                 exch = l.get("exchange")
                 prod = l.get("product")
-                qty = abs(float(l.get("quantity") or 0))
 
-                if (sym, exch, prod) not in leg_map or qty > 0:
+                if (sym, exch, prod) not in leg_map:
                     leg_map[(sym, exch, prod)] = strat
-                if (sym, exch) not in leg_map or qty > 0:
+                if (sym, exch) not in leg_map:
                     leg_map[(sym, exch)] = strat
-                if sym not in leg_map or qty > 0:
+                if sym not in leg_map:
                     leg_map[sym] = strat
 
         user_id = None

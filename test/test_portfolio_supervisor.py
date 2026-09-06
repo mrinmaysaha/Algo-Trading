@@ -1,4 +1,4 @@
-﻿import os
+import os
 import sys
 import json
 import pytest
@@ -10,6 +10,9 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from strategies.portfolio_supervisor import (
     report_session_loss,
     is_session_halted,
+    is_symbol_locked,
+    register_symbol_position,
+    deregister_symbol_position,
     get_session_status,
     reset_daily_state,
     _load_state,
@@ -37,8 +40,8 @@ def test_initial_state_clean():
     assert status_nse["halted"] is False
 
     assert status_mcx["session_pnl"] == 0.0
-    assert status_mcx["loss_cap"] == 7000.0
-    assert status_mcx["remaining_buffer"] == 7000.0
+    assert status_mcx["loss_cap"] == 5000.0
+    assert status_mcx["remaining_buffer"] == 5000.0
     assert status_mcx["halted"] is False
 
 
@@ -75,13 +78,13 @@ def test_mcx_loss_accumulation_and_halt():
     report_session_loss("mcx", "MCX_Institutional_MIS_V3.0", -4000.0)
     status = get_session_status("mcx")
     assert status["session_pnl"] == -4000.0
-    assert status["remaining_buffer"] == 3000.0
+    assert status["remaining_buffer"] == 1000.0
     assert status["halted"] is False
 
-    # MCX GOLDM strategy loses 3,500 -> Total -7,500 <= -7,000 cap -> HALT
-    report_session_loss("mcx", "MCX_GOLDM_FVG_Options_Scalper", -3500.0)
+    # MCX GOLDM strategy loses 1,500 -> Total -5,500 <= -5,000 cap -> HALT
+    report_session_loss("mcx", "MCX_GOLDM_FVG_Options_Scalper", -1500.0)
     status = get_session_status("mcx")
-    assert status["session_pnl"] == -7500.0
+    assert status["session_pnl"] == -5500.0
     assert status["halted"] is True
     assert "breached" in status["halt_reason"].lower() or "halt" in status["halt_reason"].lower()
 
@@ -116,3 +119,34 @@ def test_date_reset_clears_halt():
     fresh_state = _load_state()
     assert fresh_state["nse"]["session_pnl"] == 0.0
     assert fresh_state["nse"]["halted"] is False
+
+
+def test_symbol_mutual_exclusion_lock():
+    """Verify that when Strategy A holds BANKNIFTY, Strategy B is locked out from stacking."""
+    # Initially no lock
+    locked, reason = is_symbol_locked("BANKNIFTY", "SMC_FVG_ZeroLag_Options")
+    assert locked is False
+
+    # Strategy A (Post10) enters BANKNIFTY
+    register_symbol_position("Post10_Institutional_OB_VWAP", "BANKNIFTY")
+
+    # Strategy A itself checking should not block itself
+    locked_self, _ = is_symbol_locked("BANKNIFTY", "Post10_Institutional_OB_VWAP")
+    assert locked_self is False
+
+    # Strategy B (SMC FVG) attempting to enter BANKNIFTY should be BLOCKED
+    locked_b, reason_b = is_symbol_locked("BANKNIFTY", "SMC_FVG_ZeroLag_Options")
+    assert locked_b is True
+    assert "lock active" in reason_b.lower() or "blocked" in reason_b.lower()
+
+    # Strategy C (Prime Scalper) attempting to enter NIFTY (different symbol) should be ALLOWED
+    locked_c, _ = is_symbol_locked("NIFTY", "Prime_Indicator_Scalper_Options")
+    assert locked_c is False
+
+    # Strategy A exits BANKNIFTY
+    deregister_symbol_position("Post10_Institutional_OB_VWAP", "BANKNIFTY")
+
+    # Now Strategy B is allowed to enter BANKNIFTY
+    locked_b_after, _ = is_symbol_locked("BANKNIFTY", "SMC_FVG_ZeroLag_Options")
+    assert locked_b_after is False
+

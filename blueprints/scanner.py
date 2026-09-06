@@ -14,6 +14,7 @@ from flask_cors import cross_origin
 from utils.logging import get_logger
 from utils.session import check_session_validity
 from database.auth_db import get_api_key_for_tradingview
+from blueprints.react_app import is_react_frontend_available, serve_react_app
 from services.nifty500_scanner_service import (
     Nifty500ScannerEngine,
     NIFTY_500_UNIVERSE,
@@ -31,13 +32,14 @@ cached_scan_state = {
 }
 
 
-def _run_scanner_daemon():
+def _run_scanner_daemon(user=None):
     """Background worker that screens the universe concurrently and dispatches alerts."""
     cached_scan_state["is_scanning"] = True
     logger.info("[SCANNER] Initiating multi-threaded Nifty 500 scan...")
 
     try:
-        api_key = get_api_key_for_tradingview("admin")
+        from database.auth_db import get_api_key_for_tradingview, get_first_available_api_key
+        api_key = (get_api_key_for_tradingview(user) if user else None) or get_first_available_api_key() or ""
         found_signals = Nifty500ScannerEngine.scan_universe_concurrently(
             symbols=NIFTY_500_UNIVERSE,
             max_workers=8,
@@ -61,19 +63,17 @@ def _run_scanner_daemon():
         cached_scan_state["is_scanning"] = False
 
 
-@scanner_bp.route("/scanner")
-@check_session_validity
-def scanner_dashboard():
-    """Renders the main Nifty 500 scanner dashboard."""
-    return render_template("nifty500_scanner.html")
-
-
 @scanner_bp.route("/api/scanner/signals", methods=["GET"])
 @cross_origin()
 def get_signals():
     """Returns signals filtered by setup type."""
     filter_mode = request.args.get("filter", "ALL").upper()
     signals = cached_scan_state["signals"]
+
+    # Auto-trigger first background scan if cache is empty
+    if not signals and cached_scan_state["last_updated"] is None and not cached_scan_state["is_scanning"]:
+        curr_user = session.get("user")
+        threading.Thread(target=_run_scanner_daemon, args=(curr_user,), daemon=True).start()
 
     if filter_mode == "INTRADAY":
         filtered = [s for s in signals if s["setup_type"] == "INTRADAY"]
@@ -100,7 +100,8 @@ def trigger_scan_manually():
     if cached_scan_state["is_scanning"]:
         return jsonify({"status": "warning", "message": "Scan already running in background"}), 429
 
-    worker = threading.Thread(target=_run_scanner_daemon, daemon=True)
+    curr_user = session.get("user") or request.args.get("user")
+    worker = threading.Thread(target=_run_scanner_daemon, args=(curr_user,), daemon=True)
     worker.start()
     return jsonify({"status": "success", "message": "Universe scan initiated"}), 202
 
@@ -122,7 +123,8 @@ def execute_1click_order():
         if not symbol:
             return jsonify({"status": "error", "message": "Symbol is required"}), 400
 
-        api_key = get_api_key_for_tradingview("admin") or session.get("api_key", "")
+        from database.auth_db import get_api_key_for_tradingview, get_first_available_api_key
+        api_key = (get_api_key_for_tradingview(session.get("user")) if session.get("user") else None) or get_first_available_api_key() or session.get("api_key", "")
 
         order_payload = {
             "apikey": api_key,
