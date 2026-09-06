@@ -2952,18 +2952,29 @@ def save_strategy(strategy_id):
 # Cleanup on shutdown
 def cleanup_on_exit():
     """Clean up all running processes on application exit"""
-    logger.info("Cleaning up running strategies...")
-    # Snapshot under the lock, stop outside it: stop_strategy_process takes the
-    # lock itself and waits for each process, so holding it across the loop
-    # would serialise shutdown behind every termination in turn.
-    with PROCESS_LOCK:
-        strategy_ids = list(RUNNING_STRATEGIES.keys())
-    for strategy_id in strategy_ids:
+    prev_raise = logging.raiseExceptions
+    logging.raiseExceptions = False
+    try:
         try:
-            stop_strategy_process(strategy_id)
+            logger.info("Cleaning up running strategies...")
         except Exception:
             pass
-    logger.info("Cleanup complete")
+        # Snapshot under the lock, stop outside it: stop_strategy_process takes the
+        # lock itself and waits for each process, so holding it across the loop
+        # would serialise shutdown behind every termination in turn.
+        with PROCESS_LOCK:
+            strategy_ids = list(RUNNING_STRATEGIES.keys())
+        for strategy_id in strategy_ids:
+            try:
+                stop_strategy_process(strategy_id)
+            except Exception:
+                pass
+        try:
+            logger.info("Cleanup complete")
+        except Exception:
+            pass
+    finally:
+        logging.raiseExceptions = prev_raise
 
 
 # Register cleanup handler

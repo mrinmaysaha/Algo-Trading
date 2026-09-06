@@ -3,9 +3,11 @@
 import subprocess
 import sys
 from pathlib import Path
+import pytest
 
 
 def test_bot_starts_and_stops_cleanly_in_eventlet_env():
+    pytest.importorskip("eventlet")
     child = Path(__file__).with_name("telegram_startup_eventlet_child.py")
     result = subprocess.run(
         [sys.executable, str(child)],
