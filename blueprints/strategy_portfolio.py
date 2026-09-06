@@ -7,7 +7,7 @@ fixed watchlists: `mytrades` and `simulation`. Single-user, session-authed
 
 import os
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, session
 
 from database.strategy_portfolio_db import (
     WATCHLISTS,

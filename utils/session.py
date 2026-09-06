@@ -74,7 +74,15 @@ def is_session_valid():
     now_ist = now_utc.astimezone(pytz.timezone("Asia/Kolkata"))
 
     # Parse login time
-    login_time = datetime.fromisoformat(session["login_time"])
+    try:
+        login_time = datetime.fromisoformat(session["login_time"])
+        if login_time.tzinfo is None:
+            login_time = pytz.timezone("Asia/Kolkata").localize(login_time)
+        else:
+            login_time = login_time.astimezone(pytz.timezone("Asia/Kolkata"))
+    except (ValueError, TypeError) as e:
+        logger.warning(f"Failed to parse login_time: {e}")
+        return False
 
     # Get configured expiry time
     expiry_time = os.getenv("SESSION_EXPIRY_TIME", "03:00")
