@@ -48,6 +48,7 @@ from flask import Flask, session
 from flask_wtf.csrf import CSRFProtect  # Import CSRF protection
 
 from blueprints.admin import admin_bp  # Import the admin blueprint
+from blueprints.agent import agent_bp  # Import the agent blueprint
 from blueprints.analyzer import analyzer_bp  # Import the analyzer blueprint
 from blueprints.apikey import api_key_bp
 from blueprints.arbitrage import arbitrage_bp  # Import the Arbitrage blueprint
@@ -59,6 +60,7 @@ from blueprints.broker_credentials import (
 from blueprints.chart_test import chart_test_bp  # Standalone chart test page (dev/testing only)
 from blueprints.chartink import chartink_bp  # Import the chartink blueprint
 from blueprints.core import core_bp
+from blueprints.custom_indicators import custom_indicators_bp  # User chart indicators
 from blueprints.custom_straddle import custom_straddle_bp  # Import custom straddle blueprint
 from blueprints.dashboard import dashboard_bp
 from blueprints.flow import flow_bp  # Import the flow blueprint
@@ -97,8 +99,8 @@ from blueprints.search import search_bp
 from blueprints.security import security_bp  # Import the security blueprint
 from blueprints.settings import settings_bp  # Import the settings blueprint
 from blueprints.straddle_chart import straddle_bp  # Import the straddle chart blueprint
-from blueprints.strategy import strategy_bp  # Import the strategy blueprint
 from blueprints.strategy_chart import strategy_chart_bp  # Import the strategy chart blueprint
+from blueprints.strategy_module import strategy_module_bp  # Multi-leg options strategies with RMS
 from blueprints.strategy_portfolio import strategy_portfolio_bp  # Strategy Builder portfolio
 from blueprints.system_permissions import (
     system_permissions_bp,  # Import the system permissions blueprint
@@ -107,11 +109,13 @@ from blueprints.telegram import telegram_bp  # Import the telegram blueprint
 from blueprints.traffic import traffic_bp  # Import the traffic blueprint
 from blueprints.tv_json import tv_json_bp
 from blueprints.vol_surface import vol_surface_bp  # Import the vol surface blueprint
+from blueprints.watchlist import watchlist_bp  # Import the charting watchlist blueprint
 from blueprints.websocket_example import websocket_bp  # Import the websocket example blueprint
 from blueprints.whatsapp import whatsapp_bp  # Import the WhatsApp blueprint
-from cors import cors  # Import the CORS instance
+from cors import init_cors
 from csp import apply_csp_middleware  # Import the CSP middleware
 from database.action_center_db import init_db as ensure_action_center_tables_exists
+from database.agent_db import init_db as ensure_agent_tables_exists
 from database.analyzer_db import init_db as ensure_analyzer_tables_exists
 from database.apilog_db import init_db as ensure_api_log_tables_exists
 from database.apscheduler_jobstore_db import ensure_jobstore_tables_exist
@@ -124,11 +128,12 @@ from database.leverage_db import init_db as ensure_leverage_tables_exists
 from database.sandbox_db import init_db as ensure_sandbox_tables_exists
 from database.scalping_db import init_db as ensure_scalping_tables_exists
 from database.settings_db import init_db as ensure_settings_tables_exists
-from database.strategy_db import init_db as ensure_strategy_tables_exists
+from database.strategy_module_db import init_db as ensure_strategy_module_tables_exists
 from database.symbol import init_db as ensure_master_contract_tables_exists
 from database.telegram_db import get_bot_config
 from database.traffic_db import init_logs_db as ensure_traffic_logs_exists
 from database.user_db import init_db as ensure_user_tables_exists
+from database.watchlist_db import init_db as ensure_watchlist_tables_exists
 from database.whatsapp_db import (
     get_bot_config as get_whatsapp_bot_config,  # noqa: F401  (triggers module-level init_db)
 )
@@ -180,10 +185,8 @@ def create_app():
     # Initialize Flask-Limiter with the app object
     limiter.init_app(app)
 
-    # Initialize Flask-CORS with the app object using configuration from environment variables
-    from cors import get_cors_config
-
-    cors.init_app(app, **get_cors_config())
+    # Initialize Flask-CORS only when explicitly enabled.
+    init_cors(app)
 
     # Apply Content Security Policy middleware
     apply_csp_middleware(app)
@@ -308,10 +311,11 @@ def create_app():
     app.register_blueprint(latency_bp)
     app.register_blueprint(leverage_bp)  # Register Leverage blueprint
     app.register_blueprint(health_bp)  # Register Health monitoring blueprint
-    app.register_blueprint(strategy_bp)
+    app.register_blueprint(strategy_module_bp)  # Register Strategy Module blueprint
     app.register_blueprint(master_contract_status_bp)
     app.register_blueprint(websocket_bp)  # Register WebSocket example blueprint
     app.register_blueprint(chart_test_bp)  # Register standalone chart test page (dev/testing only)
+    app.register_blueprint(custom_indicators_bp)  # Register user chart indicators blueprint
     app.register_blueprint(pnltracker_bp)  # Register PnL tracker blueprint
     app.register_blueprint(python_strategy_bp)  # Register Python strategy blueprint
     app.register_blueprint(telegram_bp)  # Register Telegram blueprint
@@ -324,6 +328,7 @@ def create_app():
     app.register_blueprint(historify_bp)  # Register Historify blueprint
     app.register_blueprint(ivchart_bp)  # Register IV chart blueprint
     app.register_blueprint(scalping_bp)  # Register Scalping terminal blueprint
+    app.register_blueprint(watchlist_bp)  # Register charting watchlist blueprint
     app.register_blueprint(oitracker_bp)  # Register OI tracker blueprint
     app.register_blueprint(gamma_density_bp)  # Register Gamma Density blueprint
     app.register_blueprint(straddle_bp)  # Register straddle chart blueprint
@@ -335,6 +340,7 @@ def create_app():
     app.register_blueprint(oiprofile_bp)  # Register OI Profile blueprint
     app.register_blueprint(arbitrage_bp)  # Register Arbitrage blueprint
     app.register_blueprint(flow_bp)  # Register Flow blueprint
+    app.register_blueprint(agent_bp)  # Register Agent blueprint
     app.register_blueprint(broker_credentials_bp)  # Register Broker credentials blueprint
     app.register_blueprint(system_permissions_bp)  # Register System permissions blueprint
     app.register_blueprint(strategy_portfolio_bp)  # Register Strategy Portfolio blueprint
@@ -429,7 +435,10 @@ def create_app():
     with app.app_context():
         # Exempt webhook endpoints from CSRF protection
         csrf.exempt(app.view_functions["chartink_bp.webhook"])
-        csrf.exempt(app.view_functions["strategy_bp.webhook"])
+        # The strategy module's inbound alert path. Unauthenticated by
+        # design: the URL token is the credential, and TradingView cannot
+        # carry a CSRF token.
+        csrf.exempt(app.view_functions["strategy_module_bp.webhook"])
         # Broker postbacks are machine-to-machine POSTs — brokers cannot carry
         # a CSRF token; validation is per-broker (active-session match +
         # Zerodha checksum) inside blueprints/postback.py.
@@ -556,7 +565,11 @@ def create_app():
 
         error_description = str(error)
 
-        logger.warning(f"CSRF Error on {request.path}: {error_description}")
+        from utils.url_redaction import redact_url_credentials
+
+        logger.warning(
+            f"CSRF Error on {redact_url_credentials(request.path)}: {error_description}"
+        )
 
         # Check if it's a CSRF error
         if "CSRF" in error_description or "csrf" in error_description.lower():
@@ -582,7 +595,9 @@ def create_app():
         from utils.ip_helper import get_real_ip
 
         client_ip = get_real_ip()
-        path = request.path
+        from utils.url_redaction import redact_url_credentials
+
+        path = redact_url_credentials(request.path)
 
         # Skip 404 tracking for authenticated users (prevents self-ban during
         # login flows, broker OAuth callbacks, or normal navigation to
@@ -639,7 +654,12 @@ def create_app():
         from flask import redirect, request
 
         # Log rate limit hit
-        logger.warning(f"Rate limit exceeded for {request.remote_addr}: {request.path}")
+        from utils.url_redaction import redact_url_credentials
+
+        logger.warning(
+            f"Rate limit exceeded for {request.remote_addr}: "
+            f"{redact_url_credentials(request.path)}"
+        )
 
         # For API requests, return JSON response
         if request.path.startswith("/api/"):
@@ -678,6 +698,21 @@ def setup_environment(app):
         # load broker plugins (lazy - no actual imports until login)
         app.broker_auth_functions = load_broker_auth_functions()
         load_broker_capabilities()  # cache plugin.json data in memory
+
+    # Regenerate the gzip variants of the built frontend assets. These are no
+    # longer committed with frontend/dist/ (they bloated the repository history
+    # badly - see utils/precompress_assets), so they are rebuilt here from the
+    # tracked originals whenever a `git pull` brings a new build.
+    #
+    # Deliberately synchronous, ahead of the background DB thread. Under
+    # eventlet a threading.Thread is a green thread, so running ~3s of gzip
+    # there would stall the entire worker mid-request; run at boot, before the
+    # first request is served, it costs nothing anyone can observe. Subsequent
+    # boots find every variant current and finish in ~30ms.
+    from blueprints.react_app import FRONTEND_DIST
+    from utils.precompress_assets import ensure_precompressed_assets
+
+    ensure_precompressed_assets(FRONTEND_DIST)
 
     # Setup ngrok cleanup handlers (always register, regardless of ngrok being enabled)
     # This ensures proper cleanup on shutdown even if ngrok is enabled/disabled via UI
@@ -719,8 +754,8 @@ def setup_environment(app):
                 ("Chartink DB", ensure_chartink_tables_exists),
                 ("Traffic Logs DB", ensure_traffic_logs_exists),
                 ("Latency DB", ensure_latency_tables_exists),
-                ("Strategy DB", ensure_strategy_tables_exists),
                 ("Sandbox DB", ensure_sandbox_tables_exists),
+                ("Strategy Module DB", ensure_strategy_module_tables_exists),
                 ("Action Center DB", ensure_action_center_tables_exists),
                 ("Chart Prefs DB", ensure_chart_prefs_tables_exists),
                 ("Market Calendar DB", ensure_market_calendar_tables_exists),
@@ -728,8 +763,10 @@ def setup_environment(app):
                 ("Historify DB", ensure_historify_tables_exists),
                 ("Flow DB", ensure_flow_tables_exists),
                 ("Scalping DB", ensure_scalping_tables_exists),
+                ("Watchlist DB", ensure_watchlist_tables_exists),
                 ("Leverage DB", ensure_leverage_tables_exists),
                 ("Strategy Portfolio DB", ensure_strategy_portfolio_tables_exists),
+                ("Agent DB", ensure_agent_tables_exists),
                 # Created here, not left to APScheduler's own CREATE TABLE in
                 # scheduler.start(). That DDL would otherwise run further down
                 # this function, after db_ready releases the rest of the boot,
@@ -845,6 +882,17 @@ def setup_environment(app):
                 logger.debug("Historify scheduler initialized")
             except Exception as e:
                 logger.error(f"Failed to initialize Historify scheduler: {e}")
+
+            try:
+                # Multi-leg options strategies with end-to-end risk management.
+                # Starts its own order-update subscriber, crash recovery, price
+                # feed, checkpoint writer and scheduler, in that order.
+                from services.strategy_module.runtime import start_strategy_module
+
+                start_strategy_module()
+                logger.debug("Strategy module initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize Strategy module: {e}")
 
             try:
                 # Server-side scalping SL / target / trailing-stop engine. Runs

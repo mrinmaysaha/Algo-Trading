@@ -776,7 +776,15 @@ for i in "${!CONF_DOMAINS[@]}"; do
             log "Directory exists but is not a valid git repo. Backing up and re-cloning..." "$YELLOW"
             mv "$INSTANCE_DIR" "${INSTANCE_DIR}_backup_$(date +%s)"
         fi
-        git clone "$REPO_URL" "$INSTANCE_DIR"
+        # --filter=blob:none makes this a partial clone: the server sends every
+        # commit and tree but no file contents, so it pulls ~20 MB instead of
+        # ~280 MB. Blobs outside the current checkout are fetched on demand, so
+        # the full history stays usable -- all 4,824 commits, 62 tags, every
+        # branch -- which keeps `git reset --hard HEAD~n`, tag checkouts and
+        # branch switching working. Nearly all of that 280 MB is superseded
+        # frontend/dist bundles that a server never reads. A host without filter
+        # support just full-clones, so this is never worse than no flag at all.
+        git clone --filter=blob:none "$REPO_URL" "$INSTANCE_DIR"
     else
         log "Updating existing repository..." "$GREEN"
         cd "$INSTANCE_DIR"
@@ -947,12 +955,26 @@ upstream openalgo_websocket_${SANITIZED_NAME} {
 server {
     listen 80;
     server_name $DOMAIN;
+
+    # OPENALGO_WEBHOOK_LOG_GUARD: suppress URL-secret routes before redirect logs.
+    set \$openalgo_loggable 1;
+    if (\$uri ~ ^/(strategy|flow|chartink)/webhook/) {
+        set \$openalgo_loggable 0;
+    }
+    access_log /var/log/nginx/${DOMAIN}_access.log combined if=\$openalgo_loggable;
     return 301 https://\$host\$request_uri;
 }
 
 server {
     listen 443 ssl http2;
     server_name $DOMAIN;
+
+    # OPENALGO_WEBHOOK_LOG_GUARD: URL credentials never enter nginx access logs.
+    set \$openalgo_loggable 1;
+    if (\$uri ~ ^/(strategy|flow|chartink)/webhook/) {
+        set \$openalgo_loggable 0;
+    }
+    access_log /var/log/nginx/${DOMAIN}_access.log combined if=\$openalgo_loggable;
 
     ssl_certificate $SSL_DIR/fullchain.pem;
     ssl_certificate_key $SSL_DIR/privkey.pem;
