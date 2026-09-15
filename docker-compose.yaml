@@ -15,6 +15,7 @@ services:
       - openalgo_db:/app/db
       - openalgo_log:/app/log            # Application logs (named volume)
       - ./strategies:/app/strategies     # Python strategies (host bind mount)
+      - ./backtesting:/app/backtesting   # Backtesting engine (host bind mount)
       - openalgo_keys:/app/keys          # API keys/certificates (named volume)
       - openalgo_tmp:/app/tmp            # Temporary directory for numba/scipy (named volume)
       - ./.env:/app/.env

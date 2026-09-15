@@ -251,7 +251,10 @@ def get_multi_timeframe_strategy_analytics(
         if unit == "D":
             days = max(1, val)
         elif unit == "W":
-            days = max(1, val * 7)
+            # In financial trading, 1 week represents 5-7 trading sessions (spanning up to 10 calendar days over weekends)
+            # When queried on Saturday, Sunday, or Monday, add a weekend buffer so Friday's trading session is not truncated
+            weekend_buffer = 3 if now_ist.weekday() in (5, 6, 0) else 0
+            days = max(1, (val * 7) + (weekend_buffer if val == 1 else 0))
         elif unit == "M":
             days = max(1, val * 30)
         else:
@@ -260,6 +263,9 @@ def get_multi_timeframe_strategy_analytics(
         end_dt = now_ist.replace(tzinfo=None)
     else:
         days = days_map.get(tf_upper, 1)
+        if tf_upper in ("1W", "7D"):
+            weekend_buffer = 3 if now_ist.weekday() in (5, 6, 0) else 0
+            days += weekend_buffer
         start_dt = (now_ist - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0).replace(tzinfo=None)
         end_dt = now_ist.replace(tzinfo=None)
 
@@ -398,6 +404,7 @@ def get_multi_timeframe_strategy_analytics(
             "name": "Liquid Sweep Options",
             "aliases": {
                 "Liquid Sweep Options",
+                "Liquid_sweep_options",
                 "liquid_sweep_options_20260808185609",
                 "NSE_LiquiditySweepScalper_V43",
             },
@@ -406,13 +413,46 @@ def get_multi_timeframe_strategy_analytics(
             "name": "Multi-commodity Institutional",
             "aliases": {
                 "Multi-commodity Institutional",
+                "Multi-commodity strategy",
+                "multi-commodity_strategy",
+                "multi-commodity_strategy_20260806235241",
                 "MCX_Institutional_MIS_V3.0",
                 "MCX_Institutional_MIS_V2.9",
                 "MCX_Institutional_MIS_V2.6",
+                "MCX Multi-Commodity Quant Engine V3",
+            },
+        },
+        "MCX_GOLDM_FVG_Options": {
+            "name": "MCX_GOLDM_FVG_Options",
+            "aliases": {
+                "MCX_GOLDM_FVG_Options",
+                "MCX_GOLDM_FVG_Options_20260818011045",
                 "MCX_GOLDM_FVG_Options_Scalper",
+                "MCX GOLDM Options (SMC FVG Macro Scalper)",
             },
         },
     }
+
+    def _normalize_name(s: str) -> str:
+        return re.sub(r"[\s_\-]+", "", (s or "")).lower()
+
+    def _find_matching_strategy_key(candidate: str, cfgs: dict[str, dict[str, Any]]) -> str | None:
+        if not candidate:
+            return None
+        norm_candidate = _normalize_name(candidate)
+        if not norm_candidate:
+            return None
+        if candidate in cfgs:
+            return candidate
+        for k in cfgs:
+            if _normalize_name(k) == norm_candidate:
+                return k
+        for k, v in cfgs.items():
+            aliases = v.get("aliases", set())
+            for a in aliases:
+                if a == candidate or _normalize_name(a) == norm_candidate:
+                    return k
+        return None
 
     # Overlay strategy_configs.json if present
     config_path = "strategies/strategy_configs.json"
@@ -431,38 +471,60 @@ def get_multi_timeframe_strategy_analytics(
                         for m in matches:
                             if m and m.lower() not in ("utf-8", "options", "equity", "futures"):
                                 aliases.add(m)
-                    if disp_name in configured_strategies:
-                        configured_strategies[disp_name]["aliases"].update(aliases)
+
+                    matched_key = _find_matching_strategy_key(disp_name, configured_strategies)
+                    if not matched_key:
+                        matched_key = _find_matching_strategy_key(s_key, configured_strategies)
+                    if not matched_key:
+                        for a in aliases:
+                            matched_key = _find_matching_strategy_key(a, configured_strategies)
+                            if matched_key:
+                                break
+
+                    if matched_key:
+                        configured_strategies[matched_key]["aliases"].update(aliases)
                     else:
                         configured_strategies[disp_name] = {"name": disp_name, "aliases": aliases}
-        except Exception:
-            pass
+        except Exception as err:
+            logger.debug(f"strategy_configs.json overlay error: {err}")
 
     all_known_strategies = set(list_strategies(user_id=user_id)) | set(strategy_trades_map.keys()) | set(configured_strategies.keys())
     target_strategies = [strategy] if (strategy and strategy != "ALL") else sorted(list(all_known_strategies))
 
-    strategy_metrics: dict[str, dict[str, Any]] = {}
-
+    canonical_target_map: dict[str, set[str]] = {}
     for strat_key in target_strategies:
-        disp_name = strat_key
-        aliases = {strat_key}
-        if strat_key in configured_strategies:
-            disp_name = strat_key
-            aliases = configured_strategies[strat_key]["aliases"]
+        matched_k = _find_matching_strategy_key(strat_key, configured_strategies)
+        if matched_k:
+            c_name = matched_k
+            c_aliases = set(configured_strategies[matched_k]["aliases"])
         else:
-            for cfg_name, cfg_info in configured_strategies.items():
-                if strat_key in cfg_info["aliases"]:
-                    disp_name = cfg_name
-                    aliases = cfg_info["aliases"]
-                    break
+            c_name = strat_key
+            c_aliases = {strat_key}
 
-        if disp_name in strategy_metrics and disp_name != strat_key:
-            continue
+        if c_name not in canonical_target_map:
+            canonical_target_map[c_name] = set(c_aliases)
+        else:
+            canonical_target_map[c_name].update(c_aliases)
 
+    strategy_metrics: dict[str, dict[str, Any]] = {}
+    claimed_trade_keys: set[tuple] = set()
+
+    for disp_name, aliases in canonical_target_map.items():
         matched_trades: list[dict[str, Any]] = []
         for alias in aliases:
             if alias in strategy_trades_map:
-                matched_trades.extend(strategy_trades_map[alias])
+                for tr in strategy_trades_map[alias]:
+                    tr_key = (
+                        tr.get("orderid") or tr.get("order_id") or "",
+                        str(tr.get("trade_timestamp") or tr.get("timestamp") or tr.get("fill_time") or ""),
+                        tr.get("symbol") or "",
+                        tr.get("action") or tr.get("trade_type") or "",
+                        _f(tr.get("quantity") or tr.get("qty")),
+                        _f(tr.get("price")),
+                    )
+                    if tr_key not in claimed_trade_keys:
+                        claimed_trade_keys.add(tr_key)
+                        matched_trades.append(tr)
 
         matched_trades.sort(key=lambda x: str(x.get("trade_timestamp") or x.get("timestamp") or x.get("fill_time") or ""))
         trade_count = len(matched_trades)
@@ -709,8 +771,7 @@ def get_multi_timeframe_strategy_analytics(
             "total_net_pnl": round(total_port_net, 2),
             "total_trades": total_port_trades,
             "win_rate": f"{port_win_rate}%",
-            "profit_factor": port_profit_factor,
-            "active_strategies_count": len(active_strats) if active_strats else len(strategy_metrics),
+            "active_strategies_count": len(active_strats),
             "total_strategies_count": len(strategy_metrics),
             "winning_strategies_count": winning_strats,
             "losing_strategies_count": losing_strats,

@@ -37,7 +37,7 @@ class TechnicalEngine:
         tr2 = (df['high'] - df['close'].shift(1)).abs()
         tr3 = (df['low'] - df['close'].shift(1)).abs()
         df['tr'] = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        df['atr'] = df['tr'].rolling(window=cfg.get("supertrend_period", 10)).mean()
+        df['atr'] = df['tr'].rolling(window=cfg.get("supertrend_period", 10), min_periods=1).mean()
 
         # Supertrend
         hl2 = (df['high'] + df['low']) / 2.0

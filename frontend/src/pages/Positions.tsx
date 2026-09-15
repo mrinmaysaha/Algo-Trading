@@ -243,7 +243,8 @@ function canonicalizeStrategyName(name?: string): string {
   if (lower.startsWith('smc_fvg') || lower.startsWith('smc fvg')) return 'SMC_FVG_ZeroLag_Options'
   if (lower.startsWith('prime_indicator') || lower.startsWith('prime indicator')) return 'Prime Indicator Scalper Options'
   if (lower.startsWith('liquid_sweep') || lower.startsWith('liquid sweep') || lower.startsWith('nse_liquidity')) return 'Liquid Sweep Options'
-  if (lower.startsWith('mcx_institutional') || lower.startsWith('mcx institutional') || lower.startsWith('multi-commodity') || lower.startsWith('mcx_goldm')) return 'Multi-commodity Institutional'
+  if (lower.startsWith('mcx_goldm')) return 'MCX_GOLDM_FVG_Options'
+  if (lower.startsWith('mcx_institutional') || lower.startsWith('mcx institutional') || lower.startsWith('multi-commodity')) return 'Multi-commodity Institutional'
   if (lower.startsWith('index_options_step') || lower.startsWith('multi-index step')) return 'Index_Options_StepTrailing_Quant'
   return trimmed
 }

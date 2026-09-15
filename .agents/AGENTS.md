@@ -25,3 +25,9 @@ These rules apply to all AI assistants and tools working within this workspace t
 - **No Temporary Files Left on Disk:** Any scratch scripts, ad-hoc backtesters, extracted text caches, or temporary `.csv` files created during a task must be automatically purged before concluding the turn.
 - **Production Isolation:** Only commit-ready code in `strategies/scripts/`, `strategies/strategy_configs.json`, and official test files in `test/` may persist in the workspace.
 - **Skill Usage:** Leverage `.agents/skills/auto-cleanup/` to enforce clean workspaces.
+
+## 5. Frontier Deliberative Reasoning & Verification Protocol
+- **Cognitive Scaffolding:** For non-trivial problems, break the objective into sub-problems, formulate at least 1 counter-hypothesis, and assess regression risks before editing.
+- **Invariant Auditing:** Verify active schemas, exchange parameters, and contract multiples directly. Never assume or approximate.
+- **Empirical Grounding:** Validate algorithmic adjustments with isolated data-backed verification scripts and syntax checks before finalizing. Rule file: `.agents/rules/frontier-reasoning.md`.
+

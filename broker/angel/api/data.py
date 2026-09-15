@@ -34,30 +34,88 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 _rate_limit_lock = threading.Lock()
 _last_call_ts = {"quote": 0.0, "history": 0.0}
-QUOTE_MIN_INTERVAL = float(os.getenv("ANGEL_QUOTE_MIN_INTERVAL", "0.15"))      # ~6.6 req/s (limit 10)
-# History is paced at ~2 req/s. Angel's table says 3 req/s, but it enforces a
-# strict rolling 1-second window, so steady 0.4s spacing puts 3 requests inside
-# some windows and gets sporadically rejected. 0.5s keeps it at <=2 per window.
+QUOTE_MIN_INTERVAL = float(os.getenv("ANGEL_QUOTE_MIN_INTERVAL", "0.35"))      # ~2.8 req/s (safety under Angel 3-10 req/s limit)
 HISTORY_MIN_INTERVAL = float(os.getenv("ANGEL_HISTORY_MIN_INTERVAL", "0.5"))   # ~2 req/s (limit 3)
+
+# Short-lived quote cache to collapse duplicate bursts from UI / multiple strategies
+QUOTE_CACHE_TTL = float(os.getenv("ANGEL_QUOTE_CACHE_TTL", "2.0"))             # 2.0s TTL
+_quote_cache = {}                                                               # { "EXCHANGE:SYMBOL": (ts, data) }
+_quote_cache_lock = threading.Lock()
+_QUOTE_CACHE_FILE = "/tmp/openalgo_angel_quote_cache.json"
+
+
+def _read_quote_cache(cache_key: str, ttl: float) -> dict | None:
+    """Read cached quote from shared tmp file across Gunicorn and worker processes."""
+    try:
+        if os.path.exists(_QUOTE_CACHE_FILE):
+            now = time.time()
+            with open(_QUOTE_CACHE_FILE, "r") as f:
+                content = json.load(f)
+                item = content.get(cache_key)
+                if item and (now - float(item.get("ts", 0))) < ttl:
+                    return item.get("data")
+    except Exception:
+        pass
+    return None
+
+
+def _write_quote_cache(cache_key: str, quote_data: dict) -> None:
+    """Write cached quote to shared tmp file so all processes share the cached quote."""
+    try:
+        now = time.time()
+        content = {}
+        if os.path.exists(_QUOTE_CACHE_FILE):
+            try:
+                with open(_QUOTE_CACHE_FILE, "r") as f:
+                    content = json.load(f)
+            except Exception:
+                content = {}
+        content[cache_key] = {"ts": now, "data": quote_data}
+        # Keep only recent items under 60 seconds old
+        content = {k: v for k, v in content.items() if (now - float(v.get("ts", 0))) < 60}
+        with open(_QUOTE_CACHE_FILE, "w") as f:
+            json.dump(content, f)
+    except Exception:
+        pass
 
 
 def _apply_rate_limit(category: str) -> None:
     """Block just long enough to keep ``category`` under Angel's per-second cap.
 
-    Thread/greenlet-safe: the next allowed slot is *reserved* while holding the
-    lock, so concurrent callers queue in order instead of all firing at once and
-    tripping a 403. Under eventlet, ``time.sleep`` yields the greenlet.
+    Cross-process safe using file-based lock timestamp in /tmp/ when running under Linux/Docker,
+    with thread-lock fallback for other environments.
     """
     interval = HISTORY_MIN_INTERVAL if category == "history" else QUOTE_MIN_INTERVAL
+    lock_file = f"/tmp/angel_rate_{category}.lock"
     sleep_for = 0.0
+
     with _rate_limit_lock:
         now = time.time()
-        earliest = _last_call_ts[category] + interval
-        if now < earliest:
-            sleep_for = earliest - now
-            _last_call_ts[category] = earliest
-        else:
-            _last_call_ts[category] = now
+        try:
+            import fcntl
+            with open(lock_file, "a+") as f:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                f.seek(0)
+                raw = f.read().strip()
+                last_ts = float(raw) if raw else 0.0
+                earliest = last_ts + interval
+                if now < earliest:
+                    sleep_for = earliest - now
+                    target_ts = earliest
+                else:
+                    target_ts = now
+                f.seek(0)
+                f.truncate()
+                f.write(f"{target_ts:.4f}")
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            earliest = _last_call_ts[category] + interval
+            if now < earliest:
+                sleep_for = earliest - now
+                _last_call_ts[category] = earliest
+            else:
+                _last_call_ts[category] = now
+
     if sleep_for > 0:
         time.sleep(sleep_for)
 
@@ -65,19 +123,31 @@ def _apply_rate_limit(category: str) -> None:
 def _penalize_rate_limit(category: str, penalty: float) -> None:
     """Back the WHOLE shared stream off after a broker rate-limit rejection.
 
-    Without this, a 403 only slept the failing call locally and its retry fired
-    right after the previous success — three requests landing inside one second
-    re-tripped Angel's rolling per-second window, cascading into more 403s.
-    Pushing the shared next-allowed timestamp forward spaces *every* subsequent
-    call in the category out until the pressure clears; it then self-recovers to
-    the base interval as normal calls resume.
+    Pushes the shared next-allowed timestamp forward across processes so subsequent
+    calls in all worker processes space out until pressure clears.
     """
+    lock_file = f"/tmp/angel_rate_{category}.lock"
     with _rate_limit_lock:
-        base = max(_last_call_ts[category], time.time())
-        _last_call_ts[category] = base + penalty
+        now = time.time()
+        try:
+            import fcntl
+            with open(lock_file, "a+") as f:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                f.seek(0)
+                raw = f.read().strip()
+                last_ts = float(raw) if raw else now
+                base = max(last_ts, now)
+                target_ts = base + penalty
+                f.seek(0)
+                f.truncate()
+                f.write(f"{target_ts:.4f}")
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            base = max(_last_call_ts[category], now)
+            _last_call_ts[category] = base + penalty
 
 
-def get_api_response(endpoint, auth, method="GET", payload="", max_retries=2):
+def get_api_response(endpoint, auth, method="GET", payload="", max_retries=3):
     """Helper function to make API calls to Angel One.
 
     Paces requests through the shared per-category rate limiter and transparently
@@ -137,15 +207,16 @@ def get_api_response(endpoint, auth, method="GET", payload="", max_retries=2):
             )
             if is_rate_limit:
                 if attempt < max_retries:
-                    backoff = 0.5 * (2**attempt)
-                    # Throttle the whole shared stream — not just this call — so
-                    # the retry doesn't immediately burst back over the limit
-                    # and cascade into more 403s.
+                    import random
+                    jitter = random.uniform(0.1, 0.35)
+                    backoff = 0.8 * (1.5**attempt) + jitter
+                    # Throttle the whole shared stream across processes
                     _penalize_rate_limit(category, backoff)
                     logger.warning(
                         f"Angel rate limit hit on {endpoint} (status {response.status_code}); "
                         f"retry {attempt + 1}/{max_retries}, backing off {backoff:.2f}s"
                     )
+                    time.sleep(backoff)
                     continue
                 raise Exception("Angel API rate limit exceeded. Please retry shortly.")
             logger.debug(f"Debug - API returned 403 Forbidden. Header fields: {sorted(headers)}")
@@ -192,6 +263,19 @@ class BrokerData:
             dict: Quote data with required fields
         """
         try:
+            cache_key = f"{exchange.upper()}:{symbol.upper()}"
+            now = time.time()
+            with _quote_cache_lock:
+                cached = _quote_cache.get(cache_key)
+                if cached and (now - cached[0]) < QUOTE_CACHE_TTL:
+                    return cached[1].copy()
+
+            disk_cached = _read_quote_cache(cache_key, QUOTE_CACHE_TTL)
+            if disk_cached:
+                with _quote_cache_lock:
+                    _quote_cache[cache_key] = (now, disk_cached)
+                return disk_cached.copy()
+
             # Convert symbol to broker format and get token
             br_symbol = get_br_symbol(symbol, exchange)
             token = get_token(symbol, exchange)
@@ -225,7 +309,7 @@ class BrokerData:
             bids = depth.get("buy", [])
             asks = depth.get("sell", [])
 
-            return {
+            res = {
                 "bid": float(bids[0].get("price", 0)) if bids else 0,
                 "ask": float(asks[0].get("price", 0)) if asks else 0,
                 "open": float(quote.get("open", 0)),
@@ -236,6 +320,10 @@ class BrokerData:
                 "volume": int(quote.get("tradeVolume", 0)),
                 "oi": int(quote.get("opnInterest", 0)),
             }
+            with _quote_cache_lock:
+                _quote_cache[cache_key] = (now, res)
+            _write_quote_cache(cache_key, res)
+            return res
 
         except Exception as e:
             raise Exception(f"Error fetching quotes: {str(e)}")
@@ -251,11 +339,41 @@ class BrokerData:
                   [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
         """
         try:
-            # Angel hard-caps the market-data quote endpoint at 50 tokens per
-            # request, so we must split larger requests into 50-token batches.
-            # Pacing between batches is handled centrally by the shared rate
-            # limiter inside get_api_response() (each batch is one quote call),
-            # so there is no per-batch sleep here anymore.
+            if not symbols:
+                return []
+
+            # Check quote cache first (both memory and disk)
+            now = time.time()
+            cached_results = []
+            uncached_symbols = []
+            with _quote_cache_lock:
+                for item in symbols:
+                    sym = item.get("symbol", "")
+                    exch = item.get("exchange", "")
+                    ck = f"{exch.upper()}:{sym.upper()}"
+                    cached = _quote_cache.get(ck)
+                    if cached and (now - cached[0]) < QUOTE_CACHE_TTL:
+                        cached_results.append({
+                            "symbol": sym,
+                            "exchange": exch,
+                            "data": cached[1].copy(),
+                        })
+                        continue
+                    disk_cached = _read_quote_cache(ck, QUOTE_CACHE_TTL)
+                    if disk_cached:
+                        _quote_cache[ck] = (now, disk_cached)
+                        cached_results.append({
+                            "symbol": sym,
+                            "exchange": exch,
+                            "data": disk_cached.copy(),
+                        })
+                        continue
+                    uncached_symbols.append(item)
+
+            if not uncached_symbols:
+                return cached_results
+
+            symbols = uncached_symbols
             BATCH_SIZE = 50  # Angel API limit: 50 symbols per request
 
             # If symbols exceed batch size, process in batches
@@ -277,10 +395,10 @@ class BrokerData:
                 logger.info(
                     f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches"
                 )
-                return all_results
+                return cached_results + all_results
             else:
                 # Single batch processing
-                return self._process_quotes_batch(symbols)
+                return cached_results + self._process_quotes_batch(symbols)
 
         except Exception as e:
             logger.exception("Error fetching multiquotes")
@@ -418,6 +536,8 @@ class BrokerData:
                     "oi": int(quote.get("opnInterest", 0)),
                 },
             }
+            with _quote_cache_lock:
+                _quote_cache[f"{original['exchange'].upper()}:{original['symbol'].upper()}"] = (time.time(), result_item["data"])
             results.append(result_item)
 
         # Include skipped symbols in results

@@ -22,8 +22,11 @@ RUN pip install --no-cache-dir uv && \
 # ------------------------------ Frontend Builder Stage --------------------- #
 FROM node:22-trixie-slim AS frontend-builder
 WORKDIR /app
-COPY . .
-RUN cd frontend && npm install --include=dev && npm run build
+COPY frontend/package*.json ./frontend/
+RUN cd frontend && npm ci
+COPY frontend/ ./frontend/
+RUN cd frontend && npm run build
+
 
 
 # --------------------------------------------------------------------------- #

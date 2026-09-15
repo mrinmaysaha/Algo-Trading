@@ -176,18 +176,9 @@ def _enrich_positions_with_strategy_tags(
             init_strategy_book_db()
 
         legs = get_strategy_legs()
-        leg_map = {}
+        legs_by_sym: dict[Any, list[dict[str, Any]]] = {}
         if legs:
-            # Prioritize open positions (qty > 0), then most recently updated legs
-            sorted_legs = sorted(
-                legs,
-                key=lambda l: (
-                    abs(float(l.get("quantity") or 0)) > 0,
-                    l.get("updated_at") or "",
-                ),
-                reverse=True,
-            )
-            for l in sorted_legs:
+            for l in legs:
                 strat = l.get("strategy")
                 if not strat or strat in ("UI Exit Position", "AUTO_SQUARE_OFF"):
                     continue
@@ -195,12 +186,9 @@ def _enrich_positions_with_strategy_tags(
                 exch = l.get("exchange")
                 prod = l.get("product")
 
-                if (sym, exch, prod) not in leg_map:
-                    leg_map[(sym, exch, prod)] = strat
-                if (sym, exch) not in leg_map:
-                    leg_map[(sym, exch)] = strat
-                if sym not in leg_map:
-                    leg_map[sym] = strat
+                legs_by_sym.setdefault((sym, exch, prod), []).append(l)
+                legs_by_sym.setdefault((sym, exch), []).append(l)
+                legs_by_sym.setdefault(sym, []).append(l)
 
         user_id = None
         if api_key:
@@ -220,10 +208,26 @@ def _enrich_positions_with_strategy_tags(
             sym = pos.get("symbol")
             exch = pos.get("exchange")
             prod = pos.get("product")
+            pos_qty = float(pos.get("quantity") or 0.0)
+            pos_is_open = abs(pos_qty) > 0
 
-            matched_strat = (
-                leg_map.get((sym, exch, prod)) or leg_map.get((sym, exch)) or leg_map.get(sym)
+            cand_legs = (
+                legs_by_sym.get((sym, exch, prod))
+                or legs_by_sym.get((sym, exch))
+                or legs_by_sym.get(sym)
+                or []
             )
+            matched_strat = None
+            if cand_legs:
+                sorted_cands = sorted(
+                    cand_legs,
+                    key=lambda l: (
+                        (abs(float(l.get("quantity") or 0.0)) > 0) == pos_is_open,
+                        l.get("updated_at") or "",
+                    ),
+                    reverse=True,
+                )
+                matched_strat = sorted_cands[0].get("strategy")
 
             # Sandbox trades/orders lookup
             if not matched_strat:

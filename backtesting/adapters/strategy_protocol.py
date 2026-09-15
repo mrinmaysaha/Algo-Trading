@@ -14,6 +14,9 @@ class Signal(NamedTuple):
     action: str          # "ENTER" | "EXIT" | "HOLD"
     option_type: Optional[str] = None  # "CE" / "PE"
     reason: str = ""
+    stop_loss: Optional[float] = None
+    take_profit: Optional[float] = None
+    mother_range: Optional[float] = None
 
 
 class StrategyProtocol(ABC):
@@ -97,8 +100,8 @@ class LiveStrategyAdapter(StrategyProtocol):
                 mother_range = mother_high - mother_low
 
                 range_min = float(self.cfg.get("range_filter_min", 35.0))
-                range_max = float(self.cfg.get("range_filter_max", 250.0))
-                buffer_val = float(self.cfg.get("breakout_buffer", 3.0))
+                range_max = float(self.cfg.get("range_filter_max", 450.0))
+                buffer_val = float(self.cfg.get("breakout_buffer", 10.0))
 
                 if range_min <= mother_range <= range_max:
                     # Strict 10:00 AM Cutoff for ORB Entries
@@ -109,9 +112,23 @@ class LiveStrategyAdapter(StrategyProtocol):
                         prev_broken_pe = any(float(b["close"]) < (mother_low - buffer_val) for _, b in prev_bars.iloc[1:].iterrows()) if len(prev_bars) > 1 else False
 
                         if float(latest["close"]) > (mother_high + buffer_val) and not prev_broken_ce:
-                            return Signal(action="ENTER", option_type="CE", reason="ORB_BULLISH_BREAKOUT")
+                            return Signal(
+                                action="ENTER",
+                                option_type="CE",
+                                reason="ORB_BULLISH_BREAKOUT",
+                                stop_loss=mother_low,
+                                take_profit=float(latest["close"]) + (4.0 * mother_range),
+                                mother_range=mother_range
+                            )
                         elif float(latest["close"]) < (mother_low - buffer_val) and not prev_broken_pe:
-                            return Signal(action="ENTER", option_type="PE", reason="ORB_BEARISH_BREAKOUT")
+                            return Signal(
+                                action="ENTER",
+                                option_type="PE",
+                                reason="ORB_BEARISH_BREAKOUT",
+                                stop_loss=mother_high,
+                                take_profit=float(latest["close"]) - (4.0 * mother_range),
+                                mother_range=mother_range
+                            )
 
         # -------------------------------------------------------------
         # B. Post10 Institutional Order Block & VWAP Multi-Confluence
@@ -195,18 +212,19 @@ class LiveStrategyAdapter(StrategyProtocol):
         # -------------------------------------------------------------
         # E. General / Scalper / Technical Confluence
         # -------------------------------------------------------------
-        prev = df_slice.iloc[-2]
-        if "st_direction" in df_slice.columns:
-            if prev["st_direction"] == -1 and latest["st_direction"] == 1:
-                return Signal(action="ENTER", option_type="CE", reason="SUPERTREND_REVERSAL_BUY")
-            elif prev["st_direction"] == 1 and latest["st_direction"] == -1:
-                return Signal(action="ENTER", option_type="PE", reason="SUPERTREND_REVERSAL_SELL")
+        elif strat_family in ["GENERAL", "PRIME_SCALPER"]:
+            prev = df_slice.iloc[-2]
+            if "st_direction" in df_slice.columns:
+                if prev["st_direction"] == -1 and latest["st_direction"] == 1:
+                    return Signal(action="ENTER", option_type="CE", reason="SUPERTREND_REVERSAL_BUY")
+                elif prev["st_direction"] == 1 and latest["st_direction"] == -1:
+                    return Signal(action="ENTER", option_type="PE", reason="SUPERTREND_REVERSAL_SELL")
 
-        if "ema_fast" in df_slice.columns and "ema_slow" in df_slice.columns:
-            if prev["ema_fast"] <= prev["ema_slow"] and latest["ema_fast"] > latest["ema_slow"]:
-                return Signal(action="ENTER", option_type="CE", reason="EMA_CROSSOVER_BUY")
-            elif prev["ema_fast"] >= prev["ema_slow"] and latest["ema_fast"] < latest["ema_slow"]:
-                return Signal(action="ENTER", option_type="PE", reason="EMA_CROSSUNDER_SELL")
+            if "ema_fast" in df_slice.columns and "ema_slow" in df_slice.columns:
+                if prev["ema_fast"] <= prev["ema_slow"] and latest["ema_fast"] > latest["ema_slow"]:
+                    return Signal(action="ENTER", option_type="CE", reason="EMA_CROSSOVER_BUY")
+                elif prev["ema_fast"] >= prev["ema_slow"] and latest["ema_fast"] < latest["ema_slow"]:
+                    return Signal(action="ENTER", option_type="PE", reason="EMA_CROSSUNDER_SELL")
 
         return None
 
@@ -216,7 +234,47 @@ class LiveStrategyAdapter(StrategyProtocol):
         current_sl = pos_state["stop_loss"]
         tsl_activated = pos_state["tsl_activated"]
 
-        # Support both Range-based and ATR-based step-locking
+        # Specialized Progressive Multi-Target Trailing for ORB Family
+        if self._determine_strategy_family() == "ORB" and "initial_sl" in pos_state:
+            initial_sl = pos_state["initial_sl"]
+            r_dist = abs(entry_spot - initial_sl) if abs(entry_spot - initial_sl) > 5.0 else (pos_state.get("mother_range") or atr_val)
+            tp1_dist = 1.5 * r_dist
+            tp2_dist = 2.5 * r_dist
+
+            if position == "CE":
+                if pos_state.get("last_step_high") is None:
+                    pos_state["last_step_high"] = entry_spot
+                pos_state["last_step_high"] = max(pos_state["last_step_high"], current_high)
+                favorable_gain = pos_state["last_step_high"] - entry_spot
+
+                # Milestone 2: TP2 (2.5R) -> Move SL to TP1 (+1.5R)
+                if favorable_gain >= tp2_dist:
+                    return max(current_sl, entry_spot + tp1_dist), True
+                # Milestone 1: TP1 (1.5R) -> Move SL to Breakeven
+                elif favorable_gain >= tp1_dist:
+                    return max(current_sl, entry_spot), True
+                # Milestone 0: 50% to TP1 -> Halve initial risk (-1.0R -> -0.5R)
+                elif favorable_gain >= (0.5 * tp1_dist):
+                    return max(current_sl, entry_spot - (0.5 * r_dist)), False
+                return current_sl, tsl_activated
+            else:
+                if pos_state.get("last_step_low") is None:
+                    pos_state["last_step_low"] = entry_spot
+                pos_state["last_step_low"] = min(pos_state["last_step_low"], current_low)
+                favorable_gain = entry_spot - pos_state["last_step_low"]
+
+                # Milestone 2: TP2 (2.5R) -> Move SL to TP1 (+1.5R)
+                if favorable_gain >= tp2_dist:
+                    return min(current_sl, entry_spot - tp1_dist), True
+                # Milestone 1: TP1 (1.5R) -> Move SL to Breakeven
+                elif favorable_gain >= tp1_dist:
+                    return min(current_sl, entry_spot), True
+                # Milestone 0: 50% to TP1 -> Halve initial risk (-1.0R -> -0.5R)
+                elif favorable_gain >= (0.5 * tp1_dist):
+                    return min(current_sl, entry_spot + (0.5 * r_dist)), False
+                return current_sl, tsl_activated
+
+        # Default Step-Trailing for other strategies
         unit_scale = pos_state.get("unit_range") or atr_val
         activation_mult = float(self.cfg.get("act_mult", self.cfg.get("atr_activation_mult", self.cfg.get("tsl_activation_atr_mult", 0.75))))
         step_mult = float(self.cfg.get("step_mult", self.cfg.get("atr_step_mult", self.cfg.get("trail_step_atr_mult", 0.35))))

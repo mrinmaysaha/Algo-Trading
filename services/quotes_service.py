@@ -1,4 +1,6 @@
 import importlib
+import threading
+import time
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from database.auth_db import get_auth_token_broker
@@ -8,6 +10,11 @@ from utils.logging import get_logger
 
 # Initialize logger
 logger = get_logger(__name__)
+
+# Service-level quote cache with rate-limit cooldown fallback
+_SERVICE_QUOTE_CACHE: dict[str, tuple[float, dict]] = {}
+_SERVICE_QUOTE_LOCK = threading.Lock()
+_SERVICE_RATE_LIMIT_COOLDOWN = 0.0
 
 
 def validate_symbol_exchange(symbol: str, exchange: str) -> tuple[bool, str | None]:
@@ -118,6 +125,34 @@ def get_quotes_with_auth(
     if not is_valid:
         return False, {"status": "error", "message": error_msg}, 400
 
+    cache_key = f"{broker.upper()}:{exchange.upper()}:{symbol.upper()}"
+    now = time.time()
+    with _SERVICE_QUOTE_LOCK:
+        cached = _SERVICE_QUOTE_CACHE.get(cache_key)
+        if cached and (now - cached[0]) < 2.0:
+            return True, {"status": "success", "data": cached[1].copy()}, 200
+
+        global _SERVICE_RATE_LIMIT_COOLDOWN
+        if now < _SERVICE_RATE_LIMIT_COOLDOWN:
+            if cached:
+                return True, {"status": "success", "data": cached[1].copy()}, 200
+            # Fallback to live WebSocket market data
+            try:
+                from services.market_data_service import get_market_data_service
+                mds = get_market_data_service()
+                ws_q = mds.get_quote(symbol, exchange)
+                if ws_q:
+                    return True, {"status": "success", "data": ws_q}, 200
+                ws_ltp = mds.get_ltp_value(symbol, exchange)
+                if ws_ltp and ws_ltp > 0:
+                    synth_quote = {
+                        "bid": ws_ltp, "ask": ws_ltp, "open": ws_ltp, "high": ws_ltp, "low": ws_ltp,
+                        "ltp": ws_ltp, "prev_close": ws_ltp, "volume": 0, "oi": 0
+                    }
+                    return True, {"status": "success", "data": synth_quote}, 200
+            except Exception:
+                pass
+
     broker_module = import_broker_module(broker)
     if broker_module is None:
         return False, {"status": "error", "message": "Broker-specific module not found"}, 404
@@ -140,10 +175,55 @@ def get_quotes_with_auth(
         if quotes is None:
             return False, {"status": "error", "message": "Failed to fetch quotes"}, 500
 
+        with _SERVICE_QUOTE_LOCK:
+            _SERVICE_QUOTE_CACHE[cache_key] = (now, quotes)
+
         return True, {"status": "success", "data": quotes}, 200
     except Exception as e:
-        # Check if this is a permission error
         error_msg = str(e)
+        if "rate limit" in error_msg.lower() or "exceeding" in error_msg.lower():
+            _SERVICE_RATE_LIMIT_COOLDOWN = time.time() + 8.0
+            # 1. Try in-memory cached quote
+            with _SERVICE_QUOTE_LOCK:
+                cached = _SERVICE_QUOTE_CACHE.get(cache_key)
+                if cached:
+                    logger.warning(f"Broker rate limit hit for {symbol}, serving last known cached quote")
+                    return True, {"status": "success", "data": cached[1].copy()}, 200
+
+            # 2. Try live WebSocket feed
+            try:
+                from services.market_data_service import get_market_data_service
+                mds = get_market_data_service()
+                ws_q = mds.get_quote(symbol, exchange)
+                if ws_q:
+                    logger.info(f"Broker rate limit hit for {symbol}, serving live WebSocket quote")
+                    return True, {"status": "success", "data": ws_q}, 200
+                ws_ltp = mds.get_ltp_value(symbol, exchange)
+                if ws_ltp and ws_ltp > 0:
+                    synth_quote = {
+                        "bid": ws_ltp, "ask": ws_ltp, "open": ws_ltp, "high": ws_ltp, "low": ws_ltp,
+                        "ltp": ws_ltp, "prev_close": ws_ltp, "volume": 0, "oi": 0
+                    }
+                    logger.info(f"Broker rate limit hit for {symbol}, serving live WebSocket LTP")
+                    return True, {"status": "success", "data": synth_quote}, 200
+            except Exception:
+                pass
+
+            # 3. Try last recorded position LTP
+            try:
+                from database.strategy_book_db import StrategyPosition
+                sp = StrategyPosition.query.filter_by(symbol=symbol).first()
+                if sp and sp.average_price and float(sp.average_price) > 0:
+                    px = float(sp.average_price)
+                    synth_quote = {
+                        "bid": px, "ask": px, "open": px, "high": px, "low": px,
+                        "ltp": px, "prev_close": px, "volume": 0, "oi": 0
+                    }
+                    return True, {"status": "success", "data": synth_quote}, 200
+            except Exception:
+                pass
+
+        # Check if this is a permission error
         if "permission" in error_msg.lower() or "insufficient" in error_msg.lower():
             # Log at debug level for permission errors (common with personal APIs)
             logger.debug(f"Quote fetch permission denied: {error_msg}")

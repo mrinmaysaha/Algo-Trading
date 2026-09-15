@@ -237,4 +237,28 @@ export const pythonStrategyApi = {
     const response = await webClient.post('/python/api/run-backtest', data)
     return response.data
   },
+
+  /**
+   * Get real-time status of Reinforcement Learning policies, event blackouts, and learning audit
+   */
+  getRLStatus: async (): Promise<any> => {
+    const response = await webClient.get('/python/api/rl-status')
+    return response.data
+  },
+
+  /**
+   * Simulate RL conviction and dynamic risk for custom market conditions
+   */
+  simulateRL: async (data: {
+    market: 'MCX' | 'NSE';
+    adx: number;
+    relative_volume: number;
+    rejection_wick: number;
+    ema_dist: number;
+    session_pct: number;
+  }): Promise<any> => {
+    const response = await webClient.post('/python/api/rl-simulate', data)
+    return response.data
+  },
 }
+

@@ -287,9 +287,9 @@ def run_python_strategy_backtest(
             if pd.api.types.is_numeric_dtype(df["timestamp"]):
                 max_ts = float(df["timestamp"].max())
                 if max_ts > 1e11:
-                    df["datetime"] = pd.to_datetime(df["timestamp"], unit="ms")
+                    df["datetime"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.tz_convert("Asia/Kolkata").dt.tz_localize(None)
                 elif max_ts > 1e8:
-                    df["datetime"] = pd.to_datetime(df["timestamp"], unit="s")
+                    df["datetime"] = pd.to_datetime(df["timestamp"], unit="s", utc=True).dt.tz_convert("Asia/Kolkata").dt.tz_localize(None)
                 else:
                     df["datetime"] = pd.to_datetime(df["timestamp"])
             else:
@@ -298,6 +298,8 @@ def run_python_strategy_backtest(
             df["datetime"] = pd.to_datetime(df.index)
 
         df["datetime"] = pd.to_datetime(df["datetime"])
+        if getattr(df["datetime"].dt, "tz", None) is not None:
+            df["datetime"] = df["datetime"].dt.tz_convert("Asia/Kolkata").dt.tz_localize(None)
         df = df.sort_values("datetime").reset_index(drop=True)
 
         try:

@@ -1,10 +1,13 @@
 {
-  "date": "2026-09-06",
+  "date": "2026-09-15",
   "nse": {
-    "session_pnl": 0.0,
+    "session_pnl": 3359.7477913201283,
     "halted": false,
     "halt_reason": "",
-    "strategies": {}
+    "strategies": {
+      "Prime Indicator Scalper Options": 10814.869234666126,
+      "NSE_LiquiditySweepScalper_V43": -7455.121443345998
+    }
   },
   "bse": {
     "session_pnl": 0.0,
@@ -13,10 +16,15 @@
     "strategies": {}
   },
   "mcx": {
-    "session_pnl": 0.0,
+    "session_pnl": -1852.5,
     "halted": false,
     "halt_reason": "",
-    "strategies": {}
+    "strategies": {
+      "MCX_Institutional_MIS_V3.0": -1852.5
+    }
   },
-  "active_positions": {}
+  "active_positions": {
+    "BANKNIFTY": {},
+    "NIFTY": {}
+  }
 }

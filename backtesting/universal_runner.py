@@ -311,7 +311,7 @@ class UniversalStrategyRunner:
                     signal = sig_obj.option_type
                     fill_spot = float(next_bar["open"])
                     fill_time = pd.to_datetime(next_bar["datetime"])
-                    atr_entry = float(curr_bar["atr"])
+                    atr_entry = float(curr_bar["atr"]) if pd.notna(curr_bar.get("atr")) else float(curr_bar.get("tr", 100.0))
 
                     strike_step = spec["strike_step"]
                     atm_strike = round(fill_spot / strike_step) * strike_step
@@ -319,7 +319,10 @@ class UniversalStrategyRunner:
                     raw_entry = self.compute_option_premium(sym_upper, fill_spot, atm_strike, dte_days, signal)
                     fill_entry = raw_entry + self.slippage_pts
 
-                    if signal == "CE":
+                    if sig_obj.stop_loss is not None:
+                        sl_price = sig_obj.stop_loss
+                        tp_price = sig_obj.take_profit or (fill_spot + (atr_entry * tp_atr_mult) if signal == "CE" else fill_spot - (atr_entry * tp_atr_mult))
+                    elif signal == "CE":
                         sl_price = fill_spot - (atr_entry * sl_atr_mult)
                         tp_price = fill_spot + (atr_entry * tp_atr_mult)
                     else:
@@ -334,7 +337,9 @@ class UniversalStrategyRunner:
                         "entry_time": fill_time,
                         "entry_premium": fill_entry,
                         "stop_loss": sl_price,
+                        "initial_sl": sl_price,
                         "take_profit": tp_price,
+                        "mother_range": getattr(sig_obj, "mother_range", None),
                         "last_step_high": fill_spot if signal == "CE" else None,
                         "last_step_low": fill_spot if signal == "PE" else None,
                         "tsl_activated": False,

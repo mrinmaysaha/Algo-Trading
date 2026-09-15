@@ -38,86 +38,58 @@ STRATEGY_REGISTRY = {
     "Post10_Institutional_OB_VWAP": {
         "name": "Post10 Institutional V5 (Dual-Session)",
         "script": "strategies/scripts/Post10_Institutional_OB_VWAP_20260802213829.py",
-        "exchange": "NSE",
-        "underlyings": ["NIFTY", "BANKNIFTY", "MIDCPNIFTY"],
+        "exchange": "NSE/BSE",
+        "underlyings": ["NIFTY", "BANKNIFTY", "SENSEX"],
         "asset_type": "Index Options",
         "timeframe": "1m Spot + 15m VWAP/ATR",
         "session_hours": "09:30-11:15 (Morning ORB) & 12:45-14:15 (Afternoon Breakout)",
-        "lot_sizes": {"NIFTY": 65, "BANKNIFTY": 30, "MIDCPNIFTY": 120},
-        "default_lots": {"NIFTY": 2, "BANKNIFTY": 2, "MIDCPNIFTY": 2},
+        "lot_sizes": {"NIFTY": 65, "BANKNIFTY": 30, "SENSEX": 20},
+        "default_lots": {"NIFTY": 2, "BANKNIFTY": 2, "SENSEX": 2},
         "sl_tp_rules": "SL: Initial Hard Stop / 15m ATR | TP: 2.0x-2.5x Range",
         "trailing_mechanics": "Step-Locked TSL: Activates at 0.70x-0.80x Range, Steps by 0.35x-0.40x",
-        "statutory_regime": "Post-Oct 2024 SEBI NFO (0.1% STT, Rs.40 Brokerage, GST, Turnover, Stamp)"
+        "statutory_regime": "Post-Oct 2024 SEBI NFO & BSE BFO"
     },
-    "Sensex_3Min_ORB_Quant": {
-        "name": "Sensex 3-Minute ORB Quant",
-        "script": "strategies/scripts/Sensex_3Min_ORB_Quant_20260831230000.py",
-        "exchange": "BSE",
-        "underlyings": ["SENSEX"],
-        "asset_type": "BSE Index Options",
-        "timeframe": "3m Opening Mother Candle (09:15-09:18)",
-        "session_hours": "09:18 to 11:00 IST (Square-off 15:10)",
-        "lot_sizes": {"SENSEX": 20},
-        "default_lots": {"SENSEX": 2},
-        "sl_tp_rules": "SL: Mother Candle Range | TP: 2.0x Range",
-        "trailing_mechanics": "Static Risk-Reward (1:2 R:R)",
-        "statutory_regime": "BSE BFO (0.1% STT, BSE Turnover, Rs.40 Brokerage, GST, Stamp)"
-    },
-    "3Min_ORB_Quant": {
-        "name": "BankNifty 3-Minute ORB Quant",
-        "script": "strategies/scripts/3Min_ORB_Quant_20260801205330.py",
-        "exchange": "NSE",
-        "underlyings": ["BANKNIFTY"],
+    "Combined_ORB_Quant_Options": {
+        "name": "Combined Dual-Index ORB Quant V3 (BankNifty 3m + Sensex 5m)",
+        "script": "strategies/scripts/Combined_ORB_Quant_Options_20260911003000.py",
+        "exchange": "NSE/BSE",
+        "underlyings": ["BANKNIFTY", "SENSEX"],
         "asset_type": "Index Options",
-        "timeframe": "3m Opening Mother Candle (09:15-09:18)",
-        "session_hours": "09:18 to 10:00 IST (Square-off 15:10)",
-        "lot_sizes": {"BANKNIFTY": 30},
-        "default_lots": {"BANKNIFTY": 2},
-        "sl_tp_rules": "SL: Mother Candle Range | TP: 1.5x Range",
-        "trailing_mechanics": "Dynamic Step-Locking Trailing SL",
-        "statutory_regime": "Post-Oct 2024 SEBI NFO"
+        "timeframe": "BankNifty: 3m (09:15-09:18) | Sensex: 5m (09:15-09:20)",
+        "session_hours": "09:18 to 10:00 IST (Square-off 15:15)",
+        "lot_sizes": {"BANKNIFTY": 30, "SENSEX": 20},
+        "default_lots": {"BANKNIFTY": 2, "SENSEX": 2},
+        "sl_tp_rules": "SL: Mother Range | TP1: 1.5R | TP2: 2.5R | TP3: 4.0R (100% Position)",
+        "trailing_mechanics": "Milestone 0 (-0.5R Risk Cut) -> Milestone 1 (BE Lock) -> Milestone 2 (Lock TP1) -> TP3",
+        "statutory_regime": "Post-Oct 2024 SEBI NFO & BSE BFO"
     },
     "liquid_sweep_options": {
         "name": "Liquidity Sweep Options Scalper",
         "script": "strategies/scripts/liquid_sweep_options_20260808185609.py",
-        "exchange": "NSE",
-        "underlyings": ["NIFTY", "BANKNIFTY", "MIDCPNIFTY"],
+        "exchange": "NSE/BSE",
+        "underlyings": ["NIFTY", "BANKNIFTY", "SENSEX"],
         "asset_type": "Index Options",
         "timeframe": "3m Execution with 15m ATR",
         "session_hours": "09:30-11:30 & 13:15-14:45 IST",
-        "lot_sizes": {"NIFTY": 65, "BANKNIFTY": 30, "MIDCPNIFTY": 120},
-        "default_lots": {"NIFTY": 2, "BANKNIFTY": 2, "MIDCPNIFTY": 2},
-        "sl_tp_rules": "SL: 1.0x-1.4x ATR | TP: 2.8x-3.8x ATR | CHoCH on Midcap",
-        "trailing_mechanics": "1.4x ATR Breakeven Lock + Discrete Step Trailing",
-        "statutory_regime": "Post-Oct 2024 SEBI NFO"
+        "lot_sizes": {"NIFTY": 65, "BANKNIFTY": 30, "SENSEX": 20},
+        "default_lots": {"NIFTY": 2, "BANKNIFTY": 2, "SENSEX": 2},
+        "sl_tp_rules": "SL: 1.0x-1.5x ATR | TP: 4.5x ATR",
+        "trailing_mechanics": "1.2x-1.4x ATR Breakeven Lock + Discrete Step Trailing",
+        "statutory_regime": "Post-Oct 2024 SEBI NFO & BSE BFO"
     },
     "Prime_Indicator_Scalper_Options": {
         "name": "Prime Indicator Scalper Options",
         "script": "strategies/scripts/Prime_Indicator_Scalper_Options.py",
-        "exchange": "NSE",
-        "underlyings": ["BANKNIFTY", "NIFTY", "MIDCPNIFTY"],
+        "exchange": "NSE/BSE",
+        "underlyings": ["BANKNIFTY", "NIFTY", "SENSEX"],
         "asset_type": "Index Options",
-        "timeframe": "5m (BankNifty), 15m (Nifty & Midcap)",
+        "timeframe": "5m (BankNifty), 15m (Nifty & Sensex)",
         "session_hours": "09:20 to 15:00 IST (Balanced Scalper)",
-        "lot_sizes": {"BANKNIFTY": 30, "NIFTY": 65, "MIDCPNIFTY": 120},
-        "default_lots": {"BANKNIFTY": 1, "NIFTY": 2, "MIDCPNIFTY": 1},
-        "sl_tp_rules": "SL: 1.2x ATR | TP: 3.2x-5.0x ATR | Confluence >= 4/5",
-        "trailing_mechanics": "1.4x ATR Breakeven Lock + 0.5x Step Locking",
-        "statutory_regime": "Post-Oct 2024 SEBI NFO"
-    },
-    "SMC_FVG_ZeroLag_Options": {
-        "name": "SMC Zero-Lag & FVG Scalper",
-        "script": "strategies/scripts/SMC_FVG_ZeroLag_Options_20260817232106.py",
-        "exchange": "NSE",
-        "underlyings": ["BANKNIFTY", "NIFTY", "MIDCPNIFTY"],
-        "asset_type": "Index Options",
-        "timeframe": "3m Execution + 15m Multi-Timeframe Trend",
-        "session_hours": "09:30-11:30 & 13:15-14:45 IST",
-        "lot_sizes": {"BANKNIFTY": 30, "NIFTY": 65, "MIDCPNIFTY": 120},
-        "default_lots": {"BANKNIFTY": 1, "NIFTY": 2, "MIDCPNIFTY": 1},
-        "sl_tp_rules": "SL: 1.2x ATR | TP: 5.0x ATR | 15m MTF Trend Filter",
-        "trailing_mechanics": "1.0x-1.4x ATR Breakeven Lock",
-        "statutory_regime": "Post-Oct 2024 SEBI NFO"
+        "lot_sizes": {"BANKNIFTY": 30, "NIFTY": 65, "SENSEX": 20},
+        "default_lots": {"BANKNIFTY": 2, "NIFTY": 2, "SENSEX": 2},
+        "sl_tp_rules": "SL: 1.0x ATR (Nifty/Sensex) / 1.2x ATR (BN) | TP: 4.0x-5.0x ATR | Confluence: BN >= 4/5, Nifty/Sensex >= 3/5",
+        "trailing_mechanics": "1.4x-1.6x ATR Breakeven Lock + 0.5x Step Locking",
+        "statutory_regime": "Post-Oct 2024 SEBI NFO & BSE BFO"
     },
     "multi-commodity_strategy": {
         "name": "MCX Multi-Commodity Quant Engine V3",
@@ -132,6 +104,34 @@ STRATEGY_REGISTRY = {
         "sl_tp_rules": "SL: 1.2x-1.5x ATR | TP: 3.5x-4.0x ATR",
         "trailing_mechanics": "AVWAP & Keltner Momentum Trailing Lock",
         "statutory_regime": "MCX Commodity (CTT 0.0125%, MCX Turnover, GST, Stamp)"
+    },
+    "MCX_GOLDM_FVG_Options": {
+        "name": "MCX GOLDM Options (SMC FVG Macro Scalper)",
+        "script": "strategies/scripts/MCX_GOLDM_FVG_Options_20260818011045.py",
+        "exchange": "MCX",
+        "underlyings": ["GOLDM"],
+        "asset_type": "Commodity Options (Deep ITM3 CE / PE)",
+        "timeframe": "5m Execution + 15m Trend & 16:00 AVWAP",
+        "session_hours": "17:30 to 23:15 IST (US Session Peak Momentum)",
+        "lot_sizes": {"GOLDM": 100},
+        "default_lots": {"GOLDM": 1},
+        "sl_tp_rules": "SL: 1.0x ATR15 | TP: 5.5x ATR15 | Breakeven +1.2x ATR15",
+        "trailing_mechanics": "+1.2x ATR Breakeven Lock (+0.60 ATR) + 0.50x Step Trailing",
+        "statutory_regime": "MCX Commodity Options (CTT 0.05%, MCX Turnover, Rs.40 Brokerage, GST, Stamp)"
+    },
+    "MCX_Liquidity_Sweep_Scalper": {
+        "name": "MCX Liquidity Sweep & RL Scalper",
+        "script": "strategies/scripts/MCX_Liquidity_Sweep_Scalper.py",
+        "exchange": "MCX",
+        "underlyings": ["GOLDM", "SILVERM", "CRUDEOILM", "NATGASMINI"],
+        "asset_type": "Commodity Futures & Options",
+        "timeframe": "15m Structural Sweeps + Rejection Wicks",
+        "session_hours": "16:00 to 23:25 IST (US Session)",
+        "lot_sizes": {"GOLDM": 100, "SILVERM": 5, "CRUDEOILM": 10, "NATGASMINI": 250},
+        "default_lots": {"GOLDM": 1, "SILVERM": 1, "CRUDEOILM": 1, "NATGASMINI": 2},
+        "sl_tp_rules": "Dynamic RL Stop | 1.5x BE -> 2.5x Lock -> 3.8x Runner",
+        "trailing_mechanics": "Dynamic Multi-Milestone Profit Ratcheting",
+        "statutory_regime": "MCX Commodity (CTT 0.0125%, Turnover, Brokerage Rs.40)"
     }
 }
 
@@ -180,6 +180,8 @@ def execute_native_strategy_backtest(key: str, reg: Dict[str, Any], start: str =
             cfg = cfg_cls.from_environment(resolve_network=False)
             cfg.backtest_mode = True
             trades = mod.run_backtest(cfg)
+    elif hasattr(mod, "run_mcx_backtest"):
+        trades = mod.run_mcx_backtest(days=180)
     return trades or []
 
 
@@ -240,70 +242,210 @@ def analyze_trades(trades: List[Dict[str, Any]], strat_name: str) -> Dict[str, A
 def run_portfolio_concurrency_simulation(strategy_trade_map: Dict[str, List[Dict[str, Any]]]):
     """
     Simulates all strategies running in a single account concurrently.
-    Detects same-index collisions and simulates daily circuit breaker stops.
+    Applies:
+      1. Single-Symbol Mutual Exclusion (one strategy occupies symbol at a time).
+      2. Session-Level Daily Loss Circuit Breaker (NSE: -Rs.5,000, BSE: -Rs.5,000, MCX: -Rs.5,000).
+      3. Chronological Discrete Event Replay.
+    Outputs true realistic portfolio performance vs isolated sum.
     """
     print("\n" + "=" * 90)
-    print(" 🛡️ MULTI-STRATEGY CONCURRENCY & RISK STACKING SIMULATION")
+    print(" 🛡️ MULTI-STRATEGY REAL-TIME CONCURRENCY & RISK SIMULATION")
     print("=" * 90)
 
     merged_trades = []
     for s_name, t_list in strategy_trade_map.items():
+        reg = STRATEGY_REGISTRY.get(s_name, {})
+        strat_exch = reg.get("exchange", "NSE")
         for t in t_list:
             item = dict(t)
             item["strategy_source"] = s_name
+            if "exchange" not in item:
+                item["exchange"] = strat_exch
             merged_trades.append(item)
 
     if not merged_trades:
         print("No trades available for portfolio concurrency simulation.")
         return
 
-    df_m = pd.DataFrame(merged_trades)
-    # Parse trade_date or entry_time
-    if "trade_date" in df_m.columns:
-        df_m["sim_date"] = pd.to_datetime(df_m["trade_date"]).dt.date
-    elif "entry_time" in df_m.columns:
-        df_m["sim_date"] = pd.to_datetime(df_m["entry_time"]).dt.date
-    else:
-        df_m["sim_date"] = pd.to_datetime(df_m.get("date", "2026-03-01")).dt.date
+    # Helper to parse datetime into timezone-naive Timestamp
+    def parse_naive_dt(val):
+        if val is None or pd.isna(val):
+            return None
+        try:
+            dt = pd.to_datetime(val)
+            if hasattr(dt, "tz") and dt.tz is not None:
+                dt = dt.tz_localize(None)
+            return dt
+        except Exception:
+            return None
 
-    # Standardize net
-    if "net" not in df_m.columns and "net_pnl" in df_m.columns:
-        df_m["net"] = df_m["net_pnl"]
-    elif "net" not in df_m.columns and "pnl" in df_m.columns:
-        df_m["net"] = df_m["pnl"]
+    cleaned_trades = []
+    for idx, t in enumerate(merged_trades):
+        # Parse entry time
+        e_val = t.get("entry_time") or t.get("entry_dt") or t.get("timestamp")
+        entry_dt = parse_naive_dt(e_val)
 
-    # 1. Detect Same-Index Concurrent Collisions
-    print("\n[1] CONCURRENT INDEX STACKING AUDIT (Same Underlying Traded by Multiple Strategies on Same Day):")
-    collisions = []
-    for (d, sym), group in df_m.groupby(["sim_date", "symbol"]):
-        strats = group["strategy_source"].unique()
-        if len(strats) > 1:
-            total_net = group["net"].sum()
-            collisions.append({
-                "Date": d, "Symbol": sym, "Strategies": ", ".join(strats),
-                "Positions Stacked": len(group), "Combined Net PnL": round(total_net, 2)
-            })
+        # Parse exit time
+        x_val = t.get("exit_time") or t.get("exit_dt")
+        exit_dt = parse_naive_dt(x_val)
 
-    if collisions:
-        df_col = pd.DataFrame(collisions)
-        print(f"⚠️ Found {len(df_col)} trading sessions with multi-strategy position stacking!")
-        print(df_col.head(15).to_string(index=False))
-        stacking_losses = df_col[df_col["Combined Net PnL"] < 0]["Combined Net PnL"].sum()
-        print(f"\nTotal Drawdown Incurred on Stacked Collision Days: Rs. {stacking_losses:,.2f}")
-    else:
-        print("✅ No cross-strategy collisions detected.")
+        # Date
+        d_val = t.get("trade_date") or t.get("date")
+        sim_date = parse_naive_dt(d_val).date() if d_val is not None else (entry_dt.date() if entry_dt is not None else None)
 
-    # 2. Portfolio Supervisor Circuit Breaker Simulation
-    print("\n[2] PORTFOLIO SUPERVISOR SIMULATION (NSE Daily Cap: Rs. 8,000 | MCX Daily Cap: Rs. 7,000):")
-    daily_pnl = df_m.groupby(["sim_date", df_m.get("exchange", "NSE")])["net"].sum().reset_index()
-    nse_cap_hits = daily_pnl[(daily_pnl["exchange"] == "NSE") & (daily_pnl["net"] <= -8000.0)]
-    mcx_cap_hits = daily_pnl[(daily_pnl["exchange"] == "MCX") & (daily_pnl["net"] <= -7000.0)]
-    print(f"  • NSE Sessions Tripping Rs. 8,000 Cap : {len(nse_cap_hits)} days")
-    print(f"  • MCX Sessions Tripping Rs. 7,000 Cap : {len(mcx_cap_hits)} days")
+        if entry_dt is None and sim_date is not None:
+            entry_dt = pd.Timestamp(sim_date) + pd.Timedelta(hours=9, minutes=30)
+        if exit_dt is None and entry_dt is not None:
+            exit_dt = entry_dt + pd.Timedelta(minutes=30)
 
-    # 3. Sum of Isolated Strategies vs True Combined Portfolio
-    isolated_sum_net = sum(t["net"] for t in merged_trades)
-    print(f"\n  • Sum of Isolated Net PnL : Rs. {isolated_sum_net:,.2f}")
+        if entry_dt is None or sim_date is None:
+            continue
+
+        # Standardize net, gross, taxes
+        net = float(t.get("net", t.get("net_pnl", t.get("pnl", 0.0))))
+        gross = float(t.get("gross", t.get("gross_pnl", net)))
+        taxes = float(t.get("taxes", t.get("charges", t.get("fric", gross - net))))
+
+        sym = str(t.get("symbol", "NIFTY")).upper()
+        exch = str(t.get("exchange", "NSE")).upper()
+        if exch in ("NFO", "NSE_INDEX"):
+            exch = "NSE"
+        elif exch in ("BFO", "BSE_INDEX"):
+            exch = "BSE"
+        elif exch in ("MCX_COMMODITY",):
+            exch = "MCX"
+
+        cleaned_trades.append({
+            "id": idx,
+            "strategy": t["strategy_source"],
+            "symbol": sym,
+            "exchange": exch,
+            "sim_date": sim_date,
+            "entry_dt": entry_dt,
+            "exit_dt": exit_dt,
+            "gross": gross,
+            "taxes": taxes,
+            "net": net,
+            "reason": t.get("reason", t.get("exit_reason", ""))
+        })
+
+    if not cleaned_trades:
+        print("No valid timestamps found in trade records.")
+        return
+
+    df_all = pd.DataFrame(cleaned_trades)
+
+    # 1. Unconstrained Isolated Summary
+    iso_trades = len(df_all)
+    iso_net = df_all["net"].sum()
+    iso_gross = df_all["gross"].sum()
+    iso_taxes = df_all["taxes"].sum()
+    iso_wins = (df_all["net"] > 0).sum()
+    iso_wr = (iso_wins / iso_trades) * 100 if iso_trades > 0 else 0.0
+    iso_gw = df_all[df_all["gross"] > 0]["gross"].sum()
+    iso_gl = abs(df_all[df_all["gross"] < 0]["gross"].sum())
+    iso_pf = (iso_gw / iso_gl) if iso_gl > 0 else 99.0
+    cum_iso = df_all["net"].cumsum()
+    iso_max_dd = (cum_iso.cummax() - cum_iso).max()
+
+    # 2. Chronological Discrete Event Simulation
+    caps = {"NSE": 5000.0, "BSE": 5000.0, "MCX": 5000.0}
+
+    executed_trades = []
+    blocked_collision_trades = []
+    blocked_breaker_trades = []
+
+    # Group by date and exchange
+    for (d, exch), day_group in df_all.groupby(["sim_date", "exchange"]):
+        loss_cap = caps.get(exch, 5000.0)
+        day_trades = day_group.sort_values("entry_dt").to_dict("records")
+
+        daily_realized_pnl = 0.0
+        active_positions = {}  # symbol -> {strategy, exit_dt}
+        cb_tripped = False
+        cb_trip_time = None
+
+        for tr in day_trades:
+            t_entry = tr["entry_dt"]
+            t_sym = tr["symbol"]
+
+            # Clean expired positions
+            to_remove = [s for s, pos in active_positions.items() if pos["exit_dt"] <= t_entry]
+            for s in to_remove:
+                del active_positions[s]
+
+            # Check Circuit Breaker
+            if cb_tripped:
+                tr["block_reason"] = f"Daily Loss Circuit Breaker Tripped at {cb_trip_time} (Realized: -Rs.{abs(daily_realized_pnl):.2f})"
+                blocked_breaker_trades.append(tr)
+                continue
+
+            # Check Symbol Concurrency Lock (Collision)
+            if t_sym in active_positions:
+                occ = active_positions[t_sym]
+                tr["block_reason"] = f"Symbol {t_sym} occupied by {occ['strategy']} until {occ['exit_dt']}"
+                blocked_collision_trades.append(tr)
+                continue
+
+            # Trade Accepted
+            executed_trades.append(tr)
+            active_positions[t_sym] = {
+                "strategy": tr["strategy"],
+                "exit_dt": tr["exit_dt"]
+            }
+
+            # Update Realized PnL upon trade exit
+            daily_realized_pnl += tr["net"]
+            if daily_realized_pnl <= -loss_cap and not cb_tripped:
+                cb_tripped = True
+                cb_trip_time = tr["exit_dt"]
+
+    df_exec = pd.DataFrame(executed_trades) if executed_trades else pd.DataFrame()
+    df_col = pd.DataFrame(blocked_collision_trades) if blocked_collision_trades else pd.DataFrame()
+    df_cb = pd.DataFrame(blocked_breaker_trades) if blocked_breaker_trades else pd.DataFrame()
+
+    # Stats on executed
+    exec_count = len(df_exec) if not df_exec.empty else 0
+    exec_net = df_exec["net"].sum() if not df_exec.empty else 0.0
+    exec_gross = df_exec["gross"].sum() if not df_exec.empty else 0.0
+    exec_taxes = df_exec["taxes"].sum() if not df_exec.empty else 0.0
+    exec_wins = (df_exec["net"] > 0).sum() if not df_exec.empty else 0
+    exec_wr = (exec_wins / exec_count) * 100 if exec_count > 0 else 0.0
+    exec_gw = df_exec[df_exec["gross"] > 0]["gross"].sum() if not df_exec.empty else 0.0
+    exec_gl = abs(df_exec[df_exec["gross"] < 0]["gross"].sum()) if not df_exec.empty else 0.0
+    exec_pf = (exec_gw / exec_gl) if exec_gl > 0 else 99.0
+
+    cum_exec = df_exec["net"].cumsum() if not df_exec.empty else pd.Series([0])
+    exec_max_dd = (cum_exec.cummax() - cum_exec).max()
+
+    cb_blocked_net = df_cb["net"].sum() if not df_cb.empty else 0.0
+    col_blocked_net = df_col["net"].sum() if not df_col.empty else 0.0
+
+    print("\n[1] CONCURRENCY & COLLISION AUDIT (Single-Symbol Mutual Exclusion):")
+    print(f"  • Total Candidate Trades Generated : {iso_trades}")
+    print(f"  • Blocked by Same-Symbol Collision : {len(df_col)} trades ({col_blocked_net:+,.2f} INR net)")
+    if not df_col.empty:
+        sample_col = df_col[["sim_date", "strategy", "symbol", "block_reason"]]
+        print(sample_col.head(6).to_string(index=False))
+
+    print("\n[2] DAILY CIRCUIT BREAKER AUDIT (Session Loss Limit: -Rs. 5,000 per Exchange):")
+    print(f"  • Blocked by Circuit Breaker Trip  : {len(df_cb)} trades")
+    print(f"  • Net PnL of Trades Blocked by CB  : Rs. {cb_blocked_net:+,.2f}")
+    if cb_blocked_net < 0:
+        print(f"  🛡️ CAPITAL SAVED BY CB SHUTDOWN   : Rs. {abs(cb_blocked_net):,.2f} saved by halting runaway losses!")
+
+    print("\n[3] REALISTIC CONSTRAINED PORTFOLIO PERFORMANCE vs ISOLATED SUM:")
+    report_data = [
+        {"Metric": "Total Trades", "Isolated Sum (Fantasy)": f"{iso_trades}", "Realistic Portfolio (Constrained)": f"{exec_count}", "Delta": f"{exec_count - iso_trades}"},
+        {"Metric": "Win Rate", "Isolated Sum (Fantasy)": f"{iso_wr:.1f}%", "Realistic Portfolio (Constrained)": f"{exec_wr:.1f}%", "Delta": f"{exec_wr - iso_wr:+.1f}%"},
+        {"Metric": "Gross PnL", "Isolated Sum (Fantasy)": f"Rs. {iso_gross:+,.2f}", "Realistic Portfolio (Constrained)": f"Rs. {exec_gross:+,.2f}", "Delta": f"Rs. {exec_gross - iso_gross:+,.2f}"},
+        {"Metric": "Taxes & Statutory Fees", "Isolated Sum (Fantasy)": f"Rs. {iso_taxes:,.2f}", "Realistic Portfolio (Constrained)": f"Rs. {exec_taxes:,.2f}", "Delta": f"Rs. {exec_taxes - iso_taxes:+,.2f}"},
+        {"Metric": "Net Realized PnL", "Isolated Sum (Fantasy)": f"Rs. {iso_net:+,.2f}", "Realistic Portfolio (Constrained)": f"Rs. {exec_net:+,.2f}", "Delta": f"Rs. {exec_net - iso_net:+,.2f}"},
+        {"Metric": "Profit Factor", "Isolated Sum (Fantasy)": f"{iso_pf:.2f}", "Realistic Portfolio (Constrained)": f"{exec_pf:.2f}", "Delta": f"{exec_pf - iso_pf:+.2f}"},
+        {"Metric": "Max Drawdown", "Isolated Sum (Fantasy)": f"Rs. {iso_max_dd:,.2f}", "Realistic Portfolio (Constrained)": f"Rs. {exec_max_dd:,.2f}", "Delta": f"Rs. {exec_max_dd - iso_max_dd:+,.2f}"}
+    ]
+    df_rep = pd.DataFrame(report_data)
+    print(df_rep.to_string(index=False))
     print("=" * 90)
 
 

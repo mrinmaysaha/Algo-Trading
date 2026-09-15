@@ -628,34 +628,49 @@ class PositionManager:
                 if not is_initialized():
                     init_strategy_book_db()
 
-                leg_map = {}
+                legs_by_sym = {}
                 legs = get_strategy_legs()
                 if legs:
                     for l in legs:
                         strat = l.get("strategy")
                         if not strat or strat in ("UI Exit Position", "AUTO_SQUARE_OFF"):
                             continue
-                        sym = l.get("symbol")
-                        exch = l.get("exchange")
-                        prod = l.get("product")
-                        qty = abs(float(l.get("quantity") or 0))
-                        if (sym, exch, prod) not in leg_map or qty > 0:
-                            leg_map[(sym, exch, prod)] = strat
-                        if (sym, exch) not in leg_map or qty > 0:
-                            leg_map[(sym, exch)] = strat
-                        if sym not in leg_map or qty > 0:
-                            leg_map[sym] = strat
+                        sym_l = l.get("symbol")
+                        exch_l = l.get("exchange")
+                        prod_l = l.get("product")
+                        for k in [
+                            (sym_l, exch_l, prod_l),
+                            (sym_l, exch_l),
+                            sym_l,
+                        ]:
+                            if k not in legs_by_sym:
+                                legs_by_sym[k] = []
+                            legs_by_sym[k].append(l)
 
                 for pos_item in positions_list:
                     sym = pos_item.get("symbol")
                     exch = pos_item.get("exchange")
                     prod = pos_item.get("product")
+                    pos_qty = float(pos_item.get("quantity") or 0.0)
+                    pos_is_open = abs(pos_qty) > 0
 
-                    matched_strat = (
-                        leg_map.get((sym, exch, prod))
-                        or leg_map.get((sym, exch))
-                        or leg_map.get(sym)
+                    cand_legs = (
+                        legs_by_sym.get((sym, exch, prod))
+                        or legs_by_sym.get((sym, exch))
+                        or legs_by_sym.get(sym)
+                        or []
                     )
+                    matched_strat = None
+                    if cand_legs:
+                        sorted_cands = sorted(
+                            cand_legs,
+                            key=lambda l: (
+                                (abs(float(l.get("quantity") or 0.0)) > 0) == pos_is_open,
+                                l.get("updated_at") or "",
+                            ),
+                            reverse=True,
+                        )
+                        matched_strat = sorted_cands[0].get("strategy")
 
                     # 1. Check recent SandboxTrades for this user and symbol
                     if not matched_strat:

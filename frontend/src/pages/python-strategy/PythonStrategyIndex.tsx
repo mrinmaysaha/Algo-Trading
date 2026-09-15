@@ -14,6 +14,7 @@ import {
   RefreshCw,
   Square,
   Trash2,
+  Brain,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
@@ -276,6 +277,10 @@ export default function PythonStrategyIndex() {
           <Button variant="outline" size="sm" onClick={() => navigate('/strategy-analytics')}>
             <BarChart3 className="h-4 w-4 mr-2 text-indigo-500" />
             P&L Analytics
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => navigate('/reinforcement-analytics')}>
+            <Brain className="h-4 w-4 mr-2 text-purple-400" />
+            RL Analytics
           </Button>
           <Button variant="outline" size="sm" onClick={() => navigate('/python/guide')}>
             <HelpCircle className="h-4 w-4 mr-2" />

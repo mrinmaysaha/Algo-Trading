@@ -3327,3 +3327,143 @@ def api_run_backtest():
         logger.exception("Flask blueprint run-backtest failed")
         return jsonify({"status": "error", "message": str(e)}), 500
 
+
+@python_strategy_bp.route("/api/rl-status", methods=["GET"])
+@check_session_validity
+def api_get_rl_status():
+    """API: Real-time status of RL models, event blackouts, and learning audit logs."""
+    try:
+        import numpy as np
+        import csv
+        from strategies.rl.adaptive_policy import AdaptiveRLPolicy
+        from strategies.news.event_blackout_guard import EventBlackoutGuard
+
+        mcx_policy = AdaptiveRLPolicy(weights_file="strategies/rl/policy_weights.json")
+        nse_policy = AdaptiveRLPolicy(weights_file="strategies/rl/nse_policy_weights.json")
+
+        regime_trend = np.array([1.2, 0.015, 0.38, 0.62, 0.1, 0.4, 0.25, 2.2, 0.0, 0.0, 0.0, 1.5], dtype=np.float32)
+        regime_chop = np.array([0.1, 0.008, 0.12, 0.51, 1.8, 0.2, 0.60, 0.45, 0.0, 0.0, 0.0, 0.2], dtype=np.float32)
+        regime_sweep = np.array([-0.8, 0.022, 0.29, 0.35, 0.2, 1.6, 0.45, 1.8, 0.0, 0.0, 0.0, 0.1], dtype=np.float32)
+
+        mcx_c_trend, mcx_sl_trend, _ = mcx_policy.predict(regime_trend)
+        mcx_c_chop, mcx_sl_chop, _ = mcx_policy.predict(regime_chop)
+        mcx_c_sweep, mcx_sl_sweep, _ = mcx_policy.predict(regime_sweep)
+
+        nse_c_trend, nse_sl_trend, _ = nse_policy.predict(regime_trend)
+        nse_c_chop, nse_sl_chop, _ = nse_policy.predict(regime_chop)
+        nse_c_sweep, nse_sl_sweep, _ = nse_policy.predict(regime_sweep)
+
+        now_ist = datetime.now(IST)
+        blackouts = {}
+        for sym in ["CRUDEOILM", "NATGASMINI", "GOLDM", "SILVERM", "NIFTY", "BANKNIFTY", "SENSEX"]:
+            is_b, reason = EventBlackoutGuard.is_blackout_active(sym, now_ist)
+            blackouts[sym] = {"is_blackout": is_b, "reason": reason}
+
+        audit_logs = []
+        audit_file = "logs/rl_learning_audit.csv"
+        if os.path.exists(audit_file):
+            try:
+                with open(audit_file, "r", encoding="utf-8") as f:
+                    reader = list(csv.DictReader(f))
+                    audit_logs = reader[-8:]
+                    audit_logs.reverse()
+            except Exception:
+                pass
+
+        return jsonify({
+            "status": "success",
+            "data": {
+                "mcx": {
+                    "total_experiences": mcx_policy.total_experiences,
+                    "win_count": mcx_policy.win_count,
+                    "loss_count": mcx_policy.loss_count,
+                    "weights": mcx_policy.weights.tolist(),
+                    "bias": mcx_policy.bias.tolist(),
+                    "convictions": {
+                        "trend": {"conviction": round(mcx_c_trend, 3), "status": "APPROVED" if mcx_c_trend > 0.20 else "VETOED", "sl_atr": round(mcx_sl_trend, 1)},
+                        "chop": {"conviction": round(mcx_c_chop, 3), "status": "APPROVED" if mcx_c_chop > 0.20 else "VETOED", "sl_atr": round(mcx_sl_chop, 1)},
+                        "sweep": {"conviction": round(mcx_c_sweep, 3), "status": "APPROVED" if mcx_c_sweep > 0.20 else "VETOED", "sl_atr": round(mcx_sl_sweep, 1)},
+                    }
+                },
+                "nse": {
+                    "total_experiences": nse_policy.total_experiences,
+                    "win_count": nse_policy.win_count,
+                    "loss_count": nse_policy.loss_count,
+                    "weights": nse_policy.weights.tolist(),
+                    "bias": nse_policy.bias.tolist(),
+                    "convictions": {
+                        "trend": {"conviction": round(nse_c_trend, 3), "status": "APPROVED" if nse_c_trend > 0.20 else "VETOED", "sl_atr": round(nse_sl_trend, 1)},
+                        "chop": {"conviction": round(nse_c_chop, 3), "status": "APPROVED" if nse_c_chop > 0.20 else "VETOED", "sl_atr": round(nse_sl_chop, 1)},
+                        "sweep": {"conviction": round(nse_c_sweep, 3), "status": "APPROVED" if nse_c_sweep > 0.20 else "VETOED", "sl_atr": round(nse_sl_sweep, 1)},
+                    }
+                },
+                "blackouts": blackouts,
+                "audit_logs": audit_logs
+            }
+        })
+    except Exception as e:
+        logger.exception(f"Error in api_get_rl_status: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@python_strategy_bp.route("/api/rl-simulate", methods=["POST"])
+@check_session_validity
+def api_simulate_rl_conviction():
+    """API: Interactive simulation of RL conviction and dynamic risk for user-provided market state."""
+    try:
+        import numpy as np
+        from strategies.rl.adaptive_policy import AdaptiveRLPolicy
+        
+        req = request.get_json() or {}
+        market = req.get("market", "MCX").upper()
+        adx = float(req.get("adx", 25.0))
+        rvol = float(req.get("relative_volume", 1.5))
+        wick = float(req.get("rejection_wick", 0.3))
+        ema_dist = float(req.get("ema_dist", 0.5))
+        session_pct = float(req.get("session_pct", 0.3))
+        
+        weights_file = "strategies/rl/policy_weights.json" if market == "MCX" else "strategies/rl/nse_policy_weights.json"
+        policy = AdaptiveRLPolicy(weights_file=weights_file)
+        
+        # Build 12-dim state vector
+        # [ema_dist, vol_ratio, adx_norm, rsi_norm, up_wick, low_wick, session, rel_vol, pos, pnl, holding, struct]
+        state = np.array([
+            ema_dist,
+            0.015,
+            np.clip(adx / 100.0, 0.0, 1.0),
+            0.55,
+            wick,
+            0.1,
+            np.clip(session_pct, 0.0, 1.0),
+            np.clip(rvol, 0.0, 5.0),
+            0.0,
+            0.0,
+            0.0,
+            1.2
+        ], dtype=np.float32)
+        
+        conviction, dynamic_sl, dynamic_tp = policy.predict(state)
+        approved = bool(conviction > 0.20)
+        
+        return jsonify({
+            "status": "success",
+            "data": {
+                "market": market,
+                "conviction": round(conviction, 3),
+                "decision": "APPROVED" if approved else "VETOED",
+                "threshold": 0.20,
+                "dynamic_sl_atr": round(dynamic_sl, 2),
+                "dynamic_tp_ratchet": round(dynamic_tp, 2),
+                "weights_summary": {
+                    "total_experiences": policy.total_experiences,
+                    "win_count": policy.win_count,
+                    "loss_count": policy.loss_count
+                }
+            }
+        })
+    except Exception as e:
+        logger.exception(f"Error in api_simulate_rl_conviction: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+

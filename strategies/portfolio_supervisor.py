@@ -53,7 +53,7 @@ SESSIONS: Dict[str, Dict] = {
         "label": "NSE",
         "start": datetime.time(9, 15),
         "end": datetime.time(15, 30),
-        "loss_cap_inr": 8000.0,
+        "loss_cap_inr": 5000.0,
         "strategies": {
             "Post10_Institutional_OB_VWAP",
             "Post10_Institutional_OB_VWAP_Production",
@@ -217,6 +217,13 @@ def _save_state(state: dict) -> None:
         logger.error("[CB STATE WRITE ERROR] %s", exc)
 
 
+def _is_unrestricted_mode() -> bool:
+    """Returns True if testing mode is enabled to run all strategies without circuit breakers or symbol locks."""
+    # Testing Phase: Unrestricted mode active by default to allow full strategy testing without halts
+    val = os.getenv("UNRESTRICTED_TESTING_MODE", "1").lower()
+    return val not in ("0", "false", "no", "off")
+
+
 def report_session_loss(session: str, strategy_name: str, realized_pnl: float, symbol: str = None) -> None:
     """Report realized PnL after any trade exit. Triggers halt if cap exceeded and clears active position."""
     deregister_symbol_position(strategy_name, symbol)
@@ -230,15 +237,21 @@ def report_session_loss(session: str, strategy_name: str, realized_pnl: float, s
     strats[strategy_name] = strats.get(strategy_name, 0.0) + realized_pnl
     sess["session_pnl"] = sum(strats.values())
     if not sess["halted"] and sess["session_pnl"] <= -cfg["loss_cap_inr"]:
-        sess["halted"] = True
-        sess["halt_reason"] = (
-            f"{cfg['label']} portfolio loss cap Rs.{cfg['loss_cap_inr']:,.0f} breached "
-            f"(session PnL: Rs.{sess['session_pnl']:,.2f}). All {cfg['label']} entries halted."
-        )
-        logger.warning(
-            "PORTFOLIO CIRCUIT BREAKER TRIGGERED — %s session halted. Loss: Rs.%.2f / Cap: Rs.%.2f",
-            cfg["label"], -sess["session_pnl"], cfg["loss_cap_inr"]
-        )
+        if not _is_unrestricted_mode():
+            sess["halted"] = True
+            sess["halt_reason"] = (
+                f"{cfg['label']} portfolio loss cap Rs.{cfg['loss_cap_inr']:,.0f} breached "
+                f"(session PnL: Rs.{sess['session_pnl']:,.2f}). All {cfg['label']} entries halted."
+            )
+            logger.warning(
+                "PORTFOLIO CIRCUIT BREAKER TRIGGERED — %s session halted. Loss: Rs.%.2f / Cap: Rs.%.2f",
+                cfg["label"], -sess["session_pnl"], cfg["loss_cap_inr"]
+            )
+        else:
+            logger.info(
+                "[UNRESTRICTED TESTING] %s session loss cap Rs.%.2f reached (PnL: Rs.%.2f), halt bypassed for testing.",
+                cfg["label"], cfg["loss_cap_inr"], sess["session_pnl"]
+            )
     _save_state(state)
     logger.info(
         "[CB] %s | %s | Trade PnL: Rs.%.2f | Session: Rs.%.2f | Halted: %s",
@@ -252,6 +265,9 @@ def is_session_halted(session: str, symbol: str = None, strategy_name: str = Non
       1. Session realized loss cap has been breached.
       2. Max concurrent positions on the underlying symbol (default 1: Mutual Exclusion) is already reached.
     """
+    if _is_unrestricted_mode():
+        return False, ""
+
     session = session.lower()
     if session not in SESSIONS:
         return False, ""

@@ -94,6 +94,7 @@ const SchedulePythonStrategy = lazy(() => import('@/pages/python-strategy/Schedu
 const PythonStrategyGuide = lazy(() => import('@/pages/python-strategy/PythonStrategyGuide'))
 const PythonStrategyBacktester = lazy(() => import('@/pages/python-strategy/PythonStrategyBacktester'))
 const PythonStrategyBacktesterResults = lazy(() => import('@/pages/python-strategy/PythonStrategyBacktesterResults'))
+const ReinforcementAnalytics = lazy(() => import('@/pages/python-strategy/ReinforcementAnalytics'))
 
 // Strategy module: multi-leg options strategies with risk management
 const StrategyList = lazy(() => import('@/pages/strategy/List'))
@@ -284,6 +285,8 @@ function App() {
                 <Route path="/python/:strategyId/logs" element={<PythonStrategyLogs />} />
                 <Route path="/python/:strategyId/schedule" element={<SchedulePythonStrategy />} />
                 <Route path="/python/guide" element={<PythonStrategyGuide />} />
+                <Route path="/reinforcement-analytics" element={<ReinforcementAnalytics />} />
+                <Route path="/python/reinforcement" element={<ReinforcementAnalytics />} />
                 
                 {/* Tools - Backtester */}
                 <Route path="/tools/python-backtester" element={<PythonStrategyBacktester />} />
