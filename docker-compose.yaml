@@ -1,16 +1,19 @@
 services:
-  openalgo:
+  # ============================================================================
+  # INSTANCE 1: ANGEL ONE (NSE / NFO / MCX) - DOMESTIC SESSIONS
+  # ============================================================================
+  openalgo-angel:
     image: openalgo:latest
     build:
       context: .
       dockerfile: Dockerfile
 
-    container_name: openalgo-web
+    container_name: openalgo-angel
     ports:
       - "${FLASK_PORT:-5000}:5000"
       - "${WEBSOCKET_PORT:-8765}:8765"
 
-    # persistent DB, strategies, logs + mount the host .env read-only so dotenv can read it
+    # persistent DB, strategies, logs + mount the host .env
     volumes:
       - openalgo_db:/app/db
       - openalgo_log:/app/log            # Application logs (named volume)
@@ -20,26 +23,17 @@ services:
       - openalgo_tmp:/app/tmp            # Temporary directory for numba/scipy (named volume)
       - ./.env:/app/.env
 
-    # (optional) extra env-vars that are NOT in .env
     environment:
       - FLASK_ENV=${FLASK_ENV:-production}
       - FLASK_DEBUG=${FLASK_DEBUG:-0}
       - TZ=Asia/Kolkata
-      # Limit OpenBLAS/NumPy threads to prevent RLIMIT_NPROC exhaustion
-      # See: https://github.com/marketcalls/openalgo/issues/822
       - OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-2}
       - OMP_NUM_THREADS=${OMP_NUM_THREADS:-2}
       - MKL_NUM_THREADS=${MKL_NUM_THREADS:-2}
       - NUMEXPR_NUM_THREADS=${NUMEXPR_NUM_THREADS:-2}
-      # Numba JIT compiler settings
       - NUMBA_NUM_THREADS=${NUMBA_NUM_THREADS:-2}
-      # Strategy memory limit (MB) - reduce for low-memory containers
-      # 2GB container with 5 strategies: set to 256
       - STRATEGY_MEMORY_LIMIT_MB=${STRATEGY_MEMORY_LIMIT_MB:-1024}
 
-    # Shared memory for scipy/numba operations
-    # Recommended: 25% of container RAM (min 128m, max 2g)
-    # 2GB container: 256m | 4GB: 512m | 8GB: 1g | 16GB+: 2g
     shm_size: ${SHM_SIZE:-512m}
 
     healthcheck:
@@ -51,7 +45,49 @@ services:
 
     restart: unless-stopped
 
-# Define named volumes for persistence
+  # ============================================================================
+  # INSTANCE 2: GLOBAL 24/7 (CRYPTO & GOLD USD) - CONTINUOUS EXECUTION
+  # ============================================================================
+  openalgo-global:
+    image: openalgo:latest
+    container_name: openalgo-global
+    ports:
+      - "5001:5000"                      # Host Port 5001 -> Container Port 5000
+      - "8766:8765"                      # Host Port 8766 -> Container Port 8765
+
+    # Isolated persistent DB, logs, and 24/7 global strategies
+    volumes:
+      - openalgo_global_db:/app/db
+      - openalgo_global_log:/app/log
+      - ./strategies_global:/app/strategies
+      - ./backtesting:/app/backtesting
+      - openalgo_global_keys:/app/keys
+      - openalgo_global_tmp:/app/tmp
+      - ./.env.global:/app/.env
+
+    environment:
+      - FLASK_ENV=${FLASK_ENV:-production}
+      - FLASK_DEBUG=${FLASK_DEBUG:-0}
+      - TZ=Asia/Kolkata
+      - OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-2}
+      - OMP_NUM_THREADS=${OMP_NUM_THREADS:-2}
+      - MKL_NUM_THREADS=${MKL_NUM_THREADS:-2}
+      - NUMEXPR_NUM_THREADS=${NUMEXPR_NUM_THREADS:-2}
+      - NUMBA_NUM_THREADS=${NUMBA_NUM_THREADS:-2}
+      - STRATEGY_MEMORY_LIMIT_MB=${STRATEGY_MEMORY_LIMIT_MB:-1024}
+
+    shm_size: ${SHM_SIZE:-512m}
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:5000/auth/check-setup"]
+      interval: 30s
+      timeout: 30s
+      retries: 5
+      start_period: 180s
+
+    restart: unless-stopped
+
+# Define named volumes for persistence (Angel One & Global isolated)
 volumes:
   openalgo_db:
     driver: local
@@ -62,4 +98,12 @@ volumes:
   openalgo_keys:
     driver: local
   openalgo_tmp:
+    driver: local
+  openalgo_global_db:
+    driver: local
+  openalgo_global_log:
+    driver: local
+  openalgo_global_keys:
+    driver: local
+  openalgo_global_tmp:
     driver: local
