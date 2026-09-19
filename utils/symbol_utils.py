@@ -74,6 +74,15 @@ def get_contract_multiplier(symbol: str, exchange: str) -> float:
         if sym_upper.startswith("COTTONCNDY") or sym_upper.startswith("COTTON"):
             return 0.5
 
+    # Crypto quotation unit rules (Delta Exchange standards):
+    if ex_upper in CRYPTO_EXCHANGES or ex_upper == "DELTA":
+        if "BTC" in sym_upper:
+            return 0.001
+        if "ETH" in sym_upper:
+            return 0.01
+        if "SOL" in sym_upper:
+            return 0.1
+
     try:
         from database.token_db import get_symbol_info
 

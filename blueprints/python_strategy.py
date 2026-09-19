@@ -608,6 +608,7 @@ def start_strategy_process(strategy_id):
             STRATEGY_CONFIGS[strategy_id].pop("is_error", None)
             STRATEGY_CONFIGS[strategy_id].pop("error_message", None)
             STRATEGY_CONFIGS[strategy_id].pop("error_time", None)
+            STRATEGY_CONFIGS[strategy_id].pop("manually_stopped", None)
             save_configs()
 
             # Broadcast status update via SSE
@@ -699,7 +700,7 @@ def stop_strategy_process(strategy_id):
 
         try:
             if isinstance(process, subprocess.Popen):
-                stopped = terminate_popen_safely(process, pid, terminate_timeout=5, kill_timeout=2)
+                stopped = terminate_popen_safely(process, pid, terminate_timeout=15, kill_timeout=3)
             elif hasattr(process, "terminate"):
                 # Restored strategies are tracked as psutil.Process objects.
                 # Do not call psutil.Process.wait(timeout): under
@@ -707,7 +708,7 @@ def stop_strategy_process(strategy_id):
                 # select.poll(), which eventlet removes from the patched
                 # select module.
                 stopped = terminate_psutil_process_safely(
-                    process, terminate_timeout=5, kill_timeout=2
+                    process, terminate_timeout=15, kill_timeout=3
                 )
             else:
                 # Fallback: use PID directly
@@ -747,6 +748,20 @@ def stop_strategy_process(strategy_id):
             broadcast_status_update(strategy_id, status, status_message)
 
         logger.info(f"Stopped strategy {strategy_id} at {ist_now.strftime('%H:%M:%S IST')}")
+
+        # Safety check: audit if the stopped strategy still has active open positions
+        try:
+            from database.strategy_book_db import get_strategy_legs
+            strategy_name = (STRATEGY_CONFIGS.get(strategy_id) or {}).get("name") or strategy_id
+            legs = get_strategy_legs(strategy=strategy_name)
+            open_legs = [l for l in legs if abs(float(l.get("quantity") or 0)) > 0]
+            if open_legs:
+                logger.warning(
+                    f"⚠️ [STRATEGY STOPPED WITH OPEN POSITIONS] Strategy '{strategy_name}' was stopped but still has {len(open_legs)} open position(s): "
+                    + ", ".join([f"{l.get('symbol')} (Qty: {l.get('quantity')})" for l in open_legs])
+                )
+        except Exception as leg_err:
+            logger.debug(f"Open legs audit on strategy stop failed: {leg_err}")
 
         # Cleanup old log files based on configured limits
         try:
@@ -811,7 +826,7 @@ def wait_for_psutil_process_exit(process, timeout):
     return psutil_process_has_exited(process)
 
 
-def terminate_psutil_process_safely(process, terminate_timeout=3, kill_timeout=2):
+def terminate_psutil_process_safely(process, terminate_timeout=15, kill_timeout=3):
     """Terminate a psutil.Process without using psutil's eventlet-unsafe wait path."""
     pid = getattr(process, "pid", "unknown")
 
@@ -862,7 +877,7 @@ def wait_for_popen_exit(process, timeout):
     return process.poll() is not None
 
 
-def terminate_popen_safely(process, pid, terminate_timeout=5, kill_timeout=2):
+def terminate_popen_safely(process, pid, terminate_timeout=15, kill_timeout=3):
     """Terminate a subprocess.Popen without an eventlet-unsafe blocking wait.
 
     Escalates the same way the previous inline code did, graceful signal first
@@ -1502,25 +1517,24 @@ def market_hours_enforcer():
             schedule_days = [d.lower() for d in config.get("schedule_days", [])]
 
             if status.get("is_trading"):
-                # Exchange tradeable today — clear any stale pause reason
-                if config.get("paused_reason") in ("weekend", "holiday", "before_market", "after_market"):
-                    paused_reason = config.get("paused_reason")
-                    is_running = _is_strategy_running(strategy_id, config)
-                    if (
-                        not is_running
-                        and not config.get("manually_stopped")
-                        and (not schedule_days or today_day in schedule_days)
-                        and is_within_schedule_time(strategy_id)
-                    ):
-                        logger.info(
-                            f"Enforcer: resuming paused strategy {strategy_id} ({exch}) "
-                            f"(was: {paused_reason})"
-                        )
-                        success, msg = start_strategy_process(strategy_id)
-                        if success:
-                            started_count += 1
-                        else:
-                            logger.warning(f"Failed to resume {strategy_id}: {msg}")
+                # Exchange tradeable today — check if scheduled strategy should be running
+                is_running = _is_strategy_running(strategy_id, config)
+                if (
+                    not is_running
+                    and not config.get("manually_stopped")
+                    and (not schedule_days or today_day in schedule_days)
+                    and is_within_schedule_time(strategy_id)
+                ):
+                    paused_reason = config.get("paused_reason") or "server_restart"
+                    logger.info(
+                        f"Enforcer: auto-resuming scheduled strategy {strategy_id} ({exch}) "
+                        f"(reason: {paused_reason})"
+                    )
+                    success, msg = start_strategy_process(strategy_id)
+                    if success:
+                        started_count += 1
+                    else:
+                        logger.warning(f"Failed to resume {strategy_id}: {msg}")
 
                 if "paused_reason" in config:
                     del config["paused_reason"]
@@ -1973,7 +1987,11 @@ def start_strategy(strategy_id):
             stop_hour, stop_min = map(int, schedule_stop.split(":"))
             start_time = now.replace(hour=start_hour, minute=start_min, second=0, microsecond=0)
             stop_time = now.replace(hour=stop_hour, minute=stop_min, second=0, microsecond=0)
-            is_within_hours = start_time <= now <= stop_time
+            if stop_time < start_time:
+                # Overnight schedule crossing midnight (e.g. 21:50 - 06:45)
+                is_within_hours = (now >= start_time) or (now <= stop_time)
+            else:
+                is_within_hours = start_time <= now <= stop_time
         except (ValueError, AttributeError) as e:
             logger.warning(f"Could not parse schedule times for {strategy_id}: {e}")
 
@@ -2558,10 +2576,56 @@ def api_get_strategies():
                 "paused_message": config.get("paused_message"),
                 "process_id": config.get("process_id"),
                 "created_at": config.get("created_at"),
+                "group": config.get("group", ""),
+                "order": config.get("order", 0),
             }
         )
 
     return jsonify({"strategies": strategies})
+
+
+@python_strategy_bp.route("/api/strategies/layout", methods=["POST"])
+@check_session_validity
+def api_save_strategy_layout():
+    """API: Save strategy custom ordering and groups."""
+    try:
+        data = request.get_json() or {}
+        strategy_order = data.get("strategy_order", [])
+        groups = data.get("groups", [])
+
+        load_configs()
+        changed = False
+
+        # Apply ordering if provided
+        if isinstance(strategy_order, list):
+            for idx, sid in enumerate(strategy_order):
+                if sid in STRATEGY_CONFIGS:
+                    if STRATEGY_CONFIGS[sid].get("order") != idx:
+                        STRATEGY_CONFIGS[sid]["order"] = idx
+                        changed = True
+
+        # Apply groups if provided
+        if isinstance(groups, list):
+            strategy_group_map = {}
+            for grp in groups:
+                grp_name = grp.get("name", "").strip() if isinstance(grp, dict) else ""
+                sids = grp.get("strategy_ids", []) if isinstance(grp, dict) else []
+                for sid in sids:
+                    strategy_group_map[sid] = grp_name
+
+            for sid, config in STRATEGY_CONFIGS.items():
+                new_group = strategy_group_map.get(sid, "")
+                if config.get("group", "") != new_group:
+                    config["group"] = new_group
+                    changed = True
+
+        if changed:
+            save_configs()
+
+        return jsonify({"status": "success", "message": "Strategy layout saved successfully"})
+    except Exception as e:
+        logger.exception(f"Error saving strategy layout: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 @python_strategy_bp.route("/api/events")

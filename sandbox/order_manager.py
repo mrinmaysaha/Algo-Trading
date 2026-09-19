@@ -705,8 +705,8 @@ class OrderManager:
                     # fill it once a coherent quote arrives. MARKET orders get
                     # the same guard inside _process_order; this covers the
                     # marketable LIMIT / SL / SL-M branches below, which call
-                    # _execute_order directly.
-                    if cached_quote and quote_looks_stale(cached_quote):
+                    # _execute_order directly. Exempt CRYPTO exchange.
+                    if exchange != "CRYPTO" and cached_quote and quote_looks_stale(cached_quote):
                         logger.warning(
                             f"Deferring immediate execution of {orderid} ({symbol}): quote LTP "
                             f"{cached_quote.get('ltp')} is outside its own day range "

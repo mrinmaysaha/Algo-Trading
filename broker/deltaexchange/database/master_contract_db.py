@@ -11,6 +11,26 @@ from sqlalchemy.orm import scoped_session, sessionmaker
 from broker.deltaexchange.api.rate_limiter import PUBLIC, consume
 from database.engine_factory import create_db_engine
 from extensions import socketio  # Import SocketIO
+
+
+def safe_emit(event: str, data: dict) -> None:
+    """Emit a SocketIO event only when the server is initialised.
+
+    master_contract_download() is called from a background thread that may
+    execute before (or outside) the Flask-SocketIO app context.  When that
+    happens ``socketio.server`` is None and a bare ``socketio.emit()`` raises
+    ``AttributeError: 'NoneType' object has no attribute 'emit'``.
+    This wrapper makes the emit a no-op in that case so the DB insert is
+    still preserved and the UI can poll /api/master-contract/smart-status
+    for the outcome.
+    """
+    try:
+        if socketio is not None and getattr(socketio, "server", None) is not None:
+            socketio.emit(event, data)
+        else:
+            logger.debug("safe_emit: socketio not ready, skipping emit of '%s'", event)
+    except Exception as exc:  # pragma: no cover
+        logger.warning("safe_emit: could not emit '%s': %s", event, exc)
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -527,7 +547,7 @@ def master_contract_download():
             # Pagination was interrupted mid-way (HTTP error, API error, exception,
             # or MAX_PAGES hit).  Returning partial data as success would silently
             # truncate the master contract DB — keep the existing table intact.
-            return socketio.emit(
+            return safe_emit(
                 "master_contract_download",
                 {
                     "status": "error",
@@ -541,14 +561,14 @@ def master_contract_download():
         token_df = process_delta_products(products)
 
         if token_df.empty:
-            return socketio.emit(
+            return safe_emit(
                 "master_contract_download",
                 {"status": "error", "message": "No live instruments found on Delta Exchange"},
             )
 
         delete_symtoken_table()
         copy_from_dataframe(token_df)
-        return socketio.emit(
+        return safe_emit(
             "master_contract_download",
             {
                 "status": "success",
@@ -558,7 +578,7 @@ def master_contract_download():
 
     except Exception as e:
         logger.exception(f"Error during Delta Exchange master contract download: {e}")
-        return socketio.emit("master_contract_download", {"status": "error", "message": str(e)})
+        return safe_emit("master_contract_download", {"status": "error", "message": str(e)})
 
 
 def search_symbols(symbol, exchange):

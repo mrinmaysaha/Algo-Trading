@@ -26,9 +26,9 @@ import {
   orderUnits,
   productOptionsFor,
   resolveTick,
-  sameIndicatorRecords,
-  sameIndicatorInstances,
   type SymbolView,
+  sameIndicatorInstances,
+  sameIndicatorRecords,
   TradingTerminal,
   usesLots,
 } from './terminal'
@@ -257,16 +257,18 @@ describe('sameIndicatorRecords', () => {
 describe('sameIndicatorInstances', () => {
   it('detects a rebuilt instance even when its descriptor and settings are unchanged', () => {
     expect(
-      sameIndicatorInstances(
-        [{ id: 'ema-1', name: 'EMA' }],
-        [{ id: 'ema-2', name: 'EMA' }]
-      )
+      sameIndicatorInstances([{ id: 'ema-1', name: 'EMA' }], [{ id: 'ema-2', name: 'EMA' }])
     ).toBe(false)
   })
 
   it('ignores unrelated object notifications for the same live instances', () => {
     const current = [{ id: 'ema-2', name: 'EMA' }]
-    expect(sameIndicatorInstances(current, current.map((item) => ({ ...item })))).toBe(true)
+    expect(
+      sameIndicatorInstances(
+        current,
+        current.map((item) => ({ ...item }))
+      )
+    ).toBe(true)
   })
 })
 
@@ -364,7 +366,10 @@ describe('chart object lifecycle', () => {
     await methods.applyIndicators.call(terminal)
 
     expect(terminal.restoringIndicatorsOn).toBeNull()
-    expect(terminal.toast).toHaveBeenCalledWith('Indicators could not be restored: chunk failed', 'err')
+    expect(terminal.toast).toHaveBeenCalledWith(
+      'Indicators could not be restored: chunk failed',
+      'err'
+    )
 
     methods.syncIndicators.call(terminal)
 

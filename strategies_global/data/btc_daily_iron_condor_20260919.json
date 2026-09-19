@@ -1,0 +1,65 @@
+{
+  "date": "2026-09-19",
+  "updated_at": "2026-09-19T11:30:43.145780+05:30",
+  "current_session": 1,
+  "session_history": [
+    {
+      "session": 1,
+      "positions": {
+        "BTC19SEP2682800CE": {
+          "leg_type": "LONG_CE",
+          "action": "BUY",
+          "quantity": 92,
+          "entry_price": 19.0,
+          "status": "CLOSED",
+          "stop_loss": 0.0,
+          "order_id": "26091996056055",
+          "exit_reason": "BROKER_RECONCILED_FLAT"
+        },
+        "BTC19SEP2679600PE": {
+          "leg_type": "LONG_PE",
+          "action": "BUY",
+          "quantity": 92,
+          "entry_price": 13.0,
+          "status": "CLOSED",
+          "stop_loss": 0.0,
+          "order_id": "26091906771898",
+          "exit_reason": "BROKER_RECONCILED_FLAT"
+        },
+        "BTC19SEP2682000CE": {
+          "leg_type": "SHORT_CE",
+          "action": "SELL",
+          "quantity": 92,
+          "entry_price": 68.0,
+          "status": "CLOSED",
+          "stop_loss": 102.0,
+          "order_id": "26091944298505",
+          "exit_reason": "TARGET_PROFIT_DECAY"
+        },
+        "BTC19SEP2680400PE": {
+          "leg_type": "SHORT_PE",
+          "action": "SELL",
+          "quantity": 92,
+          "entry_price": 57.0,
+          "status": "CLOSED",
+          "stop_loss": 85.5,
+          "order_id": "26091994947527",
+          "exit_reason": "TARGET_PROFIT_DECAY"
+        }
+      },
+      "exit_time": "2026-09-19T11:30:43.080000+05:30",
+      "trigger": "TARGET_PROFIT_DECAY",
+      "net_credit": 8.556,
+      "target_profit": 6.8448
+    }
+  ],
+  "trade_taken_today": true,
+  "trade_active": false,
+  "positions": {},
+  "net_credit_collected": 8.556000000000001,
+  "target_profit": 6.844800000000001,
+  "expiry_date": "19-SEP-26",
+  "entry_time": "2026-09-19T07:00:09.764866+05:30",
+  "entry_attempts": 1,
+  "last_attempt_time": 1789781401.7503157
+}

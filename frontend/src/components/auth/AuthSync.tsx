@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { PageLoader } from '@/components/ui/page-loader'
 import { useAuthStore } from '@/stores/authStore'
 import { useBrokerStore } from '@/stores/brokerStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useThemeStore } from '@/stores/themeStore'
-import { PageLoader } from '@/components/ui/page-loader'
 
 interface AuthSyncProps {
   children: React.ReactNode
@@ -76,7 +76,15 @@ export function AuthSync({ children }: AuthSyncProps) {
       setIsChecking(false)
       hasSyncedRef.current = true
     }
-  }, [setUser, setApiKey, logout, fetchCapabilities, clearCapabilities, syncAppMode, setActiveSessionCount])
+  }, [
+    setUser,
+    setApiKey,
+    logout,
+    fetchCapabilities,
+    clearCapabilities,
+    syncAppMode,
+    setActiveSessionCount,
+  ])
 
   useEffect(() => {
     if (!hasSyncedRef.current) {

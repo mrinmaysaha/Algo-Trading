@@ -1,4 +1,4 @@
-import { create } from 'zustand';
+import { create } from 'zustand'
 
 export interface TradeRecord {
   trade_id: number
@@ -70,13 +70,13 @@ export interface PythonStrategyBacktestResult {
 }
 
 interface PythonStrategyBacktestState {
-  result: PythonStrategyBacktestResult | null;
-  isLoading: boolean;
-  error: string | null;
-  setResult: (result: PythonStrategyBacktestResult) => void;
-  setLoading: (loading: boolean) => void;
-  setError: (error: string | null) => void;
-  clearResult: () => void;
+  result: PythonStrategyBacktestResult | null
+  isLoading: boolean
+  error: string | null
+  setResult: (result: PythonStrategyBacktestResult) => void
+  setLoading: (loading: boolean) => void
+  setError: (error: string | null) => void
+  clearResult: () => void
 }
 
 export const usePythonStrategyBacktestStore = create<PythonStrategyBacktestState>((set) => ({
@@ -87,4 +87,4 @@ export const usePythonStrategyBacktestStore = create<PythonStrategyBacktestState
   setLoading: (isLoading) => set({ isLoading }),
   setError: (error) => set({ error }),
   clearResult: () => set({ result: null, error: null }),
-}));
+}))

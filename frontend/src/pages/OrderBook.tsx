@@ -54,7 +54,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { type OrderEventType, useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 // Note: AlertDialog still used for Cancel All Orders
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
-import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
+import { cn, formatQuantityWithMultiplier, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { Order, OrderStats } from '@/types/trading'
@@ -176,7 +176,8 @@ export default function OrderBook() {
     // 1. Filter Logic
     const filtered = orders.filter((order) => {
       if (statusFilter.length > 0 && !statusFilter.includes(order.order_status)) return false
-      if (strategyFilter.length > 0 && !strategyFilter.includes(order.strategy || 'Manual')) return false
+      if (strategyFilter.length > 0 && !strategyFilter.includes(order.strategy || 'Manual'))
+        return false
       return true
     })
 
@@ -787,7 +788,9 @@ export default function OrderBook() {
                                   {order.strategy}
                                 </Badge>
                               ) : (
-                                <span className="text-muted-foreground text-xs font-mono">Manual</span>
+                                <span className="text-muted-foreground text-xs font-mono">
+                                  Manual
+                                </span>
                               )}
                             </TableCell>
                             <TableCell>
@@ -801,7 +804,22 @@ export default function OrderBook() {
                                 {order.action}
                               </Badge>
                             </TableCell>
-                            <TableCell className="text-right font-mono">{order.quantity}</TableCell>
+                            <TableCell className="text-right font-mono">
+                              <div>{order.quantity}</div>
+                              {(() => {
+                                const qInfo = formatQuantityWithMultiplier(
+                                  order.quantity,
+                                  order.symbol,
+                                  order.exchange,
+                                  order.lot_size
+                                )
+                                return qInfo.underlying ? (
+                                  <div className="text-[10px] text-muted-foreground leading-tight">
+                                    {qInfo.underlying}
+                                  </div>
+                                ) : null
+                              })()}
+                            </TableCell>
                             <TableCell className="text-right font-mono">
                               {formatCurrency(order.price)}
                             </TableCell>

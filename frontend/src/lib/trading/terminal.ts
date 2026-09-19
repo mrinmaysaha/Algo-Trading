@@ -111,10 +111,10 @@ import {
   describeDrawings,
   isAgentDrawingId,
 } from './chartContract'
-import { DRAW_TOOL_METADATA } from './drawingToolMetadata'
 import { CurrentDrawingSource, profileObjectProvider } from './chartObjectsAdapter'
 import { buildChartTheme, mutedTradeColors, resolveCssColor, volumeColor } from './chartTheme'
 import { CHART_TYPES } from './chartTypes'
+import { DRAW_TOOL_METADATA } from './drawingToolMetadata'
 import { fmtPrice, money, priceDp, snapTick, tickSize } from './format'
 import {
   type IntervalData,
@@ -292,7 +292,9 @@ export interface BrandingLink {
 }
 
 /** Tools whose content is typed rather than dragged. */
-const TEXT_TOOLS = new Set(Object.keys(DRAW_TOOL_METADATA).filter((id) => DRAW_TOOL_METADATA[id].text))
+const TEXT_TOOLS = new Set(
+  Object.keys(DRAW_TOOL_METADATA).filter((id) => DRAW_TOOL_METADATA[id].text)
+)
 
 /** The colour forms emitted by the chart palette and the host token rasterizer. */
 function drawingRgb(color: string): number[] | null {
@@ -303,7 +305,9 @@ function drawingRgb(color: string): number[] | null {
   } else if (/^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(value)) {
     rgb = [1, 3, 5].map((offset) => parseInt(value.slice(offset, offset + 2), 16))
   } else {
-    const match = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*[\d.]+\s*)?\)$/i.exec(value)
+    const match = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*[\d.]+\s*)?\)$/i.exec(
+      value
+    )
     if (match) rgb = match.slice(1, 4).map(Number)
   }
   return rgb
@@ -312,7 +316,15 @@ function drawingRgb(color: string): number[] | null {
 /** Native colour inputs require hex even when the canvas theme uses rgb(). */
 function drawingColorInput(color: string): string {
   const rgb = drawingRgb(color)
-  return rgb ? `#${rgb.map(channel => Math.max(0, Math.min(255, Math.round(channel))).toString(16).padStart(2, '0')).join('')}` : '#000000'
+  return rgb
+    ? `#${rgb
+        .map((channel) =>
+          Math.max(0, Math.min(255, Math.round(channel)))
+            .toString(16)
+            .padStart(2, '0')
+        )
+        .join('')}`
+    : '#000000'
 }
 
 /** Match the renderer's automatic plate text while preserving an unset override. */
@@ -2135,8 +2147,13 @@ export class TradingTerminal {
     const theme = this.chart?.theme()
     const lineColor = d.style.color ?? theme?.lineColor ?? '#4f8cff'
     const plate = d.tool !== 'text' && d.tool !== 'table'
-    const backgroundColor = t.backgroundColor ?? (plate ? lineColor
-      : d.tool === 'table' || t.background === true ? theme?.background ?? '#ffffff' : '#434651')
+    const backgroundColor =
+      t.backgroundColor ??
+      (plate
+        ? lineColor
+        : d.tool === 'table' || t.background === true
+          ? (theme?.background ?? '#ffffff')
+          : '#434651')
     const plateFill = d.tool === 'callout' || d.tool === 'price-label' ? lineColor : backgroundColor
     const color = t.color ?? (plate ? drawingTextContrast(plateFill) : lineColor)
     return {
@@ -2146,7 +2163,10 @@ export class TradingTerminal {
       // (a price label is 12px, the text tool 14px). Seeding the dialog with a
       // host constant instead would enlarge a label whose caption alone was
       // edited.
-      fontSize: t.fontSize ?? this.toolDefaultText(d.tool)?.fontSize ?? (d.tool === 'price-label' ? 12 : DRAWING_TEXT_PX),
+      fontSize:
+        t.fontSize ??
+        this.toolDefaultText(d.tool)?.fontSize ??
+        (d.tool === 'price-label' ? 12 : DRAWING_TEXT_PX),
       bold: t.bold === true,
       italic: t.italic === true,
       background: d.tool !== 'text' || t.background === true,

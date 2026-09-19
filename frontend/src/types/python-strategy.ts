@@ -18,6 +18,18 @@ export interface PythonStrategy {
   schedule_days: string[]
   created_at: string
   updated_at: string
+  group?: string
+  order?: number
+}
+
+export interface StrategyGroupItem {
+  name: string
+  strategy_ids: string[]
+}
+
+export interface StrategyLayoutPayload {
+  strategy_order: string[]
+  groups: StrategyGroupItem[]
 }
 
 export interface PythonStrategyContent {

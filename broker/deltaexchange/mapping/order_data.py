@@ -234,8 +234,21 @@ def transform_order_data(orders):
             elif order_type == "OCO":
                 order["orderType"] = "OCO"
 
+            lot_size = 1.0
+            order_sym = order.get("tradingSymbol", "")
+            if order_sym:
+                sym_info = get_symbol_info(order_sym, "CRYPTO")
+                if sym_info and sym_info.contract_value is not None:
+                    lot_size = float(sym_info.contract_value)
+                elif "BTC" in order_sym.upper():
+                    lot_size = 0.001
+                elif "ETH" in order_sym.upper():
+                    lot_size = 0.01
+                elif "SOL" in order_sym.upper():
+                    lot_size = 0.1
+
             transformed_order = {
-                "symbol": order.get("tradingSymbol", ""),
+                "symbol": order_sym,
                 "exchange": order.get("exchangeSegment", ""),
                 "action": order.get("transactionType", ""),
                 "quantity": order.get("quantity", 0),
@@ -246,6 +259,7 @@ def transform_order_data(orders):
                 "orderid": order.get("orderId", ""),
                 "order_status": order.get("orderStatus", ""),
                 "timestamp": order.get("updateTime", ""),
+                "lot_size": lot_size,
             }
 
             transformed_orders.append(transformed_order)
@@ -360,14 +374,28 @@ def transform_tradebook_data(tradebook_data):
             except (TypeError, ValueError):
                 price = 0.0
 
+            lot_size = 1.0
+            trade_sym = trade.get("tradingSymbol", "")
+            if trade_sym:
+                sym_info = get_symbol_info(trade_sym, "CRYPTO")
+                if sym_info and sym_info.contract_value is not None:
+                    lot_size = float(sym_info.contract_value)
+                elif "BTC" in trade_sym.upper():
+                    lot_size = 0.001
+                elif "ETH" in trade_sym.upper():
+                    lot_size = 0.01
+                elif "SOL" in trade_sym.upper():
+                    lot_size = 0.1
+
             transformed_trade = {
-                "symbol": trade.get("tradingSymbol", ""),
+                "symbol": trade_sym,
                 "exchange": trade.get("exchangeSegment", ""),
                 "product": trade.get("productType", ""),
                 "action": trade.get("transactionType", ""),
                 "quantity": quantity,
                 "average_price": price,
-                "trade_value": quantity * price,
+                "trade_value": quantity * price * lot_size,
+                "lot_size": lot_size,
                 "orderid": trade.get("orderId", ""),
                 "timestamp": trade.get("updateTime", ""),
             }

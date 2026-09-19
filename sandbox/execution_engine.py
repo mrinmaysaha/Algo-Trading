@@ -419,8 +419,9 @@ class ExecutionEngine:
             # stays open and fills on a later cycle once a coherent quote
             # arrives. Covers every path into a fill -- immediate MARKET
             # execution at placement and the polling loop both come through
-            # here.
-            if quote_looks_stale(quote):
+            # here. Exempt CRYPTO exchange where 24/7 continuous mark prices naturally
+            # update beyond rolling 24h trade low/high ranges.
+            if order.exchange != "CRYPTO" and quote_looks_stale(quote):
                 logger.warning(
                     f"Deferring order {order.orderid} ({order.symbol}): quote LTP {ltp} "
                     f"is outside its own day range [{quote.get('low')}, {quote.get('high')}] "

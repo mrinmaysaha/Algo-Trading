@@ -215,7 +215,7 @@ def get_multi_timeframe_strategy_analytics(
         db_session, is_initialized, init_strategy_book_db,
     )
     from services.positionbook_service import get_positionbook
-    from services.accounting_engine import IndianFOAccountingEngine
+    from services.accounting_engine import IndianFOAccountingEngine, get_accounting_engine
 
     ist = pytz.timezone("Asia/Kolkata")
     now_ist = datetime.now(ist)
@@ -366,72 +366,125 @@ def get_multi_timeframe_strategy_analytics(
     except Exception as sb_err:
         logger.debug(f"Sandbox trade ingestion error: {sb_err}")
 
-    # Built-in fallback alias configurations
-    configured_strategies: dict[str, dict[str, Any]] = {
-        "Post10_Institutional_OB_VWAP": {
-            "name": "Post10_Institutional_OB_VWAP",
-            "aliases": {
-                "Post10_Institutional_OB_VWAP",
-                "Post10_Institutional_OB_VWAP_Production",
-                "Post10_Institutional_OB_VWAP_Production_V3",
-                "Post10_Institutional_OB_VWAP_Production_V4",
-                "Post10_Institutional_OB_VWAP_Production_V5",
+    # Detect if active context is crypto (Port 5001 Delta instance)
+    is_crypto = False
+    if os.getenv("BROKER_TYPE", "").lower() == "crypto":
+        is_crypto = True
+    else:
+        for tr_list in strategy_trades_map.values():
+            for tr in tr_list:
+                if str(tr.get("exchange", "")).upper() in ("CRYPTO", "DELTA"):
+                    is_crypto = True
+                    break
+            if is_crypto:
+                break
+        if not is_crypto:
+            for p in positions:
+                if str(p.get("exchange", "")).upper() in ("CRYPTO", "DELTA"):
+                    is_crypto = True
+                    break
+
+    if is_crypto:
+        configured_strategies: dict[str, dict[str, Any]] = {
+            "BTC_Daily_Iron_Condor": {
+                "name": "BTC Daily Hedged Iron Condor (0DTE)",
+                "aliases": {
+                    "BTC_Daily_Iron_Condor",
+                    "BTC Daily Hedged Iron Condor (0DTE)",
+                    "BTC_Daily_Iron_Condor_Delta",
+                },
             },
-        },
-        "3Min_ORB_Quant": {
-            "name": "3Min_ORB_Quant",
-            "aliases": {
-                "3Min_ORB_Quant",
-                "3Min_ORB_2Lot_Quant_V2",
-                "3Min_ORB_Quant_20260801205330",
+            "ETH_Daily_Iron_Condor": {
+                "name": "ETH Daily Hedged Iron Condor (0DTE)",
+                "aliases": {
+                    "ETH_Daily_Iron_Condor",
+                    "ETH Daily Hedged Iron Condor (0DTE)",
+                    "ETH_Daily_Iron_Condor_Delta",
+                },
             },
-        },
-        "SMC_FVG_ZeroLag_Options": {
-            "name": "SMC_FVG_ZeroLag_Options",
-            "aliases": {
-                "SMC_FVG_ZeroLag_Options",
-                "SMC_FVG_ZeroLag_Options_20260817232106",
+            "BTC_Liquidity_Sweep_Perp": {
+                "name": "BTC Intraday Liquidity Sweep (SFP)",
+                "aliases": {
+                    "BTC_Liquidity_Sweep_Perp",
+                    "BTC Intraday Liquidity Sweep (SFP)",
+                },
             },
-        },
-        "Prime Indicator Scalper Options": {
-            "name": "Prime Indicator Scalper Options",
-            "aliases": {
-                "Prime Indicator Scalper Options",
-                "Prime_Indicator_Scalper_Options",
+            "ETH_Liquidity_Sweep_Perp": {
+                "name": "ETH Intraday Liquidity Sweep (SFP)",
+                "aliases": {
+                    "ETH_Liquidity_Sweep_Perp",
+                    "ETH Intraday Liquidity Sweep (SFP)",
+                },
             },
-        },
-        "Liquid Sweep Options": {
-            "name": "Liquid Sweep Options",
-            "aliases": {
-                "Liquid Sweep Options",
-                "Liquid_sweep_options",
-                "liquid_sweep_options_20260808185609",
-                "NSE_LiquiditySweepScalper_V43",
+        }
+        config_paths = ["strategies_global/strategy_configs.json", "strategies/strategy_configs.json"]
+    else:
+        configured_strategies: dict[str, dict[str, Any]] = {
+            "Post10_Institutional_OB_VWAP": {
+                "name": "Post10_Institutional_OB_VWAP",
+                "aliases": {
+                    "Post10_Institutional_OB_VWAP",
+                    "Post10_Institutional_OB_VWAP_Production",
+                    "Post10_Institutional_OB_VWAP_Production_V3",
+                    "Post10_Institutional_OB_VWAP_Production_V4",
+                    "Post10_Institutional_OB_VWAP_Production_V5",
+                },
             },
-        },
-        "Multi-commodity Institutional": {
-            "name": "Multi-commodity Institutional",
-            "aliases": {
-                "Multi-commodity Institutional",
-                "Multi-commodity strategy",
-                "multi-commodity_strategy",
-                "multi-commodity_strategy_20260806235241",
-                "MCX_Institutional_MIS_V3.0",
-                "MCX_Institutional_MIS_V2.9",
-                "MCX_Institutional_MIS_V2.6",
-                "MCX Multi-Commodity Quant Engine V3",
+            "3Min_ORB_Quant": {
+                "name": "3Min_ORB_Quant",
+                "aliases": {
+                    "3Min_ORB_Quant",
+                    "3Min_ORB_2Lot_Quant_V2",
+                    "3Min_ORB_Quant_20260801205330",
+                },
             },
-        },
-        "MCX_GOLDM_FVG_Options": {
-            "name": "MCX_GOLDM_FVG_Options",
-            "aliases": {
-                "MCX_GOLDM_FVG_Options",
-                "MCX_GOLDM_FVG_Options_20260818011045",
-                "MCX_GOLDM_FVG_Options_Scalper",
-                "MCX GOLDM Options (SMC FVG Macro Scalper)",
+            "SMC_FVG_ZeroLag_Options": {
+                "name": "SMC_FVG_ZeroLag_Options",
+                "aliases": {
+                    "SMC_FVG_ZeroLag_Options",
+                    "SMC_FVG_ZeroLag_Options_20260817232106",
+                },
             },
-        },
-    }
+            "Prime Indicator Scalper Options": {
+                "name": "Prime Indicator Scalper Options",
+                "aliases": {
+                    "Prime Indicator Scalper Options",
+                    "Prime_Indicator_Scalper_Options",
+                },
+            },
+            "Liquid Sweep Options": {
+                "name": "Liquid Sweep Options",
+                "aliases": {
+                    "Liquid Sweep Options",
+                    "Liquid_sweep_options",
+                    "liquid_sweep_options_20260808185609",
+                    "NSE_LiquiditySweepScalper_V43",
+                },
+            },
+            "Multi-commodity Institutional": {
+                "name": "Multi-commodity Institutional",
+                "aliases": {
+                    "Multi-commodity Institutional",
+                    "Multi-commodity strategy",
+                    "multi-commodity_strategy",
+                    "multi-commodity_strategy_20260806235241",
+                    "MCX_Institutional_MIS_V3.0",
+                    "MCX_Institutional_MIS_V2.9",
+                    "MCX_Institutional_MIS_V2.6",
+                    "MCX Multi-Commodity Quant Engine V3",
+                },
+            },
+            "MCX_GOLDM_FVG_Options": {
+                "name": "MCX_GOLDM_FVG_Options",
+                "aliases": {
+                    "MCX_GOLDM_FVG_Options",
+                    "MCX_GOLDM_FVG_Options_20260818011045",
+                    "MCX_GOLDM_FVG_Options_Scalper",
+                    "MCX GOLDM Options (SMC FVG Macro Scalper)",
+                },
+            },
+        }
+        config_paths = ["strategies/strategy_configs.json"]
 
     def _normalize_name(s: str) -> str:
         return re.sub(r"[\s_\-]+", "", (s or "")).lower()
@@ -455,38 +508,38 @@ def get_multi_timeframe_strategy_analytics(
         return None
 
     # Overlay strategy_configs.json if present
-    config_path = "strategies/strategy_configs.json"
-    if os.path.exists(config_path):
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                cfgs = json.load(f)
-                for s_key, s_val in cfgs.items():
-                    disp_name = s_val.get("name") or s_key
-                    aliases = {disp_name, s_key}
-                    file_path = s_val.get("file_path") or ""
-                    if file_path and os.path.exists(file_path):
-                        with open(file_path, "r", encoding="utf-8", errors="ignore") as fp:
-                            code = fp.read()
-                        matches = re.findall(r'strategy[^\n\r=:]*[:=]\s*["\']([^"\']+)["\']', code, re.IGNORECASE)
-                        for m in matches:
-                            if m and m.lower() not in ("utf-8", "options", "equity", "futures"):
-                                aliases.add(m)
+    for config_path in config_paths:
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    cfgs = json.load(f)
+                    for s_key, s_val in cfgs.items():
+                        disp_name = s_val.get("name") or s_key
+                        aliases = {disp_name, s_key}
+                        file_path = s_val.get("file_path") or ""
+                        if file_path and os.path.exists(file_path):
+                            with open(file_path, "r", encoding="utf-8", errors="ignore") as fp:
+                                code = fp.read()
+                            matches = re.findall(r'strategy[^\n\r=:]*[:=]\s*["\']([^"\']+)["\']', code, re.IGNORECASE)
+                            for m in matches:
+                                if m and m.lower() not in ("utf-8", "options", "equity", "futures"):
+                                    aliases.add(m)
 
-                    matched_key = _find_matching_strategy_key(disp_name, configured_strategies)
-                    if not matched_key:
-                        matched_key = _find_matching_strategy_key(s_key, configured_strategies)
-                    if not matched_key:
-                        for a in aliases:
-                            matched_key = _find_matching_strategy_key(a, configured_strategies)
-                            if matched_key:
-                                break
+                        matched_key = _find_matching_strategy_key(disp_name, configured_strategies)
+                        if not matched_key:
+                            matched_key = _find_matching_strategy_key(s_key, configured_strategies)
+                        if not matched_key:
+                            for a in aliases:
+                                matched_key = _find_matching_strategy_key(a, configured_strategies)
+                                if matched_key:
+                                    break
 
-                    if matched_key:
-                        configured_strategies[matched_key]["aliases"].update(aliases)
-                    else:
-                        configured_strategies[disp_name] = {"name": disp_name, "aliases": aliases}
-        except Exception as err:
-            logger.debug(f"strategy_configs.json overlay error: {err}")
+                        if matched_key:
+                            configured_strategies[matched_key]["aliases"].update(aliases)
+                        else:
+                            configured_strategies[disp_name] = {"name": disp_name, "aliases": aliases}
+            except Exception as err:
+                logger.debug(f"strategy_configs overlay error ({config_path}): {err}")
 
     all_known_strategies = set(list_strategies(user_id=user_id)) | set(strategy_trades_map.keys()) | set(configured_strategies.keys())
     target_strategies = [strategy] if (strategy and strategy != "ALL") else sorted(list(all_known_strategies))
@@ -584,14 +637,16 @@ def get_multi_timeframe_strategy_analytics(
                 buy_orders = len([t for t in tr_list if str(t.get("action") or t.get("trade_type")).upper() == "BUY"])
                 sell_orders = len([t for t in tr_list if str(t.get("action") or t.get("trade_type")).upper() == "SELL"])
                 round_trip_count = max(1, min(buy_orders, sell_orders))
-                custom_brok_per_order = round_trip_count * IndianFOAccountingEngine.BROKERAGE_PER_ORDER
+                engine = get_accounting_engine(exchange=exch)
+                custom_brok_per_order = 0.0 if engine.__name__ == "CryptoAccountingEngine" else (round_trip_count * IndianFOAccountingEngine.BROKERAGE_PER_ORDER)
 
-                tax_calc = IndianFOAccountingEngine.calculate_closed_trade_pnl(
+                tax_calc = engine.calculate_closed_trade_pnl(
                     entry_price=entry_p,
                     exit_price=exit_p,
-                    qty=int(closed_qty * mult),
+                    qty=closed_qty,
                     direction=first_action,
                     brokerage_per_order=custom_brok_per_order,
+                    contract_multiplier=mult,
                     is_option=is_opt
                 )
 
@@ -612,7 +667,7 @@ def get_multi_timeframe_strategy_analytics(
                     "symbol": sym,
                     "strategy": disp_name,
                     "direction": first_action,
-                    "quantity": int(closed_qty * mult),
+                    "quantity": round(closed_qty * mult, 4) if mult != 1.0 else int(closed_qty),
                     "entry_price": round(entry_p, 2),
                     "exit_price": round(exit_p, 2),
                     "entry_time": str(entry_ts_raw),
@@ -645,11 +700,13 @@ def get_multi_timeframe_strategy_analytics(
                 )
                 open_dir = "BUY" if net_qty > 0 else "SELL"
                 is_opt = ("CE" in str(sym) or "PE" in str(sym)) and "FUT" not in str(sym)
-                mtm_calc = IndianFOAccountingEngine.calculate_open_position_mtm(
+                pos_engine = get_accounting_engine(exchange=exch)
+                mtm_calc = pos_engine.calculate_open_position_mtm(
                     entry_price=entry_avg,
                     current_ltp=ltp,
-                    qty=int(abs(net_qty) * mult),
+                    qty=abs(net_qty),
                     direction=open_dir,
+                    contract_multiplier=mult,
                     is_option=is_opt
                 )
                 leg_unrealized = mtm_calc["gross_mtm"]

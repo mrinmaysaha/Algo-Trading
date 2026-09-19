@@ -1,0 +1,53 @@
+{
+  "date": "2026-09-18",
+  "updated_at": "2026-09-18T12:37:13.207681+05:30",
+  "trade_taken_today": true,
+  "trade_active": true,
+  "positions": {
+    "BTC18SEP2679000CE": {
+      "leg_type": "LONG_CE",
+      "action": "BUY",
+      "quantity": 92,
+      "entry_price": 15.9,
+      "status": "CLOSED",
+      "stop_loss": 0.0,
+      "order_id": "26091863810412",
+      "exit_reason": "WING_UNWIND"
+    },
+    "BTC18SEP2675600PE": {
+      "leg_type": "LONG_PE",
+      "action": "BUY",
+      "quantity": 92,
+      "entry_price": 14.8,
+      "status": "OPEN",
+      "stop_loss": 0.0,
+      "order_id": "26091859724639"
+    },
+    "BTC18SEP2678000CE": {
+      "leg_type": "SHORT_CE",
+      "action": "SELL",
+      "quantity": 92,
+      "entry_price": 67.0,
+      "status": "CLOSED",
+      "stop_loss": 100.5,
+      "order_id": "26091831544225",
+      "exit_reason": "SL_HIT"
+    },
+    "BTC18SEP2676500PE": {
+      "leg_type": "SHORT_PE",
+      "action": "SELL",
+      "quantity": 92,
+      "entry_price": 52.0,
+      "status": "CLOSED",
+      "stop_loss": 78.0,
+      "order_id": "26091802323270",
+      "exit_reason": "TARGET_PROFIT_DECAY"
+    }
+  },
+  "net_credit_collected": 8.1236,
+  "target_profit": 6.49888,
+  "expiry_date": "18-SEP-26",
+  "entry_time": "2026-09-18T10:11:45.664051+05:30",
+  "entry_attempts": 1,
+  "last_attempt_time": 1789706501.7823806
+}

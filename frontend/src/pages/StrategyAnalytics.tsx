@@ -19,6 +19,7 @@ import {
   Zap,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { webClient } from '@/api/client'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -38,7 +39,6 @@ import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { StrategyAnalyticsResponse, StrategyPerformanceMetric } from '@/types/trading'
 import { showToast } from '@/utils/toast'
-import { webClient } from '@/api/client'
 
 type TimeframeOption = string
 
@@ -76,10 +76,16 @@ function formatTimeframeDisplay(tf: string): string {
     const unit = match[2].toUpperCase()
     const unitWord =
       unit === 'D'
-        ? val === '1' ? 'Day' : 'Days'
+        ? val === '1'
+          ? 'Day'
+          : 'Days'
         : unit === 'W'
-        ? val === '1' ? 'Week' : 'Weeks'
-        : val === '1' ? 'Month' : 'Months'
+          ? val === '1'
+            ? 'Week'
+            : 'Weeks'
+          : val === '1'
+            ? 'Month'
+            : 'Months'
     return `${val} ${unitWord} (${tf.toUpperCase()})`
   }
   return tf
@@ -174,7 +180,13 @@ export default function StrategyAnalytics() {
 
   // Summary computed for currently visible/active strategies
   const summary = useMemo(() => {
-    const targetList = onlyActive ? allStrategies.filter((s) => s.has_activity ?? (s.total_trades > 0 || Math.abs(s.total_pnl) > 0.001 || s.active_positions_count > 0)) : allStrategies
+    const targetList = onlyActive
+      ? allStrategies.filter(
+          (s) =>
+            s.has_activity ??
+            (s.total_trades > 0 || Math.abs(s.total_pnl) > 0.001 || s.active_positions_count > 0)
+        )
+      : allStrategies
     const totalPnl = targetList.reduce((acc, s) => acc + (s.total_pnl || 0), 0)
     const totalTrades = targetList.reduce((acc, s) => acc + (s.total_trades || 0), 0)
     const winningCount = targetList.filter((s) => (s.total_pnl || 0) > 0).length
@@ -182,11 +194,7 @@ export default function StrategyAnalytics() {
 
     const positiveStrats = targetList.filter((s) => (s.total_pnl || 0) > 0)
     const topPerformer =
-      positiveStrats.length > 0
-        ? positiveStrats[0]
-        : targetList.length > 0
-        ? targetList[0]
-        : null
+      positiveStrats.length > 0 ? positiveStrats[0] : targetList.length > 0 ? targetList[0] : null
 
     return {
       total_pnl: totalPnl,
@@ -254,12 +262,16 @@ export default function StrategyAnalytics() {
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-3xl font-bold tracking-tight">Strategy P&L Analytics</h1>
-            <Badge variant="outline" className="bg-indigo-500/10 text-indigo-600 border-indigo-500/30 gap-1">
+            <Badge
+              variant="outline"
+              className="bg-indigo-500/10 text-indigo-600 border-indigo-500/30 gap-1"
+            >
               <Sparkles className="h-3 w-3" /> Multi-Timeframe
             </Badge>
           </div>
           <p className="text-muted-foreground text-sm mt-1">
-            Realized & unrealized P&L, win rates, and metrics across active and historical algorithmic strategies.
+            Realized & unrealized P&L, win rates, and metrics across active and historical
+            algorithmic strategies.
           </p>
         </div>
 
@@ -313,7 +325,10 @@ export default function StrategyAnalytics() {
             variant={onlyActive ? 'default' : 'outline'}
             size="sm"
             onClick={() => setOnlyActive(!onlyActive)}
-            className={cn('h-9 text-xs gap-1.5 shrink-0', onlyActive ? 'bg-primary text-primary-foreground' : '')}
+            className={cn(
+              'h-9 text-xs gap-1.5 shrink-0',
+              onlyActive ? 'bg-primary text-primary-foreground' : ''
+            )}
           >
             <Filter className="h-3.5 w-3.5" />
             {onlyActive ? 'Active / Traded' : 'All Strategies'}
@@ -350,7 +365,9 @@ export default function StrategyAnalytics() {
                 )}
               >
                 <CalendarDays className="h-3.5 w-3.5" />
-                <span>{isCustomActive ? formatTimeframeDisplay(timeframe) : 'Custom Days / Weeks'}</span>
+                <span>
+                  {isCustomActive ? formatTimeframeDisplay(timeframe) : 'Custom Days / Weeks'}
+                </span>
                 <ChevronDown className="h-3 w-3 opacity-60" />
               </Button>
             </PopoverTrigger>
@@ -370,7 +387,9 @@ export default function StrategyAnalytics() {
 
               {/* Quick Picks */}
               <div>
-                <span className="text-[11px] font-medium text-foreground/80 block mb-1.5">Quick Picks</span>
+                <span className="text-[11px] font-medium text-foreground/80 block mb-1.5">
+                  Quick Picks
+                </span>
                 <div className="flex flex-wrap gap-1.5">
                   {QUICK_CUSTOM_PRESETS.map((q) => (
                     <Button
@@ -394,7 +413,9 @@ export default function StrategyAnalytics() {
 
               {/* Custom Input */}
               <div className="border-t pt-2.5 space-y-2">
-                <span className="text-[11px] font-medium text-foreground/80 block">Specify Duration</span>
+                <span className="text-[11px] font-medium text-foreground/80 block">
+                  Specify Duration
+                </span>
                 <div className="flex items-center gap-2">
                   <Input
                     type="number"
@@ -460,7 +481,18 @@ export default function StrategyAnalytics() {
                   className="w-full h-8 text-xs gap-1.5 font-medium mt-1"
                 >
                   <Check className="h-3.5 w-3.5" />
-                  Apply {customNum || 1} {customUnit === 'D' ? (customNum === 1 ? 'Day' : 'Days') : customUnit === 'W' ? (customNum === 1 ? 'Week' : 'Weeks') : (customNum === 1 ? 'Month' : 'Months')}
+                  Apply {customNum || 1}{' '}
+                  {customUnit === 'D'
+                    ? customNum === 1
+                      ? 'Day'
+                      : 'Days'
+                    : customUnit === 'W'
+                      ? customNum === 1
+                        ? 'Week'
+                        : 'Weeks'
+                      : customNum === 1
+                        ? 'Month'
+                        : 'Months'}
                 </Button>
               </div>
             </PopoverContent>
@@ -480,7 +512,9 @@ export default function StrategyAnalytics() {
             <CardTitle
               className={cn(
                 'text-2xl font-bold font-mono tracking-tight',
-                summary.total_pnl >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
+                summary.total_pnl >= 0
+                  ? 'text-green-600 dark:text-green-400'
+                  : 'text-red-600 dark:text-red-400'
               )}
             >
               {summary.total_pnl >= 0 ? '+' : ''}
@@ -509,8 +543,15 @@ export default function StrategyAnalytics() {
                 +{formatCurrency(summary.top_performer.total_pnl)}
               </span>
             ) : summary.top_performer ? (
-              <span className={summary.top_performer.total_pnl >= 0 ? 'text-green-600 dark:text-green-400 font-semibold' : 'text-red-600 dark:text-red-400 font-semibold'}>
-                {summary.top_performer.total_pnl >= 0 ? '+' : ''}{formatCurrency(summary.top_performer.total_pnl)}
+              <span
+                className={
+                  summary.top_performer.total_pnl >= 0
+                    ? 'text-green-600 dark:text-green-400 font-semibold'
+                    : 'text-red-600 dark:text-red-400 font-semibold'
+                }
+              >
+                {summary.top_performer.total_pnl >= 0 ? '+' : ''}
+                {formatCurrency(summary.top_performer.total_pnl)}
               </span>
             ) : (
               'Awaiting trades'
@@ -564,7 +605,8 @@ export default function StrategyAnalytics() {
                 Strategy Performance Leaderboard ({timeframe})
               </CardTitle>
               <CardDescription className="text-xs mt-0.5">
-                Full breakdown of Realized P&L, Unrealized MTM, Win Rate, and Drawdown per strategy. Click any row to inspect legs.
+                Full breakdown of Realized P&L, Unrealized MTM, Win Rate, and Drawdown per strategy.
+                Click any row to inspect legs.
               </CardDescription>
             </div>
             <div className="flex items-center gap-2">
@@ -596,15 +638,33 @@ export default function StrategyAnalytics() {
                 <TableHeader>
                   <TableRow className="bg-muted/30">
                     <TableHead className="font-semibold text-foreground">Strategy Name</TableHead>
-                    <TableHead className="text-right font-semibold text-foreground">Realized P&L</TableHead>
-                    <TableHead className="text-right font-semibold text-foreground">Unrealized MTM</TableHead>
-                    <TableHead className="text-right font-semibold text-foreground">Total Net P&L</TableHead>
-                    <TableHead className="text-right font-semibold text-foreground">Trades</TableHead>
-                    <TableHead className="text-right font-semibold text-foreground">Win Rate</TableHead>
-                    <TableHead className="text-right font-semibold text-foreground">Profit Factor</TableHead>
-                    <TableHead className="text-right font-semibold text-foreground">Max DD</TableHead>
-                    <TableHead className="text-right font-semibold text-foreground">Avg / Trade</TableHead>
-                    <TableHead className="text-center font-semibold text-foreground">Open Legs</TableHead>
+                    <TableHead className="text-right font-semibold text-foreground">
+                      Realized P&L
+                    </TableHead>
+                    <TableHead className="text-right font-semibold text-foreground">
+                      Unrealized MTM
+                    </TableHead>
+                    <TableHead className="text-right font-semibold text-foreground">
+                      Total Net P&L
+                    </TableHead>
+                    <TableHead className="text-right font-semibold text-foreground">
+                      Trades
+                    </TableHead>
+                    <TableHead className="text-right font-semibold text-foreground">
+                      Win Rate
+                    </TableHead>
+                    <TableHead className="text-right font-semibold text-foreground">
+                      Profit Factor
+                    </TableHead>
+                    <TableHead className="text-right font-semibold text-foreground">
+                      Max DD
+                    </TableHead>
+                    <TableHead className="text-right font-semibold text-foreground">
+                      Avg / Trade
+                    </TableHead>
+                    <TableHead className="text-center font-semibold text-foreground">
+                      Open Legs
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -625,7 +685,9 @@ export default function StrategyAnalytics() {
                           onClick={() => setSelectedStrategy(isSelected ? null : s.strategy)}
                         >
                           <TableCell className="font-semibold flex items-center gap-2">
-                            {idx === 0 && isNetProfit && <Trophy className="h-4 w-4 text-amber-500 shrink-0" />}
+                            {idx === 0 && isNetProfit && (
+                              <Trophy className="h-4 w-4 text-amber-500 shrink-0" />
+                            )}
                             <Badge
                               variant="secondary"
                               className={cn(
@@ -633,8 +695,8 @@ export default function StrategyAnalytics() {
                                 isNetProfit
                                   ? 'bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20'
                                   : isNetLoss
-                                  ? 'bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/20'
-                                  : 'bg-muted text-muted-foreground border-border'
+                                    ? 'bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/20'
+                                    : 'bg-muted text-muted-foreground border-border'
                               )}
                             >
                               {s.strategy}
@@ -651,8 +713,8 @@ export default function StrategyAnalytics() {
                                 s.realized_pnl > 0
                                   ? 'text-green-600 dark:text-green-400'
                                   : s.realized_pnl < 0
-                                  ? 'text-red-600 dark:text-red-400'
-                                  : 'text-muted-foreground'
+                                    ? 'text-red-600 dark:text-red-400'
+                                    : 'text-muted-foreground'
                               }
                             >
                               {s.realized_pnl > 0 ? '+' : ''}
@@ -665,8 +727,8 @@ export default function StrategyAnalytics() {
                                 s.unrealized_pnl > 0
                                   ? 'text-green-600 dark:text-green-400'
                                   : s.unrealized_pnl < 0
-                                  ? 'text-red-600 dark:text-red-400'
-                                  : 'text-muted-foreground'
+                                    ? 'text-red-600 dark:text-red-400'
+                                    : 'text-muted-foreground'
                               }
                             >
                               {s.unrealized_pnl > 0 ? '+' : ''}
@@ -680,8 +742,8 @@ export default function StrategyAnalytics() {
                                 isNetProfit
                                   ? 'bg-green-500/10 text-green-600 dark:text-green-400'
                                   : isNetLoss
-                                  ? 'bg-red-500/10 text-red-600 dark:text-red-400'
-                                  : 'text-muted-foreground'
+                                    ? 'bg-red-500/10 text-red-600 dark:text-red-400'
+                                    : 'text-muted-foreground'
                               )}
                             >
                               {s.total_pnl > 0 ? '+' : ''}
@@ -708,8 +770,8 @@ export default function StrategyAnalytics() {
                                 s.avg_trade_pnl > 0
                                   ? 'text-green-600 dark:text-green-400'
                                   : s.avg_trade_pnl < 0
-                                  ? 'text-red-600 dark:text-red-400'
-                                  : 'text-muted-foreground'
+                                    ? 'text-red-600 dark:text-red-400'
+                                    : 'text-muted-foreground'
                               }
                             >
                               {s.avg_trade_pnl > 0 ? '+' : ''}
@@ -752,25 +814,34 @@ export default function StrategyAnalytics() {
                                           <span className="truncate">{leg.symbol}</span>
                                           <Badge
                                             variant="outline"
-                                            className={cn('text-[10px] h-4', isFlat ? 'text-muted-foreground' : 'text-indigo-500 border-indigo-500/30')}
+                                            className={cn(
+                                              'text-[10px] h-4',
+                                              isFlat
+                                                ? 'text-muted-foreground'
+                                                : 'text-indigo-500 border-indigo-500/30'
+                                            )}
                                           >
                                             {isFlat ? 'FLAT' : `${legQty} QTY`}
                                           </Badge>
                                         </div>
                                         <div className="flex items-center justify-between text-muted-foreground text-[11px]">
-                                          <span>{leg.exchange} • {leg.product}</span>
+                                          <span>
+                                            {leg.exchange} • {leg.product}
+                                          </span>
                                           <span>Avg: {formatCurrency(leg.average_price || 0)}</span>
                                         </div>
                                         <div className="flex items-center justify-between pt-1 border-t text-[11px]">
-                                          <span className="text-muted-foreground">Realized P&L:</span>
+                                          <span className="text-muted-foreground">
+                                            Realized P&L:
+                                          </span>
                                           <span
                                             className={cn(
                                               'font-bold',
                                               legRealized > 0
                                                 ? 'text-green-600 dark:text-green-400'
                                                 : legRealized < 0
-                                                ? 'text-red-600 dark:text-red-400'
-                                                : 'text-muted-foreground'
+                                                  ? 'text-red-600 dark:text-red-400'
+                                                  : 'text-muted-foreground'
                                             )}
                                           >
                                             {legRealized > 0 ? '+' : ''}
@@ -797,4 +868,3 @@ export default function StrategyAnalytics() {
     </div>
   )
 }
-

@@ -31,3 +31,9 @@ These rules apply to all AI assistants and tools working within this workspace t
 - **Invariant Auditing:** Verify active schemas, exchange parameters, and contract multiples directly. Never assume or approximate.
 - **Empirical Grounding:** Validate algorithmic adjustments with isolated data-backed verification scripts and syntax checks before finalizing. Rule file: `.agents/rules/frontier-reasoning.md`.
 
+## 6. Dual-Instance Routing Invariant (Port 5000 vs Port 5001)
+- **Port 5000 (`openalgo-angel`, WS 8765):** Exclusively for Indian domestic markets (NSE, BSE, MCX, NIFTY, BANKNIFTY, SENSEX, CRUDEOIL, GOLD). Strategies live in `strategies/scripts/` and `strategies/strategy_configs.json`.
+- **Port 5001 (`openalgo-global`, WS 8766):** Exclusively for Crypto derivatives on Delta Exchange (BTC, ETH, DOGE, SOL, perpetuals, options). Strategies live in `strategies_global/scripts/` and `strategies_global/strategy_configs.json`.
+- **Zero Cross-Pollution:** Never register crypto strategies on port 5000, and never place domestic strategies on port 5001. Skill: `.agents/skills/crypto-delta-instance/`.
+
+

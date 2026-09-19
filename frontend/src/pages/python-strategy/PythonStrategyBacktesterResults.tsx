@@ -1,32 +1,31 @@
-import { useEffect, useState, useMemo, useRef } from 'react'
-import { useNavigate } from 'react-router'
 import {
-  ArrowLeft,
-  ExternalLink,
-  Lightbulb,
-  Activity,
-  FileSpreadsheet,
-  TrendingUp,
-  TrendingDown,
-  ShieldAlert,
-  BarChart3,
-  Search,
-  PieChart,
-  Clock
-} from 'lucide-react'
-import {
-  createChart,
-  ColorType,
   CandlestickSeries,
-  HistogramSeries,
+  ColorType,
+  createChart,
   createSeriesMarkers,
-  type Time
+  HistogramSeries,
+  type Time,
 } from 'lightweight-charts'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
+import {
+  Activity,
+  ArrowLeft,
+  BarChart3,
+  Clock,
+  ExternalLink,
+  FileSpreadsheet,
+  Lightbulb,
+  PieChart,
+  Search,
+  ShieldAlert,
+  TrendingDown,
+  TrendingUp,
+} from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
 import {
   Select,
   SelectContent,
@@ -34,20 +33,33 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { usePythonStrategyBacktestStore, type TradeRecord } from '@/stores/pythonStrategyBacktestStore'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import Plot from '@/lib/Plot2D'
+import {
+  type TradeRecord,
+  usePythonStrategyBacktestStore,
+} from '@/stores/pythonStrategyBacktestStore'
 
 // TradingView Chart Component with Dynamic Timeframe Resampling
 function TradingViewChart({
   candles = [],
   signals = [],
-  symbol = ''
+  symbol = '',
 }: {
-  candles: { time: string; open: number; high: number; low: number; close: number; volume?: number }[]
+  candles: {
+    time: string
+    open: number
+    high: number
+    low: number
+    close: number
+    volume?: number
+  }[]
   signals: { time: string; type: string; label?: string; price: number }[]
   symbol: string
 }) {
-  const [activeTf, setActiveTf] = useState<'original' | '1m' | '3m' | '5m' | '15m' | '1h' | '1d'>('original')
+  const [activeTf, setActiveTf] = useState<'original' | '1m' | '3m' | '5m' | '15m' | '1h' | '1d'>(
+    'original'
+  )
   const chartContainerRef = useRef<HTMLDivElement>(null)
 
   // Resample candles according to activeTf
@@ -62,7 +74,10 @@ function TradingViewChart({
     if (activeTf === '1h') intervalMinutes = 60
     if (activeTf === '1d') intervalMinutes = 1440
 
-    const grouped: Record<string, { time: string; open: number; high: number; low: number; close: number; volume: number }> = {}
+    const grouped: Record<
+      string,
+      { time: string; open: number; high: number; low: number; close: number; volume: number }
+    > = {}
 
     for (const c of candles) {
       const dt = new Date(c.time.replace(' ', 'T'))
@@ -74,7 +89,9 @@ function TradingViewChart({
       } else {
         const totalMinutes = dt.getHours() * 60 + dt.getMinutes()
         const roundedMinutes = Math.floor(totalMinutes / intervalMinutes) * intervalMinutes
-        const hrs = Math.floor(roundedMinutes / 60).toString().padStart(2, '0')
+        const hrs = Math.floor(roundedMinutes / 60)
+          .toString()
+          .padStart(2, '0')
         const mins = (roundedMinutes % 60).toString().padStart(2, '0')
         key = `${c.time.slice(0, 10)} ${hrs}:${mins}`
       }
@@ -86,13 +103,13 @@ function TradingViewChart({
           high: c.high,
           low: c.low,
           close: c.close,
-          volume: c.volume || 0
+          volume: c.volume || 0,
         }
       } else {
         grouped[key].high = Math.max(grouped[key].high, c.high)
         grouped[key].low = Math.min(grouped[key].low, c.low)
         grouped[key].close = c.close
-        grouped[key].volume += (c.volume || 0)
+        grouped[key].volume += c.volume || 0
       }
     }
 
@@ -140,7 +157,7 @@ function TradingViewChart({
 
     // Parse time strings ("YYYY-MM-DD HH:MM") to unix seconds with IST timezone offset
     const formattedCandles = displayCandles
-      .map(c => {
+      .map((c) => {
         const isoStr = c.time.includes('T') ? c.time : `${c.time.replace(' ', 'T')}:00+05:30`
         const dateObj = new Date(isoStr)
         const timestamp = Math.floor(dateObj.getTime() / 1000)
@@ -150,20 +167,20 @@ function TradingViewChart({
           high: c.high,
           low: c.low,
           close: c.close,
-          volume: c.volume || 0
+          volume: c.volume || 0,
         }
       })
       .sort((a, b) => (a.time as number) - (b.time as number))
 
     // Remove duplicates by time
     const uniqueCandles = formattedCandles.filter(
-      (item, index, self) => index === self.findIndex(t => t.time === item.time)
+      (item, index, self) => index === self.findIndex((t) => t.time === item.time)
     )
 
     candlestickSeries.setData(uniqueCandles)
 
     // Volume histogram series
-    if (displayCandles.some(c => (c.volume || 0) > 0)) {
+    if (displayCandles.some((c) => (c.volume || 0) > 0)) {
       const volumeSeries = chart.addSeries(HistogramSeries, {
         color: '#26a69a',
         priceFormat: { type: 'volume' },
@@ -172,7 +189,7 @@ function TradingViewChart({
       volumeSeries.priceScale().applyOptions({
         scaleMargins: { top: 0.8, bottom: 0 },
       })
-      const volumeData = uniqueCandles.map(c => {
+      const volumeData = uniqueCandles.map((c) => {
         const isUp = c.close >= c.open
         return {
           time: c.time,
@@ -184,10 +201,10 @@ function TradingViewChart({
     }
 
     // Set TradingView Markers for Buy / Sell / CE / PE
-    const candleTimes = new Set(uniqueCandles.map(c => c.time))
-    
+    const candleTimes = new Set(uniqueCandles.map((c) => c.time))
+
     const markers = signals
-      .map(s => {
+      .map((s) => {
         const isoStr = s.time.includes('T') ? s.time : `${s.time.replace(' ', 'T')}:00+05:30`
         const dateObj = new Date(isoStr)
         const timestamp = Math.floor(dateObj.getTime() / 1000)
@@ -252,7 +269,9 @@ function TradingViewChart({
       <div className="flex flex-wrap items-center justify-between px-3 py-2 border-b border-[#2a2e39] text-xs font-semibold text-[#d1d4dc] gap-2">
         <div className="flex items-center gap-3">
           <span className="font-bold text-white">{symbol}</span>
-          <span className="text-xs text-muted-foreground font-normal">TradingView Interactive Engine (09:15-15:30 IST)</span>
+          <span className="text-xs text-muted-foreground font-normal">
+            TradingView Interactive Engine (09:15-15:30 IST)
+          </span>
         </div>
 
         {/* Timeframe Switcher */}
@@ -260,7 +279,7 @@ function TradingViewChart({
           <span className="text-[10px] text-muted-foreground px-1.5 flex items-center gap-1">
             <Clock className="h-3 w-3" /> TF:
           </span>
-          {(['original', '1m', '3m', '5m', '15m', '1h', '1d'] as const).map(tf => (
+          {(['original', '1m', '3m', '5m', '15m', '1h', '1d'] as const).map((tf) => (
             <button
               key={tf}
               onClick={() => setActiveTf(tf)}
@@ -324,7 +343,7 @@ export default function PythonStrategyBacktesterResults() {
     portfolio_breakdown = [],
     heatmap_html = '',
     assumptions = {},
-    manifest = {}
+    manifest = {},
   } = result
 
   // Filtered trade list
@@ -338,7 +357,7 @@ export default function PythonStrategyBacktesterResults() {
         t.exit_time.includes(tradeSearch) ||
         (t.action && t.action.toLowerCase().includes(tradeSearch.toLowerCase())) ||
         (t.option_type && t.option_type.toLowerCase().includes(tradeSearch.toLowerCase()))
-      
+
       if (!matchesSearch) return false
       if (tradeFilter === 'winning') return t.result === 'WIN' || t.pnl > 0
       if (tradeFilter === 'losing') return t.result === 'LOSS' || t.pnl <= 0
@@ -352,29 +371,29 @@ export default function PythonStrategyBacktesterResults() {
   // Plotly Data for Equity Curve
   const equityPlotData = [
     {
-      x: equity_curve.map(e => e.date),
-      y: equity_curve.map(e => e.value),
+      x: equity_curve.map((e) => e.date),
+      y: equity_curve.map((e) => e.value),
       type: 'scatter',
       mode: 'lines',
       name: 'Portfolio Equity',
       line: { color: '#10b981', width: 2 },
       fill: 'tozeroy',
       fillcolor: 'rgba(16, 185, 129, 0.08)',
-    }
+    },
   ]
 
   // Plotly Data for Drawdown Curve
   const drawdownPlotData = [
     {
-      x: drawdown_curve.map(d => d.date),
-      y: drawdown_curve.map(d => d.drawdown),
+      x: drawdown_curve.map((d) => d.date),
+      y: drawdown_curve.map((d) => d.drawdown),
       type: 'scatter',
       mode: 'lines',
       name: 'Drawdown %',
       line: { color: '#ef4444', width: 1.5 },
       fill: 'tozeroy',
       fillcolor: 'rgba(239, 68, 68, 0.15)',
-    }
+    },
   ]
 
   const totalReturn = metrics['Total Return [%]'] ?? 0
@@ -385,7 +404,11 @@ export default function PythonStrategyBacktesterResults() {
       {/* Header & Main Action Button */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b pb-6">
         <div className="flex items-center gap-4">
-          <Button variant="outline" size="icon" onClick={() => navigate('/tools/python-backtester')}>
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => navigate('/tools/python-backtester')}
+          >
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div>
@@ -421,8 +444,14 @@ export default function PythonStrategyBacktesterResults() {
         <Card className="bg-card">
           <CardContent className="p-4 space-y-1">
             <p className="text-xs font-medium text-muted-foreground">Total Return</p>
-            <p className={`text-2xl font-bold flex items-center gap-1 ${isPositiveReturn ? 'text-green-500' : 'text-red-500'}`}>
-              {isPositiveReturn ? <TrendingUp className="h-4 w-4 inline" /> : <TrendingDown className="h-4 w-4 inline" />}
+            <p
+              className={`text-2xl font-bold flex items-center gap-1 ${isPositiveReturn ? 'text-green-500' : 'text-red-500'}`}
+            >
+              {isPositiveReturn ? (
+                <TrendingUp className="h-4 w-4 inline" />
+              ) : (
+                <TrendingDown className="h-4 w-4 inline" />
+              )}
               {Number(totalReturn).toFixed(2)}%
             </p>
           </CardContent>
@@ -459,7 +488,9 @@ export default function PythonStrategyBacktesterResults() {
           <CardContent className="p-4 space-y-1">
             <p className="text-xs font-medium text-muted-foreground">Max Drawdown</p>
             <p className="text-2xl font-bold text-red-500">
-              {metrics['Max Drawdown [%]'] ? `${Number(metrics['Max Drawdown [%]']).toFixed(2)}%` : 'N/A'}
+              {metrics['Max Drawdown [%]']
+                ? `${Number(metrics['Max Drawdown [%]']).toFixed(2)}%`
+                : 'N/A'}
             </p>
           </CardContent>
         </Card>
@@ -495,8 +526,12 @@ export default function PythonStrategyBacktesterResults() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
               <div>
-                <CardTitle className="text-lg font-semibold">TradingView Price & Trade Execution Chart</CardTitle>
-                <CardDescription>Overlaid BUY CE (Call) & BUY PE (Put) markers with timeframe switcher</CardDescription>
+                <CardTitle className="text-lg font-semibold">
+                  TradingView Price & Trade Execution Chart
+                </CardTitle>
+                <CardDescription>
+                  Overlaid BUY CE (Call) & BUY PE (Put) markers with timeframe switcher
+                </CardDescription>
               </div>
               {symbols.length > 1 && (
                 <div className="w-48">
@@ -505,8 +540,10 @@ export default function PythonStrategyBacktesterResults() {
                       <SelectValue placeholder="Select Asset" />
                     </SelectTrigger>
                     <SelectContent>
-                      {symbols.map(s => (
-                        <SelectItem key={s} value={s}>{s}</SelectItem>
+                      {symbols.map((s) => (
+                        <SelectItem key={s} value={s}>
+                          {s}
+                        </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
@@ -536,7 +573,8 @@ export default function PythonStrategyBacktesterResults() {
               <CardTitle className="text-lg font-semibold flex items-center justify-between">
                 <span>Portfolio Equity Growth</span>
                 <span className="text-sm font-normal text-muted-foreground">
-                  Initial Capital: ₹{metrics['Initial Capital']?.toLocaleString() || '100,000'} | Final: ₹{metrics['Final Portfolio Value']?.toLocaleString() || 'N/A'}
+                  Initial Capital: ₹{metrics['Initial Capital']?.toLocaleString() || '100,000'} |
+                  Final: ₹{metrics['Final Portfolio Value']?.toLocaleString() || 'N/A'}
                 </span>
               </CardTitle>
             </CardHeader>
@@ -552,15 +590,21 @@ export default function PythonStrategyBacktesterResults() {
                       paper_bgcolor: 'transparent',
                       plot_bgcolor: 'transparent',
                       xaxis: { showgrid: false, tickfont: { color: '#888' } },
-                      yaxis: { showgrid: true, gridcolor: 'rgba(255,255,255,0.08)', tickfont: { color: '#888' } },
-                      showlegend: false
+                      yaxis: {
+                        showgrid: true,
+                        gridcolor: 'rgba(255,255,255,0.08)',
+                        tickfont: { color: '#888' },
+                      },
+                      showlegend: false,
                     }}
                     useResizeHandler={true}
                     style={{ width: '100%' }}
                   />
                 </div>
               ) : (
-                <div className="py-12 text-center text-muted-foreground">No equity curve data available.</div>
+                <div className="py-12 text-center text-muted-foreground">
+                  No equity curve data available.
+                </div>
               )}
             </CardContent>
           </Card>
@@ -581,15 +625,22 @@ export default function PythonStrategyBacktesterResults() {
                       paper_bgcolor: 'transparent',
                       plot_bgcolor: 'transparent',
                       xaxis: { showgrid: false, tickfont: { color: '#888' } },
-                      yaxis: { showgrid: true, gridcolor: 'rgba(255,255,255,0.08)', tickfont: { color: '#888' }, suffix: '%' },
-                      showlegend: false
+                      yaxis: {
+                        showgrid: true,
+                        gridcolor: 'rgba(255,255,255,0.08)',
+                        tickfont: { color: '#888' },
+                        suffix: '%',
+                      },
+                      showlegend: false,
                     }}
                     useResizeHandler={true}
                     style={{ width: '100%' }}
                   />
                 </div>
               ) : (
-                <div className="py-8 text-center text-muted-foreground">No drawdown data available.</div>
+                <div className="py-8 text-center text-muted-foreground">
+                  No drawdown data available.
+                </div>
               )}
             </CardContent>
           </Card>
@@ -600,7 +651,9 @@ export default function PythonStrategyBacktesterResults() {
           <TabsContent value="breakdown" className="space-y-6">
             <Card>
               <CardHeader>
-                <CardTitle className="text-lg font-semibold">Multi-Asset Portfolio Summary</CardTitle>
+                <CardTitle className="text-lg font-semibold">
+                  Multi-Asset Portfolio Summary
+                </CardTitle>
                 <CardDescription>Individual asset return and risk contribution</CardDescription>
               </CardHeader>
               <CardContent>
@@ -620,13 +673,19 @@ export default function PythonStrategyBacktesterResults() {
                         <tr key={item.symbol} className="hover:bg-muted/50">
                           <td className="py-3 px-4 font-semibold">{item.symbol}</td>
                           <td className="py-3 px-4 text-right">{item.trades}</td>
-                          <td className={`py-3 px-4 text-right font-medium ${item.pnl >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                          <td
+                            className={`py-3 px-4 text-right font-medium ${item.pnl >= 0 ? 'text-green-500' : 'text-red-500'}`}
+                          >
                             ₹{item.pnl.toLocaleString()}
                           </td>
-                          <td className={`py-3 px-4 text-right font-medium ${item.total_return_pct >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                          <td
+                            className={`py-3 px-4 text-right font-medium ${item.total_return_pct >= 0 ? 'text-green-500' : 'text-red-500'}`}
+                          >
                             {item.total_return_pct}%
                           </td>
-                          <td className="py-3 px-4 text-right text-red-500">{item.max_drawdown_pct}%</td>
+                          <td className="py-3 px-4 text-right text-red-500">
+                            {item.max_drawdown_pct}%
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -657,7 +716,9 @@ export default function PythonStrategyBacktesterResults() {
               </div>
               <div className="space-y-1">
                 <p className="text-xs text-muted-foreground">Trade Expectancy</p>
-                <p className="text-lg font-semibold">₹{metrics['Expectancy'] ? Number(metrics['Expectancy']).toFixed(2) : 'N/A'}</p>
+                <p className="text-lg font-semibold">
+                  ₹{metrics['Expectancy'] ? Number(metrics['Expectancy']).toFixed(2) : 'N/A'}
+                </p>
               </div>
               <div className="space-y-1">
                 <p className="text-xs text-muted-foreground">Total Trades</p>
@@ -665,19 +726,28 @@ export default function PythonStrategyBacktesterResults() {
               </div>
               <div className="space-y-1">
                 <p className="text-xs text-muted-foreground">Gross Profit</p>
-                <p className="text-lg font-semibold text-green-500">₹{metrics['Gross Profit']?.toLocaleString() ?? 0}</p>
+                <p className="text-lg font-semibold text-green-500">
+                  ₹{metrics['Gross Profit']?.toLocaleString() ?? 0}
+                </p>
               </div>
               <div className="space-y-1">
                 <p className="text-xs text-muted-foreground">Gross Loss</p>
-                <p className="text-lg font-semibold text-red-500">₹{metrics['Gross Loss']?.toLocaleString() ?? 0}</p>
+                <p className="text-lg font-semibold text-red-500">
+                  ₹{metrics['Gross Loss']?.toLocaleString() ?? 0}
+                </p>
               </div>
             </div>
 
             <div className="pt-4 border-t">
-              <h4 className="text-xs font-semibold uppercase text-muted-foreground mb-2">Extracted Strategy Parameters</h4>
+              <h4 className="text-xs font-semibold uppercase text-muted-foreground mb-2">
+                Extracted Strategy Parameters
+              </h4>
               <div className="flex flex-wrap gap-2">
                 {Object.entries(parameters).map(([key, val]) => (
-                  <span key={key} className="inline-flex items-center rounded-md bg-muted px-2.5 py-1 text-xs font-medium ring-1 ring-inset ring-muted-foreground/20">
+                  <span
+                    key={key}
+                    className="inline-flex items-center rounded-md bg-muted px-2.5 py-1 text-xs font-medium ring-1 ring-inset ring-muted-foreground/20"
+                  >
                     {key}: <span className="font-bold ml-1">{String(val)}</span>
                   </span>
                 ))}
@@ -716,7 +786,9 @@ export default function PythonStrategyBacktesterResults() {
                   </div>
                 </>
               ) : (
-                <p className="text-sm text-muted-foreground">No parameter optimization suggestions for this script.</p>
+                <p className="text-sm text-muted-foreground">
+                  No parameter optimization suggestions for this script.
+                </p>
               )}
             </CardContent>
           </Card>
@@ -725,12 +797,15 @@ export default function PythonStrategyBacktesterResults() {
           {tearsheet_url ? (
             <Alert className="bg-emerald-500/10 border-emerald-500/30">
               <FileSpreadsheet className="h-5 w-5 text-emerald-500" />
-              <AlertTitle className="text-emerald-600 font-semibold">Interactive OpenStatz Dashboard Ready</AlertTitle>
+              <AlertTitle className="text-emerald-600 font-semibold">
+                Interactive OpenStatz Dashboard Ready
+              </AlertTitle>
               <AlertDescription className="mt-2 space-y-3">
                 <p className="text-sm text-muted-foreground">
-                  OpenStatz generated a complete standalone HTML report with drawdowns, return distribution, and trade analytics.
+                  OpenStatz generated a complete standalone HTML report with drawdowns, return
+                  distribution, and trade analytics.
                 </p>
-                <Button 
+                <Button
                   onClick={() => window.open(tearsheet_url, '_blank')}
                   className="bg-emerald-600 hover:bg-emerald-700 text-white w-full sm:w-auto"
                 >
@@ -755,7 +830,9 @@ export default function PythonStrategyBacktesterResults() {
       {heatmap_html && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg font-semibold">StockMock Monthly PnL Matrix (₹)</CardTitle>
+            <CardTitle className="text-lg font-semibold">
+              StockMock Monthly PnL Matrix (₹)
+            </CardTitle>
             <CardDescription>Monthly profit distribution & performance heatmap</CardDescription>
           </CardHeader>
           <CardContent className="overflow-x-auto">
@@ -771,7 +848,8 @@ export default function PythonStrategyBacktesterResults() {
             <Card className="bg-card">
               <CardHeader>
                 <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                  <ShieldAlert className="h-4 w-4 text-primary" /> Audit Trail & Reproducibility Manifest
+                  <ShieldAlert className="h-4 w-4 text-primary" /> Audit Trail & Reproducibility
+                  Manifest
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-2 text-xs font-mono">
@@ -799,7 +877,8 @@ export default function PythonStrategyBacktesterResults() {
             <Card className="bg-card">
               <CardHeader>
                 <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                  <Lightbulb className="h-4 w-4 text-yellow-500" /> Backtest Methodology & Pricing Model
+                  <Lightbulb className="h-4 w-4 text-yellow-500" /> Backtest Methodology & Pricing
+                  Model
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-2 text-xs">
@@ -830,7 +909,9 @@ export default function PythonStrategyBacktesterResults() {
         <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
             <CardTitle>Trade Execution History ({trades.length} Trades)</CardTitle>
-            <CardDescription>Structured log of filled signals (Market Hours 09:15 - 15:30 IST)</CardDescription>
+            <CardDescription>
+              Structured log of filled signals (Market Hours 09:15 - 15:30 IST)
+            </CardDescription>
           </div>
 
           <div className="flex flex-col sm:flex-row items-center gap-2">
@@ -840,7 +921,7 @@ export default function PythonStrategyBacktesterResults() {
                 placeholder="Search CE, PE, date..."
                 className="pl-8"
                 value={tradeSearch}
-                onChange={e => setTradeSearch(e.target.value)}
+                onChange={(e) => setTradeSearch(e.target.value)}
               />
             </div>
             <div className="flex items-center gap-1 bg-muted p-1 rounded-md">
@@ -890,45 +971,81 @@ export default function PythonStrategyBacktesterResults() {
               </thead>
               <tbody className="divide-y font-mono">
                 {filteredTrades.length > 0 ? (
-                  filteredTrades.map(t => {
+                  filteredTrades.map((t) => {
                     const isWin = t.result === 'WIN' || t.pnl > 0
                     const isCe = t.option_type === 'CE' || t.direction?.includes('CE')
                     const isPe = t.option_type === 'PE' || t.direction?.includes('PE')
-                    const ptsVal = t.pnl_pts ?? (t.entry_price > 0 ? (isCe ? t.exit_price - t.entry_price : t.entry_price - t.exit_price) : 0)
+                    const ptsVal =
+                      t.pnl_pts ??
+                      (t.entry_price > 0
+                        ? isCe
+                          ? t.exit_price - t.entry_price
+                          : t.entry_price - t.exit_price
+                        : 0)
 
                     return (
-                      <tr key={`${t.symbol}-${t.trade_id}`} className="hover:bg-muted/40 text-xs sm:text-sm">
+                      <tr
+                        key={`${t.symbol}-${t.trade_id}`}
+                        className="hover:bg-muted/40 text-xs sm:text-sm"
+                      >
                         <td className="py-2.5 px-3 text-muted-foreground">{t.trade_id}</td>
-                        <td className="py-2.5 px-3 font-sans font-medium whitespace-nowrap">{t.date || t.entry_time.slice(0, 10)}</td>
-                        <td className="py-2.5 px-3 font-sans text-muted-foreground">{t.day || '—'}</td>
+                        <td className="py-2.5 px-3 font-sans font-medium whitespace-nowrap">
+                          {t.date || t.entry_time.slice(0, 10)}
+                        </td>
+                        <td className="py-2.5 px-3 font-sans text-muted-foreground">
+                          {t.day || '—'}
+                        </td>
                         <td className="py-2.5 px-3 font-sans font-semibold">{t.symbol}</td>
-                        <td className="py-2.5 px-3 whitespace-nowrap text-xs text-muted-foreground">{t.entry_time}</td>
-                        <td className="py-2.5 px-3 whitespace-nowrap text-xs text-muted-foreground">{t.exit_time}</td>
+                        <td className="py-2.5 px-3 whitespace-nowrap text-xs text-muted-foreground">
+                          {t.entry_time}
+                        </td>
+                        <td className="py-2.5 px-3 whitespace-nowrap text-xs text-muted-foreground">
+                          {t.exit_time}
+                        </td>
                         <td className="py-2.5 px-3 text-center">
-                          <span className={`px-2 py-0.5 rounded text-xs font-bold font-sans ${
-                            isCe ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40' :
-                            isPe ? 'bg-purple-500/20 text-purple-400 border border-purple-500/40' :
-                            'bg-blue-500/20 text-blue-400'
-                          }`}>
+                          <span
+                            className={`px-2 py-0.5 rounded text-xs font-bold font-sans ${
+                              isCe
+                                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                                : isPe
+                                  ? 'bg-purple-500/20 text-purple-400 border border-purple-500/40'
+                                  : 'bg-blue-500/20 text-blue-400'
+                            }`}
+                          >
                             {isCe ? 'CE' : isPe ? 'PE' : 'EQ'}
                           </span>
                         </td>
-                        <td className="py-2.5 px-3 text-right">₹{t.entry_price.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
-                        <td className="py-2.5 px-3 text-right">₹{t.exit_price.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                        <td className="py-2.5 px-3 text-right">
+                          ₹{t.entry_price.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                        </td>
+                        <td className="py-2.5 px-3 text-right">
+                          ₹{t.exit_price.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                        </td>
                         <td className="py-2.5 px-3 text-center">
-                          <span className={`px-2 py-0.5 rounded text-xs font-bold font-sans ${
-                            isWin ? 'bg-green-500/20 text-green-400 border border-green-500/30' : 'bg-red-500/20 text-red-400 border border-red-500/30'
-                          }`}>
+                          <span
+                            className={`px-2 py-0.5 rounded text-xs font-bold font-sans ${
+                              isWin
+                                ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                                : 'bg-red-500/20 text-red-400 border border-red-500/30'
+                            }`}
+                          >
                             {isWin ? 'WIN' : 'LOSS'}
                           </span>
                         </td>
-                        <td className={`py-2.5 px-3 text-right font-semibold ${ ptsVal >= 0 ? 'text-green-500' : 'text-red-500' }`}>
-                          {ptsVal >= 0 ? '+' : ''}{ptsVal.toFixed(1)} pts
+                        <td
+                          className={`py-2.5 px-3 text-right font-semibold ${ptsVal >= 0 ? 'text-green-500' : 'text-red-500'}`}
+                        >
+                          {ptsVal >= 0 ? '+' : ''}
+                          {ptsVal.toFixed(1)} pts
                         </td>
-                        <td className={`py-2.5 px-3 text-right font-bold ${ t.pnl >= 0 ? 'text-green-500' : 'text-red-500' }`}>
+                        <td
+                          className={`py-2.5 px-3 text-right font-bold ${t.pnl >= 0 ? 'text-green-500' : 'text-red-500'}`}
+                        >
                           {t.pnl >= 0 ? '+' : ''}₹{t.pnl.toLocaleString()}
                         </td>
-                        <td className="py-2.5 px-3 text-right font-sans text-muted-foreground whitespace-nowrap">{t.holding_time || '—'}</td>
+                        <td className="py-2.5 px-3 text-right font-sans text-muted-foreground whitespace-nowrap">
+                          {t.holding_time || '—'}
+                        </td>
                       </tr>
                     )
                   })

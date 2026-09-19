@@ -147,3 +147,131 @@ class IndianFOAccountingEngine:
             "entry_turnover": round(entry_turnover, 2),
             "est_exit_turnover": round(est_exit_turnover, 2)
         }
+
+
+class CryptoAccountingEngine:
+    """
+    Delta Exchange / Crypto Derivatives Accounting Engine (USD/USDT).
+    Standard Delta fees: 0.03% taker fee (0.015% maker).
+    Zero Indian statutory taxes (no STT, no SEBI turnover, no Indian Stamp Duty, no 18% GST).
+    """
+    DEFAULT_FEE_RATE = 0.0003  # 0.03% on contract turnover
+
+    @classmethod
+    def calculate_closed_trade_pnl(
+        cls,
+        entry_price: float,
+        exit_price: float,
+        qty: float,
+        direction: str = "BUY",
+        brokerage_per_order: Optional[float] = None,
+        is_option: bool = True,
+        contract_multiplier: float = 1.0,
+        fee_rate: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        qty = abs(float(qty))
+        if qty == 0:
+            return {
+                "gross_pnl": 0.0, "net_pnl": 0.0, "brokerage": 0.0, "stt": 0.0,
+                "stamp_duty": 0.0, "exchange_charges": 0.0, "sebi_charges": 0.0,
+                "gst": 0.0, "total_charges": 0.0, "buy_turnover": 0.0, "sell_turnover": 0.0
+            }
+
+        mult = float(contract_multiplier or 1.0)
+        rate = cls.DEFAULT_FEE_RATE if fee_rate is None else float(fee_rate)
+
+        if str(direction).upper() in ["BUY", "LONG"]:
+            buy_price = float(entry_price)
+            sell_price = float(exit_price)
+        else:
+            sell_price = float(entry_price)
+            buy_price = float(exit_price)
+
+        gross_pnl = (sell_price - buy_price) * qty * mult
+        buy_turnover = buy_price * qty * mult
+        sell_turnover = sell_price * qty * mult
+        total_turnover = buy_turnover + sell_turnover
+
+        exchange_charges = round(total_turnover * rate, 4)
+        gst = round(exchange_charges * 0.18, 4)
+        total_charges = round(exchange_charges + gst, 4)
+        net_pnl = round(gross_pnl - total_charges, 4)
+
+        return {
+            "gross_pnl": round(gross_pnl, 4),
+            "net_pnl": net_pnl,
+            "brokerage": 0.0,
+            "stt": 0.0,
+            "stamp_duty": 0.0,
+            "exchange_charges": exchange_charges,
+            "sebi_charges": 0.0,
+            "gst": gst,
+            "total_charges": total_charges,
+            "buy_turnover": round(buy_turnover, 4),
+            "sell_turnover": round(sell_turnover, 4)
+        }
+
+    @classmethod
+    def calculate_open_position_mtm(
+        cls,
+        entry_price: float,
+        current_ltp: float,
+        qty: float,
+        direction: str = "BUY",
+        brokerage_per_order: Optional[float] = None,
+        is_option: bool = True,
+        contract_multiplier: float = 1.0,
+        fee_rate: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        qty = abs(float(qty))
+        if qty == 0:
+            return {
+                "gross_mtm": 0.0, "net_mtm": 0.0, "accrued_and_exit_charges": 0.0,
+                "stt": 0.0, "stamp_duty": 0.0, "exchange_charges": 0.0, "sebi_charges": 0.0,
+                "gst": 0.0, "brokerage": 0.0, "entry_turnover": 0.0, "est_exit_turnover": 0.0
+            }
+
+        mult = float(contract_multiplier or 1.0)
+        rate = cls.DEFAULT_FEE_RATE if fee_rate is None else float(fee_rate)
+        is_long = str(direction).upper() in ["BUY", "LONG"]
+        entry_p = float(entry_price)
+        ltp = float(current_ltp)
+
+        if is_long:
+            gross_mtm = (ltp - entry_p) * qty * mult
+            entry_turnover = entry_p * qty * mult
+            est_exit_turnover = ltp * qty * mult
+        else:
+            gross_mtm = (entry_p - ltp) * qty * mult
+            entry_turnover = entry_p * qty * mult
+            est_exit_turnover = ltp * qty * mult
+
+        total_est_turnover = entry_turnover + est_exit_turnover
+        exchange_charges = round(total_est_turnover * rate, 4)
+        gst = round(exchange_charges * 0.18, 4)
+        total_charges = round(exchange_charges + gst, 4)
+        net_mtm = round(gross_mtm - total_charges, 4)
+
+        return {
+            "gross_mtm": round(gross_mtm, 4),
+            "net_mtm": net_mtm,
+            "accrued_and_exit_charges": total_charges,
+            "stt": 0.0,
+            "stamp_duty": 0.0,
+            "exchange_charges": exchange_charges,
+            "sebi_charges": 0.0,
+            "gst": gst,
+            "brokerage": 0.0,
+            "entry_turnover": round(entry_turnover, 4),
+            "est_exit_turnover": round(est_exit_turnover, 4)
+        }
+
+
+def get_accounting_engine(exchange: str = "", broker: str = ""):
+    """Return the correct accounting engine for the given exchange/broker."""
+    ex_upper = str(exchange or "").upper()
+    br_lower = str(broker or "").lower()
+    if ex_upper in ("CRYPTO", "DELTA") or "delta" in br_lower:
+        return CryptoAccountingEngine
+    return IndianFOAccountingEngine
+

@@ -24,6 +24,7 @@ export interface Order {
   orderid: string
   order_status: 'complete' | 'rejected' | 'cancelled' | 'open' | 'pending' | 'trigger pending'
   timestamp: string
+  lot_size?: number
   strategy?: string // Originating Strategy Name
 }
 
@@ -37,6 +38,7 @@ export interface Trade {
   product: string
   orderid: string
   timestamp: string
+  lot_size?: number
   strategy?: string // Originating Strategy Name
 }
 
@@ -174,4 +176,3 @@ export interface StrategyAnalyticsResponse {
   }
   strategies: Record<string, StrategyPerformanceMetric>
 }
-

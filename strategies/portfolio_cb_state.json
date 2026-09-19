@@ -1,12 +1,11 @@
 {
-  "date": "2026-09-15",
+  "date": "2026-09-18",
   "nse": {
-    "session_pnl": 3359.7477913201283,
+    "session_pnl": -6275.500000000002,
     "halted": false,
     "halt_reason": "",
     "strategies": {
-      "Prime Indicator Scalper Options": 10814.869234666126,
-      "NSE_LiquiditySweepScalper_V43": -7455.121443345998
+      "Post10_Institutional_OB_VWAP_Production_V5": -6275.500000000002
     }
   },
   "bse": {
@@ -16,15 +15,26 @@
     "strategies": {}
   },
   "mcx": {
-    "session_pnl": -1852.5,
+    "session_pnl": 115.0,
     "halted": false,
     "halt_reason": "",
     "strategies": {
-      "MCX_Institutional_MIS_V3.0": -1852.5
+      "MCX_Institutional_MIS_V3.0": 115.0
     }
   },
   "active_positions": {
-    "BANKNIFTY": {},
-    "NIFTY": {}
+    "BANKNIFTY": {
+      "Combined_ORB_Quant_Options": {
+        "symbol": "BANKNIFTY29SEP2656100PE",
+        "registered_at": 1789704070.1605537
+      }
+    },
+    "NIFTY": {},
+    "SENSEX": {
+      "Combined_ORB_Quant_Options": {
+        "symbol": "SENSEX24SEP2674500PE",
+        "registered_at": 1789704211.3393223
+      }
+    }
   }
 }

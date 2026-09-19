@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen } from '@/test/test-utils'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen } from '@/test/test-utils'
 import PortfolioBacktester from './PortfolioBacktester'
 
 beforeAll(() => {

@@ -1,0 +1,84 @@
+{
+  "strategy": "Overnight_Crypto_Delta_Options",
+  "assets": {
+    "BTC": {
+      "active": false,
+      "entry_done": true,
+      "expiry_date": "19-SEP-26",
+      "entry_time": "2026-09-19T01:08:03.258473+05:30",
+      "lots": 100,
+      "initial_net_credit": 2.6,
+      "target_profit_value": 1.3,
+      "positions": {
+        "CE_WING": {
+          "symbol": "BTC19SEP2682800CE",
+          "type": "BUY",
+          "fill_price": 30.0,
+          "active": false
+        },
+        "PE_WING": {
+          "symbol": "BTC19SEP2678600PE",
+          "type": "BUY",
+          "fill_price": 6.0,
+          "active": false
+        },
+        "CE_SHORT": {
+          "symbol": "BTC19SEP2682600CE",
+          "type": "SELL",
+          "fill_price": 32.0,
+          "sl_price": 64.0,
+          "active": false
+        },
+        "PE_SHORT": {
+          "symbol": "BTC19SEP2679400PE",
+          "type": "SELL",
+          "fill_price": 30.0,
+          "sl_price": 60.0,
+          "active": false
+        }
+      },
+      "exit_time": "2026-09-19T04:40:48.141918+05:30",
+      "exit_reason": "50%_Decay_TP_Achieved"
+    },
+    "ETH": {
+      "active": false,
+      "entry_done": true,
+      "expiry_date": "19-SEP-26",
+      "entry_time": "2026-09-19T00:37:45.447189+05:30",
+      "lots": 100,
+      "initial_net_credit": 8.1,
+      "target_profit_value": 4.05,
+      "positions": {
+        "CE_WING": {
+          "symbol": "ETH19SEP262660CE",
+          "type": "BUY",
+          "fill_price": 6.85,
+          "active": false
+        },
+        "PE_WING": {
+          "symbol": "ETH19SEP262520PE",
+          "type": "BUY",
+          "fill_price": 0.2,
+          "active": false
+        },
+        "CE_SHORT": {
+          "symbol": "ETH19SEP262650CE",
+          "type": "SELL",
+          "fill_price": 6.5,
+          "sl_price": 13.0,
+          "active": false
+        },
+        "PE_SHORT": {
+          "symbol": "ETH19SEP262590PE",
+          "type": "SELL",
+          "fill_price": 5.5,
+          "sl_price": 11.0,
+          "active": false
+        }
+      },
+      "exit_time": "2026-09-19T00:57:08.031505+05:30",
+      "exit_reason": "CE_Short_SL_Triggered"
+    }
+  },
+  "updated_at": "2026-09-19T04:40:48.196798+05:30"
+}

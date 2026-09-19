@@ -18,10 +18,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router'
-import {
-  type ScannerSignal,
-  scannerApi,
-} from '@/api/scanner'
+import { type ScannerSignal, scannerApi } from '@/api/scanner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -241,7 +238,8 @@ export default function Scanner() {
                 Nifty 500 Radar & Two-Way Execution Desk
               </h1>
               <p className="text-xs text-muted-foreground">
-                Multi-Timeframe Breakout Scanner • 1-Strike ITM Option Radar • Automated WhatsApp 2-Way Execution
+                Multi-Timeframe Breakout Scanner • 1-Strike ITM Option Radar • Automated WhatsApp
+                2-Way Execution
               </p>
             </div>
           </div>
@@ -544,8 +542,8 @@ export default function Scanner() {
                                 sig.rsi > 70
                                   ? 'text-amber-500'
                                   : sig.rsi > 55
-                                  ? 'text-emerald-500'
-                                  : 'text-muted-foreground'
+                                    ? 'text-emerald-500'
+                                    : 'text-muted-foreground'
                               }`}
                             >
                               {sig.rsi}
@@ -739,7 +737,9 @@ export default function Scanner() {
 
               <div className="flex items-center gap-2 p-2.5 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px]">
                 <CheckCircle2 className="h-4 w-4 shrink-0" />
-                <span>Order will route directly to active broker session with live WhatsApp broadcast.</span>
+                <span>
+                  Order will route directly to active broker session with live WhatsApp broadcast.
+                </span>
               </div>
             </div>
           )}
@@ -798,8 +798,9 @@ export default function Scanner() {
                 <span>Instant Inbound Routing</span>
               </div>
               <p className="text-[11px] text-muted-foreground">
-                When a signal is generated, OpenAlgo broadcasts the alert to your registered WhatsApp
-                number. Simply reply with the short code within 5 minutes to trigger auto-order placement.
+                When a signal is generated, OpenAlgo broadcasts the alert to your registered
+                WhatsApp number. Simply reply with the short code within 5 minutes to trigger
+                auto-order placement.
               </p>
             </div>
 
@@ -811,8 +812,12 @@ export default function Scanner() {
               <div className="space-y-2 font-mono text-[11px]">
                 <div className="p-2.5 rounded-lg border bg-muted/40 flex items-center justify-between">
                   <div>
-                    <span className="font-bold text-emerald-600 dark:text-emerald-400">BUY 101</span>
-                    <span className="text-muted-foreground ml-2">(Buy 1 Lot recommended Option)</span>
+                    <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                      BUY 101
+                    </span>
+                    <span className="text-muted-foreground ml-2">
+                      (Buy 1 Lot recommended Option)
+                    </span>
                   </div>
                   <Button
                     variant="ghost"
@@ -841,7 +846,9 @@ export default function Scanner() {
 
                 <div className="p-2.5 rounded-lg border bg-muted/40 flex items-center justify-between">
                   <div>
-                    <span className="font-bold text-cyan-600 dark:text-cyan-400">BUY EQ 101 50</span>
+                    <span className="font-bold text-cyan-600 dark:text-cyan-400">
+                      BUY EQ 101 50
+                    </span>
                     <span className="text-muted-foreground ml-2">(Buy 50 shares Cash Equity)</span>
                   </div>
                   <Button
@@ -857,7 +864,9 @@ export default function Scanner() {
                 <div className="p-2.5 rounded-lg border bg-muted/40 flex items-center justify-between">
                   <div>
                     <span className="font-bold text-foreground">/signals</span>
-                    <span className="text-muted-foreground ml-2">(List current active radar setups)</span>
+                    <span className="text-muted-foreground ml-2">
+                      (List current active radar setups)
+                    </span>
                   </div>
                   <Button
                     variant="ghost"
@@ -872,7 +881,9 @@ export default function Scanner() {
                 <div className="p-2.5 rounded-lg border bg-muted/40 flex items-center justify-between">
                   <div>
                     <span className="font-bold text-foreground">/status</span>
-                    <span className="text-muted-foreground ml-2">(Check broker session & radar health)</span>
+                    <span className="text-muted-foreground ml-2">
+                      (Check broker session & radar health)
+                    </span>
                   </div>
                   <Button
                     variant="ghost"

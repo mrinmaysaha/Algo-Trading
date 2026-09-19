@@ -33,7 +33,13 @@ import {
 } from '@/components/ui/table'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
-import { cn, getContractMultiplier, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
+import {
+  cn,
+  formatQuantityWithMultiplier,
+  getContractMultiplier,
+  makeFormatCurrency,
+  sanitizeCSV,
+} from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { Trade } from '@/types/trading'
@@ -130,7 +136,8 @@ export default function TradeBook() {
       if (filters.action.length > 0 && !filters.action.includes(trade.action)) return false
       if (filters.exchange.length > 0 && !filters.exchange.includes(trade.exchange)) return false
       if (filters.product.length > 0 && !filters.product.includes(trade.product)) return false
-      if (filters.strategy.length > 0 && !filters.strategy.includes(trade.strategy || 'Manual')) return false
+      if (filters.strategy.length > 0 && !filters.strategy.includes(trade.strategy || 'Manual'))
+        return false
       return true
     })
 
@@ -577,10 +584,11 @@ export default function TradeBook() {
                   {sortedAndFilteredTrades.map((trade, index) => {
                     const qty = Number(trade.quantity) || 0
                     const price = Number(trade.average_price) || 0
-                    const multiplier = getContractMultiplier(trade.symbol, trade.exchange)
-                    const tradeValue = (qty > 0 && price > 0)
-                      ? qty * price * multiplier
-                      : (Number(trade.trade_value) || 0)
+                    const multiplier = getContractMultiplier(trade.symbol, trade.exchange, trade.lot_size)
+                    const tradeValue =
+                      qty > 0 && price > 0
+                        ? qty * price * multiplier
+                        : Number(trade.trade_value) || 0
 
                     return (
                       <TableRow key={`${trade.orderid}-${index}`}>
@@ -618,7 +626,22 @@ export default function TradeBook() {
                             {trade.action}
                           </Badge>
                         </TableCell>
-                        <TableCell className="text-right font-mono">{trade.quantity}</TableCell>
+                        <TableCell className="text-right font-mono">
+                          <div>{trade.quantity}</div>
+                          {(() => {
+                            const qInfo = formatQuantityWithMultiplier(
+                              trade.quantity,
+                              trade.symbol,
+                              trade.exchange,
+                              trade.lot_size
+                            )
+                            return qInfo.underlying ? (
+                              <div className="text-[10px] text-muted-foreground leading-tight">
+                                {qInfo.underlying}
+                              </div>
+                            ) : null
+                          })()}
+                        </TableCell>
                         <TableCell className="text-right font-mono">
                           {formatCurrency(trade.average_price)}
                         </TableCell>

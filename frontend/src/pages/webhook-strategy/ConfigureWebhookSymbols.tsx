@@ -208,7 +208,10 @@ export default function ConfigureSymbols() {
     if (mappingToDelete === null || !strategyId) return
 
     try {
-      const response = await webhookStrategyApi.deleteSymbolMapping(Number(strategyId), mappingToDelete)
+      const response = await webhookStrategyApi.deleteSymbolMapping(
+        Number(strategyId),
+        mappingToDelete
+      )
       if (response.status === 'success') {
         setMappings(mappings.filter((m) => m.id !== mappingToDelete))
         showToast.success('Symbol removed', 'strategy')

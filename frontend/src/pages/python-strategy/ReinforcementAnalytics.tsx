@@ -1,33 +1,45 @@
-import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router'
 import {
-  Brain,
-  ShieldCheck,
-  AlertTriangle,
-  TrendingUp,
   Activity,
-  Sliders,
-  RefreshCw,
+  AlertTriangle,
+  ArrowLeft,
+  BarChart2,
+  Brain,
+  Calendar,
   CheckCircle2,
   Info,
-  Zap,
-  BarChart2,
-  ArrowLeft,
-  Calendar,
+  Loader2,
   Lock,
-  Loader2
+  RefreshCw,
+  ShieldCheck,
+  Sliders,
+  TrendingUp,
+  Zap,
 } from 'lucide-react'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
+import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router'
+import { pythonStrategyApi } from '@/api/python-strategy'
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from '@/components/ui/accordion'
 import { Badge } from '@/components/ui/badge'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { Progress } from '@/components/ui/progress'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Progress } from '@/components/ui/progress'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
-import { pythonStrategyApi } from '@/api/python-strategy'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { showToast } from '@/utils/toast'
 
 interface RegimeConviction {
@@ -100,40 +112,42 @@ export default function ReinforcementAnalytics() {
     }
   }
 
-const MCX_DEFAULT_WEIGHTS = [
-  [0.0435, 0.0, 0.0],
-  [-0.0012, 0.0, 0.0],
-  [0.0122, 0.0, 0.0],
-  [-0.0426, 0.0, 0.0],
-  [-0.2906, 0.0, 0.0],
-  [-0.0155, 0.0, 0.0],
-  [-0.0388, 0.0, 0.0],
-  [0.1072, 0.0, 0.0],
-  [0.0, 0.0, 0.0],
-  [0.0, 0.0, 0.0],
-  [0.0, 0.0, 0.0],
-  [0.0, 0.0, 0.0]
-]
+  const MCX_DEFAULT_WEIGHTS = [
+    [0.0435, 0.0, 0.0],
+    [-0.0012, 0.0, 0.0],
+    [0.0122, 0.0, 0.0],
+    [-0.0426, 0.0, 0.0],
+    [-0.2906, 0.0, 0.0],
+    [-0.0155, 0.0, 0.0],
+    [-0.0388, 0.0, 0.0],
+    [0.1072, 0.0, 0.0],
+    [0.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0],
+  ]
 
-const NSE_DEFAULT_WEIGHTS = [
-  [0.0186, 0.0, 0.0],
-  [-0.0029, 0.0, 0.0],
-  [-0.0097, 0.0, 0.0],
-  [-0.1045, 0.0, 0.0],
-  [-0.4262, 0.0, 0.0],
-  [-0.0380, 0.0, 0.0],
-  [-0.0950, 0.0, 0.0],
-  [-0.0013, 0.0, 0.0],
-  [0.0, 0.0, 0.0],
-  [0.0, 0.0, 0.0],
-  [0.0, 0.0, 0.0],
-  [0.0, 0.0, 0.0]
-]
+  const NSE_DEFAULT_WEIGHTS = [
+    [0.0186, 0.0, 0.0],
+    [-0.0029, 0.0, 0.0],
+    [-0.0097, 0.0, 0.0],
+    [-0.1045, 0.0, 0.0],
+    [-0.4262, 0.0, 0.0],
+    [-0.038, 0.0, 0.0],
+    [-0.095, 0.0, 0.0],
+    [-0.0013, 0.0, 0.0],
+    [0.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0],
+  ]
 
   const calculateSimulation = () => {
     const policyInfo = simMarket === 'MCX' ? rlData?.mcx : rlData?.nse
-    const w = (policyInfo as any)?.weights || (simMarket === 'MCX' ? MCX_DEFAULT_WEIGHTS : NSE_DEFAULT_WEIGHTS)
-    const b = (policyInfo as any)?.bias || [0.40, 1.5, 0.5]
+    const w =
+      (policyInfo as any)?.weights ||
+      (simMarket === 'MCX' ? MCX_DEFAULT_WEIGHTS : NSE_DEFAULT_WEIGHTS)
+    const b = (policyInfo as any)?.bias || [0.4, 1.5, 0.5]
 
     const state = [
       simEmaDist,
@@ -144,12 +158,15 @@ const NSE_DEFAULT_WEIGHTS = [
       0.1,
       Math.min(Math.max(simSession, 0), 1),
       Math.min(Math.max(simRvol, 0), 5),
-      0.0, 0.0, 0.0, 1.2
+      0.0,
+      0.0,
+      0.0,
+      1.2,
     ]
 
-    let raw0 = b[0] !== undefined ? b[0] : 0.40
-    let raw1 = b[1] !== undefined ? b[1] : 1.50
-    let raw2 = b[2] !== undefined ? b[2] : 0.50
+    let raw0 = b[0] !== undefined ? b[0] : 0.4
+    let raw1 = b[1] !== undefined ? b[1] : 1.5
+    let raw2 = b[2] !== undefined ? b[2] : 0.5
 
     for (let i = 0; i < 12; i++) {
       if (w && w[i]) {
@@ -165,9 +182,9 @@ const NSE_DEFAULT_WEIGHTS = [
 
     return {
       conviction: Math.round(conviction * 1000) / 1000,
-      decision: conviction > 0.20 ? 'APPROVED' : 'VETOED',
+      decision: conviction > 0.2 ? 'APPROVED' : 'VETOED',
       dynamic_sl_atr: Math.round(dynamicSl * 100) / 100,
-      dynamic_tp_ratchet: Math.round(dynamicTp * 100) / 100
+      dynamic_tp_ratchet: Math.round(dynamicTp * 100) / 100,
     }
   }
 
@@ -279,9 +296,13 @@ const NSE_DEFAULT_WEIGHTS = [
           <CardContent>
             <div className="text-2xl font-bold">{totalExp.toLocaleString()}</div>
             <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
-              <span className="text-emerald-500 font-medium">MCX: {rlData?.mcx.total_experiences}</span>
+              <span className="text-emerald-500 font-medium">
+                MCX: {rlData?.mcx.total_experiences}
+              </span>
               <span>•</span>
-              <span className="text-indigo-400 font-medium">NSE: {rlData?.nse.total_experiences}</span>
+              <span className="text-indigo-400 font-medium">
+                NSE: {rlData?.nse.total_experiences}
+              </span>
             </p>
           </CardContent>
         </Card>
@@ -295,7 +316,9 @@ const NSE_DEFAULT_WEIGHTS = [
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold flex items-center justify-between">
-              <span>{winRate}% Win ({totalWins})</span>
+              <span>
+                {winRate}% Win ({totalWins})
+              </span>
               <span className="text-xs text-amber-500 font-normal">{totalLosses} Penalized</span>
             </div>
             <Progress value={winRate} className="h-2 mt-2" />
@@ -316,7 +339,10 @@ const NSE_DEFAULT_WEIGHTS = [
                   <Lock className="h-3 w-3" /> Event Lock Active
                 </Badge>
               ) : (
-                <Badge variant="outline" className="bg-emerald-500/10 text-emerald-400 border-emerald-500/30">
+                <Badge
+                  variant="outline"
+                  className="bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
+                >
                   <CheckCircle2 className="h-3 w-3 mr-1" /> All Windows Clear
                 </Badge>
               )}
@@ -353,10 +379,16 @@ const NSE_DEFAULT_WEIGHTS = [
             </p>
           </div>
           <TabsList className="bg-muted/60">
-            <TabsTrigger value="mcx" className="data-[state=active]:bg-purple-600 data-[state=active]:text-white">
+            <TabsTrigger
+              value="mcx"
+              className="data-[state=active]:bg-purple-600 data-[state=active]:text-white"
+            >
               MCX Commodities Policy
             </TabsTrigger>
-            <TabsTrigger value="nse" className="data-[state=active]:bg-indigo-600 data-[state=active]:text-white">
+            <TabsTrigger
+              value="nse"
+              className="data-[state=active]:bg-indigo-600 data-[state=active]:text-white"
+            >
               NSE / BSE Indices Policy
             </TabsTrigger>
           </TabsList>
@@ -373,12 +405,19 @@ const NSE_DEFAULT_WEIGHTS = [
                 <Card className="border-border/80 bg-card hover:border-purple-500/40 transition-colors">
                   <CardHeader className="pb-3">
                     <div className="flex items-center justify-between">
-                      <Badge variant="outline" className="text-xs font-mono bg-purple-500/10 text-purple-400 border-purple-500/20">
+                      <Badge
+                        variant="outline"
+                        className="text-xs font-mono bg-purple-500/10 text-purple-400 border-purple-500/20"
+                      >
                         REGIME 1
                       </Badge>
                       <Badge
-                        variant={pData.convictions.trend.status === 'APPROVED' ? 'default' : 'destructive'}
-                        className={pData.convictions.trend.status === 'APPROVED' ? 'bg-emerald-600' : ''}
+                        variant={
+                          pData.convictions.trend.status === 'APPROVED' ? 'default' : 'destructive'
+                        }
+                        className={
+                          pData.convictions.trend.status === 'APPROVED' ? 'bg-emerald-600' : ''
+                        }
                       >
                         {pData.convictions.trend.status}
                       </Badge>
@@ -394,8 +433,11 @@ const NSE_DEFAULT_WEIGHTS = [
                   <CardContent className="space-y-3">
                     <div className="p-3 rounded-lg bg-muted/40 flex justify-between items-center">
                       <span className="text-xs text-muted-foreground">Entry Conviction:</span>
-                      <span className={`text-base font-bold font-mono ${pData.convictions.trend.conviction >= 0.20 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                        {(pData.convictions.trend.conviction > 0 ? '+' : '') + pData.convictions.trend.conviction.toFixed(3)}
+                      <span
+                        className={`text-base font-bold font-mono ${pData.convictions.trend.conviction >= 0.2 ? 'text-emerald-400' : 'text-rose-400'}`}
+                      >
+                        {(pData.convictions.trend.conviction > 0 ? '+' : '') +
+                          pData.convictions.trend.conviction.toFixed(3)}
                       </span>
                     </div>
                     <div className="p-3 rounded-lg bg-muted/40 flex justify-between items-center">
@@ -411,12 +453,21 @@ const NSE_DEFAULT_WEIGHTS = [
                 <Card className="border-border/80 bg-card hover:border-amber-500/40 transition-colors">
                   <CardHeader className="pb-3">
                     <div className="flex items-center justify-between">
-                      <Badge variant="outline" className="text-xs font-mono bg-amber-500/10 text-amber-400 border-amber-500/20">
+                      <Badge
+                        variant="outline"
+                        className="text-xs font-mono bg-amber-500/10 text-amber-400 border-amber-500/20"
+                      >
                         REGIME 2
                       </Badge>
                       <Badge
-                        variant={pData.convictions.chop.status === 'APPROVED' ? 'default' : 'secondary'}
-                        className={pData.convictions.chop.status === 'VETOED' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : ''}
+                        variant={
+                          pData.convictions.chop.status === 'APPROVED' ? 'default' : 'secondary'
+                        }
+                        className={
+                          pData.convictions.chop.status === 'VETOED'
+                            ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                            : ''
+                        }
                       >
                         {pData.convictions.chop.status}
                       </Badge>
@@ -432,8 +483,11 @@ const NSE_DEFAULT_WEIGHTS = [
                   <CardContent className="space-y-3">
                     <div className="p-3 rounded-lg bg-muted/40 flex justify-between items-center">
                       <span className="text-xs text-muted-foreground">Entry Conviction:</span>
-                      <span className={`text-base font-bold font-mono ${pData.convictions.chop.conviction >= 0.20 ? 'text-emerald-400' : 'text-amber-400'}`}>
-                        {(pData.convictions.chop.conviction > 0 ? '+' : '') + pData.convictions.chop.conviction.toFixed(3)}
+                      <span
+                        className={`text-base font-bold font-mono ${pData.convictions.chop.conviction >= 0.2 ? 'text-emerald-400' : 'text-amber-400'}`}
+                      >
+                        {(pData.convictions.chop.conviction > 0 ? '+' : '') +
+                          pData.convictions.chop.conviction.toFixed(3)}
                       </span>
                     </div>
                     <div className="p-3 rounded-lg bg-muted/40 flex justify-between items-center">
@@ -449,12 +503,19 @@ const NSE_DEFAULT_WEIGHTS = [
                 <Card className="border-border/80 bg-card hover:border-blue-500/40 transition-colors">
                   <CardHeader className="pb-3">
                     <div className="flex items-center justify-between">
-                      <Badge variant="outline" className="text-xs font-mono bg-blue-500/10 text-blue-400 border-blue-500/20">
+                      <Badge
+                        variant="outline"
+                        className="text-xs font-mono bg-blue-500/10 text-blue-400 border-blue-500/20"
+                      >
                         REGIME 3
                       </Badge>
                       <Badge
-                        variant={pData.convictions.sweep.status === 'APPROVED' ? 'default' : 'destructive'}
-                        className={pData.convictions.sweep.status === 'APPROVED' ? 'bg-emerald-600' : ''}
+                        variant={
+                          pData.convictions.sweep.status === 'APPROVED' ? 'default' : 'destructive'
+                        }
+                        className={
+                          pData.convictions.sweep.status === 'APPROVED' ? 'bg-emerald-600' : ''
+                        }
                       >
                         {pData.convictions.sweep.status}
                       </Badge>
@@ -470,8 +531,11 @@ const NSE_DEFAULT_WEIGHTS = [
                   <CardContent className="space-y-3">
                     <div className="p-3 rounded-lg bg-muted/40 flex justify-between items-center">
                       <span className="text-xs text-muted-foreground">Entry Conviction:</span>
-                      <span className={`text-base font-bold font-mono ${pData.convictions.sweep.conviction >= 0.20 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                        {(pData.convictions.sweep.conviction > 0 ? '+' : '') + pData.convictions.sweep.conviction.toFixed(3)}
+                      <span
+                        className={`text-base font-bold font-mono ${pData.convictions.sweep.conviction >= 0.2 ? 'text-emerald-400' : 'text-rose-400'}`}
+                      >
+                        {(pData.convictions.sweep.conviction > 0 ? '+' : '') +
+                          pData.convictions.sweep.conviction.toFixed(3)}
                       </span>
                     </div>
                     <div className="p-3 rounded-lg bg-muted/40 flex justify-between items-center">
@@ -499,7 +563,8 @@ const NSE_DEFAULT_WEIGHTS = [
                   Interactive Market Regime Simulator
                 </CardTitle>
                 <CardDescription>
-                  Simulate any custom market scenario in real-time to inspect the model&apos;s exact conviction and dynamic stop-loss.
+                  Simulate any custom market scenario in real-time to inspect the model&apos;s exact
+                  conviction and dynamic stop-loss.
                 </CardDescription>
               </div>
               <div className="flex gap-2">
@@ -567,7 +632,9 @@ const NSE_DEFAULT_WEIGHTS = [
               <div className="space-y-2 p-3 rounded-lg bg-muted/30 border border-border/50">
                 <div className="flex justify-between items-center">
                   <Label className="text-xs font-semibold">Rejection Wick Length</Label>
-                  <span className="text-xs font-mono font-bold text-purple-400">{simWick}× ATR</span>
+                  <span className="text-xs font-mono font-bold text-purple-400">
+                    {simWick}× ATR
+                  </span>
                 </div>
                 <Input
                   type="range"
@@ -587,7 +654,9 @@ const NSE_DEFAULT_WEIGHTS = [
               <div className="space-y-2 p-3 rounded-lg bg-muted/30 border border-border/50">
                 <div className="flex justify-between items-center">
                   <Label className="text-xs font-semibold">Distance to 20-EMA</Label>
-                  <span className="text-xs font-mono font-bold text-purple-400">{simEmaDist}× ATR</span>
+                  <span className="text-xs font-mono font-bold text-purple-400">
+                    {simEmaDist}× ATR
+                  </span>
                 </div>
                 <Input
                   type="range"
@@ -607,7 +676,9 @@ const NSE_DEFAULT_WEIGHTS = [
               <div className="space-y-2 p-3 rounded-lg bg-muted/30 border border-border/50">
                 <div className="flex justify-between items-center">
                   <Label className="text-xs font-semibold">Session Progression</Label>
-                  <span className="text-xs font-mono font-bold text-purple-400">{Math.round(simSession * 100)}%</span>
+                  <span className="text-xs font-mono font-bold text-purple-400">
+                    {Math.round(simSession * 100)}%
+                  </span>
                 </div>
                 <Input
                   type="range"
@@ -634,14 +705,22 @@ const NSE_DEFAULT_WEIGHTS = [
                     {simResult && (
                       <Badge
                         variant={simResult.decision === 'APPROVED' ? 'default' : 'destructive'}
-                        className={simResult.decision === 'APPROVED' ? 'bg-emerald-600 font-bold' : 'font-bold'}
+                        className={
+                          simResult.decision === 'APPROVED'
+                            ? 'bg-emerald-600 font-bold'
+                            : 'font-bold'
+                        }
                       >
                         {simResult.decision}
                       </Badge>
                     )}
                   </div>
                   <div className="text-3xl font-extrabold font-mono tracking-tight text-white mb-1">
-                    {simResult ? (simResult.conviction > 0 ? `+${simResult.conviction.toFixed(3)}` : simResult.conviction.toFixed(3)) : '...'}
+                    {simResult
+                      ? simResult.conviction > 0
+                        ? `+${simResult.conviction.toFixed(3)}`
+                        : simResult.conviction.toFixed(3)
+                      : '...'}
                   </div>
                   <div className="text-xs text-muted-foreground">
                     Policy threshold: <span className="font-semibold text-white">&gt; +0.200</span>
@@ -651,11 +730,15 @@ const NSE_DEFAULT_WEIGHTS = [
                 <div className="grid grid-cols-2 gap-2 mt-4 pt-3 border-t border-purple-500/20 text-xs">
                   <div>
                     <span className="text-muted-foreground block">Dynamic SL:</span>
-                    <span className="font-bold text-purple-300">{simResult?.dynamic_sl_atr.toFixed(2)}× ATR</span>
+                    <span className="font-bold text-purple-300">
+                      {simResult?.dynamic_sl_atr.toFixed(2)}× ATR
+                    </span>
                   </div>
                   <div>
                     <span className="text-muted-foreground block">TP Ratchet:</span>
-                    <span className="font-bold text-emerald-300">{(simResult?.dynamic_tp_ratchet || 0.5) > 0.5 ? 'Aggressive' : 'Normal'}</span>
+                    <span className="font-bold text-emerald-300">
+                      {(simResult?.dynamic_tp_ratchet || 0.5) > 0.5 ? 'Aggressive' : 'Normal'}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -672,7 +755,8 @@ const NSE_DEFAULT_WEIGHTS = [
             Macroeconomic & High-Impact Event Blackout Radar
           </CardTitle>
           <CardDescription>
-            Live status of blackout windows guarding against EIA inventory releases, US NFP/CPI reports, and exchange-specific liquidity vacuums.
+            Live status of blackout windows guarding against EIA inventory releases, US NFP/CPI
+            reports, and exchange-specific liquidity vacuums.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -690,11 +774,17 @@ const NSE_DEFAULT_WEIGHTS = [
                   <div className="flex items-center justify-between mb-1.5">
                     <span className="font-mono font-bold text-sm">{sym}</span>
                     {status.is_blackout ? (
-                      <Badge variant="destructive" className="text-[10px] py-0 px-1.5 flex items-center gap-1">
+                      <Badge
+                        variant="destructive"
+                        className="text-[10px] py-0 px-1.5 flex items-center gap-1"
+                      >
                         <Lock className="h-2.5 w-2.5" /> LOCKED
                       </Badge>
                     ) : (
-                      <Badge variant="outline" className="text-[10px] py-0 px-1.5 bg-emerald-500/10 text-emerald-400 border-emerald-500/30">
+                      <Badge
+                        variant="outline"
+                        className="text-[10px] py-0 px-1.5 bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
+                      >
                         CLEAR
                       </Badge>
                     )}
@@ -722,7 +812,8 @@ const NSE_DEFAULT_WEIGHTS = [
                 Live Learning Audit Trail
               </CardTitle>
               <CardDescription>
-                Direct record of real-time parameter feedback from recent trades logged to <code className="text-purple-300">logs/rl_learning_audit.csv</code>.
+                Direct record of real-time parameter feedback from recent trades logged to{' '}
+                <code className="text-purple-300">logs/rl_learning_audit.csv</code>.
               </CardDescription>
             </div>
             <Badge variant="outline" className="font-mono text-xs">
@@ -751,10 +842,14 @@ const NSE_DEFAULT_WEIGHTS = [
                     const rVal = parseFloat(log.reward)
                     return (
                       <TableRow key={idx} className="text-xs">
-                        <TableCell className="font-mono text-muted-foreground">{log.timestamp}</TableCell>
+                        <TableCell className="font-mono text-muted-foreground">
+                          {log.timestamp}
+                        </TableCell>
                         <TableCell className="font-bold">{log.symbol}</TableCell>
                         <TableCell className="font-mono">
-                          <span className={rVal >= 0 ? 'text-emerald-400' : 'text-rose-400 font-bold'}>
+                          <span
+                            className={rVal >= 0 ? 'text-emerald-400' : 'text-rose-400 font-bold'}
+                          >
                             {rVal >= 0 ? `+${rVal.toFixed(3)}` : rVal.toFixed(3)}
                           </span>
                         </TableCell>
@@ -769,7 +864,11 @@ const NSE_DEFAULT_WEIGHTS = [
                                 : 'bg-rose-500/10 text-rose-400 border-rose-500/30'
                             }
                           >
-                            {isWin ? <CheckCircle2 className="h-3 w-3 mr-1" /> : <AlertTriangle className="h-3 w-3 mr-1" />}
+                            {isWin ? (
+                              <CheckCircle2 className="h-3 w-3 mr-1" />
+                            ) : (
+                              <AlertTriangle className="h-3 w-3 mr-1" />
+                            )}
                             {log.outcome}
                           </Badge>
                         </TableCell>
@@ -784,8 +883,9 @@ const NSE_DEFAULT_WEIGHTS = [
             </div>
           ) : (
             <div className="p-8 text-center text-muted-foreground text-sm border border-dashed rounded-lg">
-              No trades logged yet in <code className="text-purple-300">logs/rl_learning_audit.csv</code>. 
-              As trades execute, their learning updates will stream here automatically.
+              No trades logged yet in{' '}
+              <code className="text-purple-300">logs/rl_learning_audit.csv</code>. As trades
+              execute, their learning updates will stream here automatically.
             </div>
           )}
         </CardContent>
@@ -799,7 +899,8 @@ const NSE_DEFAULT_WEIGHTS = [
             Reinforcement Engine Architecture & Metric Guide
           </CardTitle>
           <CardDescription>
-            Understand how each mathematical component protects capital and prevents repeat drawdowns.
+            Understand how each mathematical component protects capital and prevents repeat
+            drawdowns.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -810,10 +911,18 @@ const NSE_DEFAULT_WEIGHTS = [
               </AccordionTrigger>
               <AccordionContent className="text-xs text-muted-foreground space-y-2 leading-relaxed">
                 <p>
-                  The continuous policy maps the 12-dimensional market state vector into a conviction score ranging from <strong>-1.00</strong> to <strong>+1.00</strong> using a hyperbolic tangent (<code className="text-purple-300">tanh</code>) output activation.
+                  The continuous policy maps the 12-dimensional market state vector into a
+                  conviction score ranging from <strong>-1.00</strong> to <strong>+1.00</strong>{' '}
+                  using a hyperbolic tangent (<code className="text-purple-300">tanh</code>) output
+                  activation.
                 </p>
                 <p>
-                  A baseline positive bias of <strong>+0.40</strong> is assigned so valid technical signals are approved by default. When the strategy suffers losses in choppy or adverse market states, gradient updates actively suppress the weights of those state features. If the simulated conviction drops below <strong>+0.20</strong>, the trade is automatically <strong>VETOED</strong>, protecting capital from entering false breakouts.
+                  A baseline positive bias of <strong>+0.40</strong> is assigned so valid technical
+                  signals are approved by default. When the strategy suffers losses in choppy or
+                  adverse market states, gradient updates actively suppress the weights of those
+                  state features. If the simulated conviction drops below <strong>+0.20</strong>,
+                  the trade is automatically <strong>VETOED</strong>, protecting capital from
+                  entering false breakouts.
                 </p>
               </AccordionContent>
             </AccordionItem>
@@ -824,10 +933,14 @@ const NSE_DEFAULT_WEIGHTS = [
               </AccordionTrigger>
               <AccordionContent className="text-xs text-muted-foreground space-y-2 leading-relaxed">
                 <p>
-                  In standard reinforcement learning, a ₹1,000 profit and a ₹1,000 loss produce equal and opposite rewards. In trading, this causes excessive drawdown.
+                  In standard reinforcement learning, a ₹1,000 profit and a ₹1,000 loss produce
+                  equal and opposite rewards. In trading, this causes excessive drawdown.
                 </p>
                 <p>
-                  OpenAlgo enforces <em>loss aversion</em> using <code className="text-purple-300">&lambda;_loss = 1.8</code>: losses generate a 1.8× stronger negative penalty than equivalent wins. This forces the policy gradient to prioritize avoiding repeat losses over chasing marginal profits.
+                  OpenAlgo enforces <em>loss aversion</em> using{' '}
+                  <code className="text-purple-300">&lambda;_loss = 1.8</code>: losses generate a
+                  1.8× stronger negative penalty than equivalent wins. This forces the policy
+                  gradient to prioritize avoiding repeat losses over chasing marginal profits.
                 </p>
               </AccordionContent>
             </AccordionItem>
@@ -838,13 +951,16 @@ const NSE_DEFAULT_WEIGHTS = [
               </AccordionTrigger>
               <AccordionContent className="text-xs text-muted-foreground space-y-2 leading-relaxed">
                 <p>
-                  Violent whipsaws and deep adverse excursions (MAE) harm capital growth non-linearly. The reward function calculates:
+                  Violent whipsaws and deep adverse excursions (MAE) harm capital growth
+                  non-linearly. The reward function calculates:
                 </p>
                 <div className="p-2.5 rounded bg-muted font-mono text-purple-300">
                   reward -= 2.5 * (Normalized_Drawdown ^ 2)
                 </div>
                 <p>
-                  A shallow drawdown incurs minimal penalty, but a deep intra-trade drawdown delivers an exponential negative penalty, teaching the model to never repeat setups that experience severe adverse slippage.
+                  A shallow drawdown incurs minimal penalty, but a deep intra-trade drawdown
+                  delivers an exponential negative penalty, teaching the model to never repeat
+                  setups that experience severe adverse slippage.
                 </p>
               </AccordionContent>
             </AccordionItem>
@@ -855,10 +971,14 @@ const NSE_DEFAULT_WEIGHTS = [
               </AccordionTrigger>
               <AccordionContent className="text-xs text-muted-foreground space-y-2 leading-relaxed">
                 <p>
-                  Market regimes shift over time. If a policy accumulates too much negative weight, it could become permanently paralyzed and never trade again.
+                  Market regimes shift over time. If a policy accumulates too much negative weight,
+                  it could become permanently paralyzed and never trade again.
                 </p>
                 <p>
-                  We apply an <strong>L2 weight decay factor of 0.005</strong> on every learning step. Over hundreds of steps, older penalties gently decay towards neutral baseline, allowing the model to adapt gracefully to new market volatility without getting permanently stuck in the past.
+                  We apply an <strong>L2 weight decay factor of 0.005</strong> on every learning
+                  step. Over hundreds of steps, older penalties gently decay towards neutral
+                  baseline, allowing the model to adapt gracefully to new market volatility without
+                  getting permanently stuck in the past.
                 </p>
               </AccordionContent>
             </AccordionItem>

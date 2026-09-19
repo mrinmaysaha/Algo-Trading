@@ -1,0 +1,53 @@
+{
+  "date": "2026-09-18",
+  "updated_at": "2026-09-18T12:37:57.329724+05:30",
+  "trade_taken_today": true,
+  "trade_active": true,
+  "positions": {
+    "ETH18SEP262520CE": {
+      "leg_type": "LONG_CE",
+      "action": "BUY",
+      "quantity": 246,
+      "entry_price": 0.7,
+      "orderid": "26091847815084",
+      "status": "CLOSED",
+      "stop_loss": 0.0,
+      "exit_reason": "WING_UNWIND"
+    },
+    "ETH18SEP262420PE": {
+      "leg_type": "LONG_PE",
+      "action": "BUY",
+      "quantity": 246,
+      "entry_price": 0.35,
+      "orderid": "26091841561647",
+      "status": "CLOSED",
+      "stop_loss": 0.0,
+      "exit_reason": "TARGET_PROFIT_DECAY"
+    },
+    "ETH18SEP262480CE": {
+      "leg_type": "SHORT_CE",
+      "action": "SELL",
+      "quantity": 246,
+      "entry_price": 6.5,
+      "orderid": "26091808720165",
+      "status": "CLOSED",
+      "stop_loss": 9.75,
+      "exit_reason": "SL_HIT"
+    },
+    "ETH18SEP262470PE": {
+      "leg_type": "SHORT_PE",
+      "action": "SELL",
+      "quantity": 246,
+      "entry_price": 9.5,
+      "orderid": "26091880543911",
+      "status": "OPEN",
+      "stop_loss": 14.25
+    }
+  },
+  "net_credit_collected": 36.777,
+  "target_profit": 29.4216,
+  "expiry_date": "18-SEP-26",
+  "entry_time": "2026-09-18T10:11:45.421499+05:30",
+  "entry_attempts": 1,
+  "last_attempt_time": 1789706500.6177146
+}

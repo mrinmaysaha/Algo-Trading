@@ -2,6 +2,7 @@
 // Saved strategies: status, mode and P&L at a glance.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { BarChart3, Webhook } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import {
@@ -10,7 +11,6 @@ import {
   strategyQueryKeys,
   useStrategyListPnl,
 } from '@/api/strategy_module'
-import { BarChart3, Webhook } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'

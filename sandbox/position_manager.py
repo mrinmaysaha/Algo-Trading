@@ -1151,6 +1151,18 @@ class PositionManager:
                     404,
                 )
 
+            # If already closed (0 quantity), return success immediately without placing an order
+            if position.quantity == 0:
+                return (
+                    True,
+                    {
+                        "status": "success",
+                        "message": f"Position for {symbol} is already closed",
+                        "mode": "analyze",
+                    },
+                    200,
+                )
+
             # Determine action (opposite of current position)
             action = "SELL" if position.quantity > 0 else "BUY"
             quantity = abs(position.quantity)

@@ -84,7 +84,6 @@ const StrategyBuilder = lazy(() => import('@/pages/StrategyBuilder'))
 const StrategyPortfolio = lazy(() => import('@/pages/StrategyPortfolio'))
 const StrategyAnalytics = lazy(() => import('@/pages/StrategyAnalytics'))
 
-
 // Python Strategy pages
 const PythonStrategyIndex = lazy(() => import('@/pages/python-strategy/PythonStrategyIndex'))
 const NewPythonStrategy = lazy(() => import('@/pages/python-strategy/NewPythonStrategy'))
@@ -92,8 +91,12 @@ const EditPythonStrategy = lazy(() => import('@/pages/python-strategy/EditPython
 const PythonStrategyLogs = lazy(() => import('@/pages/python-strategy/PythonStrategyLogs'))
 const SchedulePythonStrategy = lazy(() => import('@/pages/python-strategy/SchedulePythonStrategy'))
 const PythonStrategyGuide = lazy(() => import('@/pages/python-strategy/PythonStrategyGuide'))
-const PythonStrategyBacktester = lazy(() => import('@/pages/python-strategy/PythonStrategyBacktester'))
-const PythonStrategyBacktesterResults = lazy(() => import('@/pages/python-strategy/PythonStrategyBacktesterResults'))
+const PythonStrategyBacktester = lazy(
+  () => import('@/pages/python-strategy/PythonStrategyBacktester')
+)
+const PythonStrategyBacktesterResults = lazy(
+  () => import('@/pages/python-strategy/PythonStrategyBacktesterResults')
+)
 const ReinforcementAnalytics = lazy(() => import('@/pages/python-strategy/ReinforcementAnalytics'))
 
 // Strategy module: multi-leg options strategies with risk management
@@ -106,7 +109,9 @@ const StrategyEdit = lazy(() => import('@/pages/strategy/Edit'))
 const WebhookStrategyIndex = lazy(() => import('@/pages/webhook-strategy/WebhookStrategyIndex'))
 const NewWebhookStrategy = lazy(() => import('@/pages/webhook-strategy/NewWebhookStrategy'))
 const ViewWebhookStrategy = lazy(() => import('@/pages/webhook-strategy/ViewWebhookStrategy'))
-const ConfigureWebhookSymbols = lazy(() => import('@/pages/webhook-strategy/ConfigureWebhookSymbols'))
+const ConfigureWebhookSymbols = lazy(
+  () => import('@/pages/webhook-strategy/ConfigureWebhookSymbols')
+)
 
 // Chartink pages
 const ChartinkIndex = lazy(() => import('@/pages/chartink/ChartinkIndex'))
@@ -276,7 +281,10 @@ function App() {
                 <Route path="/webhook-strategy" element={<WebhookStrategyIndex />} />
                 <Route path="/webhook-strategy/new" element={<NewWebhookStrategy />} />
                 <Route path="/webhook-strategy/:strategyId" element={<ViewWebhookStrategy />} />
-                <Route path="/webhook-strategy/:strategyId/configure" element={<ConfigureWebhookSymbols />} />
+                <Route
+                  path="/webhook-strategy/:strategyId/configure"
+                  element={<ConfigureWebhookSymbols />}
+                />
 
                 {/* Phase 6: Python Strategies */}
                 <Route path="/python" element={<PythonStrategyIndex />} />
@@ -287,10 +295,13 @@ function App() {
                 <Route path="/python/guide" element={<PythonStrategyGuide />} />
                 <Route path="/reinforcement-analytics" element={<ReinforcementAnalytics />} />
                 <Route path="/python/reinforcement" element={<ReinforcementAnalytics />} />
-                
+
                 {/* Tools - Backtester */}
                 <Route path="/tools/python-backtester" element={<PythonStrategyBacktester />} />
-                <Route path="/tools/python-backtester/results" element={<PythonStrategyBacktesterResults />} />
+                <Route
+                  path="/tools/python-backtester/results"
+                  element={<PythonStrategyBacktesterResults />}
+                />
 
                 {/* Phase 6: Chartink Strategies */}
                 <Route path="/chartink" element={<ChartinkIndex />} />

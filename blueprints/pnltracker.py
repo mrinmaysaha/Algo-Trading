@@ -330,6 +330,35 @@ def get_pnl_data():
                 },
             }), 200
 
+        if current_positions:
+            now_ts = datetime.now(ist)
+            start_ts = first_trade_time or now_ts
+            current_mtm = sum(float(p.get("pnl", 0)) for p in current_positions.values())
+            ts_start_ms = int(start_ts.tz_convert("UTC").timestamp() * 1000) if hasattr(start_ts, "tz") and start_ts.tz else int(start_ts.timestamp() * 1000)
+            ts_now_ms = int(now_ts.tz_convert("UTC").timestamp() * 1000) if hasattr(now_ts, "tz") and now_ts.tz else int(now_ts.timestamp() * 1000)
+
+            pnl_series = [
+                {"time": ts_start_ms, "value": 0.0},
+                {"time": ts_now_ms, "value": round(current_mtm, 2)}
+            ]
+            drawdown_series = [
+                {"time": ts_start_ms, "value": 0.0},
+                {"time": ts_now_ms, "value": min(0.0, round(current_mtm, 2))}
+            ]
+            return jsonify({
+                "status": "success",
+                "data": {
+                    "current_mtm": round(current_mtm, 2),
+                    "max_mtm": max(0.0, round(current_mtm, 2)),
+                    "max_mtm_time": now_ts.strftime("%H:%M"),
+                    "min_mtm": min(0.0, round(current_mtm, 2)),
+                    "min_mtm_time": now_ts.strftime("%H:%M"),
+                    "max_drawdown": min(0.0, round(current_mtm, 2)),
+                    "pnl_series": pnl_series,
+                    "drawdown_series": drawdown_series,
+                },
+            }), 200
+
         return jsonify({
             "status": "success",
             "data": {
@@ -350,12 +379,13 @@ def get_pnl_data():
 @cross_origin()
 def get_positions_pnl_breakdown():
     """SECTION 1: Open Positions with Gross MTM vs Estimated Net MTM."""
-    from services.accounting_engine import IndianFOAccountingEngine
+    from services.accounting_engine import IndianFOAccountingEngine, get_accounting_engine
     from services.positionbook_service import get_positionbook
     from database.strategy_book_db import get_strategy_legs
     from utils.symbol_utils import get_contract_multiplier
 
     user_id = session.get("user_id")
+    broker = session.get("broker", "")
     results = []
     total_gross_mtm = 0.0
     total_net_mtm = 0.0
@@ -398,13 +428,14 @@ def get_positions_pnl_breakdown():
         is_opt = ("CE" in sym or "PE" in sym) and "FUT" not in sym
 
         mult = get_contract_multiplier(sym, exch)
-        total_contract_qty = abs(int(qty * mult))
+        engine = get_accounting_engine(exchange=exch, broker=broker)
 
-        calc = IndianFOAccountingEngine.calculate_open_position_mtm(
+        calc = engine.calculate_open_position_mtm(
             entry_price=entry_price,
             current_ltp=ltp,
-            qty=total_contract_qty,
+            qty=abs(qty),
             direction=direction,
+            contract_multiplier=mult,
             is_option=is_opt
         )
 
@@ -412,12 +443,14 @@ def get_positions_pnl_breakdown():
         total_net_mtm += calc["net_mtm"]
         total_accrued_charges += calc["accrued_and_exit_charges"]
 
+        display_qty = round(abs(qty) * mult, 4) if mult != 1.0 else int(abs(qty))
+
         results.append({
             "trade_id": str(pos.get("position_id") or f"{sym}_{int(qty)}"),
             "strategy_name": strat_name,
             "symbol": sym,
             "direction": direction,
-            "quantity": total_contract_qty,
+            "quantity": display_qty,
             "entry_price": entry_price,
             "current_ltp": ltp,
             "entry_time": str(pos.get("entry_time") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
@@ -442,22 +475,29 @@ def get_positions_pnl_breakdown():
                         raw_ltp = row.get("current_ltp")
                         ltp = float(raw_ltp) if pd.notna(raw_ltp) and float(raw_ltp) > 0 else entry_p
                         
-                        calc = IndianFOAccountingEngine.calculate_open_position_mtm(
+                        row_sym = str(row.get("symbol", ""))
+                        row_exch = str(row.get("exchange", "CRYPTO" if "delta" in broker.lower() else "NFO"))
+                        row_mult = get_contract_multiplier(row_sym, row_exch)
+                        row_engine = get_accounting_engine(exchange=row_exch, broker=broker)
+
+                        calc = row_engine.calculate_open_position_mtm(
                             entry_price=entry_p,
                             current_ltp=ltp,
-                            qty=int(row.get("quantity", 1)),
+                            qty=float(row.get("quantity", 1)),
                             direction=str(row.get("direction", "BUY")),
-                            is_option=("CE" in str(row.get("symbol", "")) or "PE" in str(row.get("symbol", ""))) and "FUT" not in str(row.get("symbol", ""))
+                            contract_multiplier=row_mult,
+                            is_option=("CE" in row_sym or "PE" in row_sym) and "FUT" not in row_sym
                         )
                         total_gross_mtm += calc["gross_mtm"]
                         total_net_mtm += calc["net_mtm"]
                         total_accrued_charges += calc["accrued_and_exit_charges"]
+                        row_disp_qty = round(float(row.get("quantity", 1)) * row_mult, 4) if row_mult != 1.0 else int(row.get("quantity", 1))
                         results.append({
                             "trade_id": str(row.get("trade_id", "")),
                             "strategy_name": str(row.get("strategy_name", "")),
-                            "symbol": str(row.get("symbol", "")),
+                            "symbol": row_sym,
                             "direction": str(row.get("direction", "BUY")),
-                            "quantity": int(row.get("quantity", 1)),
+                            "quantity": row_disp_qty,
                             "entry_price": entry_p,
                             "current_ltp": ltp,
                             "entry_time": str(row.get("entry_time", "")),

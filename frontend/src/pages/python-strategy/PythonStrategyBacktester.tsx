@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react'
+import { Loader2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { pythonStrategyApi } from '@/api/python-strategy'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -12,18 +13,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { usePythonStrategyBacktestStore } from '@/stores/pythonStrategyBacktestStore'
 import { useAuthStore } from '@/stores/authStore'
-import { Loader2 } from 'lucide-react'
+import { usePythonStrategyBacktestStore } from '@/stores/pythonStrategyBacktestStore'
 import { showToast } from '@/utils/toast'
 
 export default function PythonStrategyBacktester() {
   const navigate = useNavigate()
   const { apiKey } = useAuthStore()
   const { setResult, setLoading, setError, isLoading } = usePythonStrategyBacktestStore()
-  
+
   const [strategies, setStrategies] = useState<any[]>([])
-  
+
   const [formData, setFormData] = useState({
     strategy_id: '',
     symbols: '', // Comma separated for now
@@ -39,7 +39,7 @@ export default function PythonStrategyBacktester() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    
+
     if (!formData.strategy_id || !formData.symbols) {
       showToast.error('Please select a strategy and symbols.')
       return
@@ -47,10 +47,13 @@ export default function PythonStrategyBacktester() {
 
     setLoading(true)
     setError(null)
-    
+
     try {
-      const symbolsList = formData.symbols.split(',').map(s => s.trim()).filter(Boolean)
-      
+      const symbolsList = formData.symbols
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+
       const payload = {
         strategy_id: formData.strategy_id,
         symbols: symbolsList,
@@ -58,11 +61,11 @@ export default function PythonStrategyBacktester() {
         lookback_days: Number(formData.lookback_days),
         initial_capital: Number(formData.initial_capital),
         source: formData.source,
-        apikey: apiKey || ''
+        apikey: apiKey || '',
       }
-      
+
       const res = await pythonStrategyApi.runBacktest(payload)
-      
+
       if (res.status === 'success') {
         setResult(res)
         navigate('/tools/python-backtester/results')
@@ -100,7 +103,7 @@ export default function PythonStrategyBacktester() {
                 <Label htmlFor="strategy">Select Strategy</Label>
                 <Select
                   value={formData.strategy_id}
-                  onValueChange={(val) => setFormData(prev => ({ ...prev, strategy_id: val }))}
+                  onValueChange={(val) => setFormData((prev) => ({ ...prev, strategy_id: val }))}
                 >
                   <SelectTrigger id="strategy">
                     <SelectValue placeholder="Select a Python strategy..." />
@@ -117,11 +120,13 @@ export default function PythonStrategyBacktester() {
 
               <div className="space-y-2">
                 <Label htmlFor="symbols">Symbols (Comma separated)</Label>
-                <Input 
-                  id="symbols" 
+                <Input
+                  id="symbols"
                   placeholder="e.g. SBIN, RELIANCE, NIFTY"
                   value={formData.symbols}
-                  onChange={(e) => setFormData(prev => ({ ...prev, symbols: e.target.value.toUpperCase() }))}
+                  onChange={(e) =>
+                    setFormData((prev) => ({ ...prev, symbols: e.target.value.toUpperCase() }))
+                  }
                   required
                 />
               </div>
@@ -130,7 +135,7 @@ export default function PythonStrategyBacktester() {
                 <Label htmlFor="interval">Timeframe</Label>
                 <Select
                   value={formData.interval}
-                  onValueChange={(val) => setFormData(prev => ({ ...prev, interval: val }))}
+                  onValueChange={(val) => setFormData((prev) => ({ ...prev, interval: val }))}
                 >
                   <SelectTrigger id="interval">
                     <SelectValue />
@@ -149,25 +154,32 @@ export default function PythonStrategyBacktester() {
 
               <div className="space-y-2">
                 <Label htmlFor="lookback">Data Lookback (Days)</Label>
-                <Input 
-                  id="lookback" 
+                <Input
+                  id="lookback"
                   type="number"
                   min={1}
                   max={3650}
                   value={formData.lookback_days}
-                  onChange={(e) => setFormData(prev => ({ ...prev, lookback_days: parseInt(e.target.value) }))}
+                  onChange={(e) =>
+                    setFormData((prev) => ({ ...prev, lookback_days: parseInt(e.target.value) }))
+                  }
                   required
                 />
               </div>
 
               <div className="space-y-2">
                 <Label htmlFor="capital">Initial Capital (₹)</Label>
-                <Input 
-                  id="capital" 
+                <Input
+                  id="capital"
                   type="number"
                   min={1000}
                   value={formData.initial_capital}
-                  onChange={(e) => setFormData(prev => ({ ...prev, initial_capital: parseFloat(e.target.value) }))}
+                  onChange={(e) =>
+                    setFormData((prev) => ({
+                      ...prev,
+                      initial_capital: parseFloat(e.target.value),
+                    }))
+                  }
                   required
                 />
               </div>
@@ -176,7 +188,7 @@ export default function PythonStrategyBacktester() {
                 <Label htmlFor="source">Data Source</Label>
                 <Select
                   value={formData.source}
-                  onValueChange={(val) => setFormData(prev => ({ ...prev, source: val }))}
+                  onValueChange={(val) => setFormData((prev) => ({ ...prev, source: val }))}
                 >
                   <SelectTrigger id="source">
                     <SelectValue />
@@ -186,7 +198,9 @@ export default function PythonStrategyBacktester() {
                     <SelectItem value="api">Broker API (Live / Recent data)</SelectItem>
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground mt-1">Select where to fetch historical data from.</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Select where to fetch historical data from.
+                </p>
               </div>
             </div>
 

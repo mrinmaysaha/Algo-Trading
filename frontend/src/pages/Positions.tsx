@@ -8,12 +8,12 @@ import {
   Loader2,
   Pause,
   Radio,
+  ReceiptText,
   RefreshCw,
   Settings2,
   TrendingDown,
   TrendingUp,
   X,
-  ReceiptText,
 } from 'lucide-react'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { tradingApi } from '@/api/trading'
@@ -41,6 +41,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
+import { EmptyState } from '@/components/ui/empty-state'
 import { Label } from '@/components/ui/label'
 import {
   Table,
@@ -52,17 +53,21 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import type { Trade } from '@/types/trading'
 import { useLivePrice } from '@/hooks/useLivePrice'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { usePageVisibility } from '@/hooks/usePageVisibility'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
-import { cn, getContractMultiplier, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
+import {
+  cn,
+  formatQuantityWithMultiplier,
+  getContractMultiplier,
+  makeFormatCurrency,
+  sanitizeCSV,
+} from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
-import type { Position } from '@/types/trading'
+import type { Position, Trade } from '@/types/trading'
 import { showToast } from '@/utils/toast'
-import { EmptyState } from '@/components/ui/empty-state'
 
 const STORAGE_KEY = 'openalgo_positions_prefs'
 
@@ -170,6 +175,8 @@ interface TradeCharges {
 
 interface StrategyChargesSummary {
   strategy: string
+  exchange: string
+  isCrypto: boolean
   closedTrades: number
   grossPnl: number
   brokerage: number
@@ -183,36 +190,58 @@ interface StrategyChargesSummary {
   trades: TradeCharges[]
 }
 
-function computeChargesForTrade(trade: Trade): Omit<TradeCharges, 'grossPnl' | 'netPnl'> {
+export function isCryptoItem(exchange?: string, symbol?: string): boolean {
+  const ex = (exchange || '').toUpperCase()
+  const sym = (symbol || '').toUpperCase()
+  if (ex === 'CRYPTO' || ex === 'DELTA') return true
+  if (sym.includes('BTC') || sym.includes('ETH') || sym.includes('SOL')) return true
+  return false
+}
+
+function computeChargesForTrade(trade: Trade, isCryptoBroker = false): Omit<TradeCharges, 'grossPnl' | 'netPnl'> {
   const qty = Number(trade.quantity) || 0
   const price = Number(trade.average_price) || 0
   const mult = getContractMultiplier(trade.symbol, trade.exchange)
-  const turnover = qty * price * mult          // ← MCX GOLDM: 100 × 1419 × 0.1 = ₹14,190
+  const turnover = qty * price * mult
   const exchange = trade.exchange?.toUpperCase() ?? ''
   const action = trade.action?.toUpperCase() as 'BUY' | 'SELL'
   const isMCX = exchange === 'MCX'
+  const isCryptoTrade = isCryptoBroker || isCryptoItem(exchange, trade.symbol)
 
-  // Brokerage: ₹20 flat per order
-  const brokerage = 20
-
-  // STT / CTT: sell-side only
+  let brokerage = 0
   let stt = 0
-  if (action === 'SELL') {
-    stt = isMCX ? turnover * 0.0005 : turnover * 0.00125 // CTT 0.05% MCX, STT 0.125% NSE options
+  let exchangeCharge = 0
+  let sebiCharge = 0
+  let stampDuty = 0
+  let gst = 0
+
+  if (isCryptoTrade) {
+    // Delta Exchange: 0.03% taker fee on notional USD turnover + 18% GST on trading fee. No STT, SEBI, Stamp.
+    exchangeCharge = turnover * 0.0003
+    gst = exchangeCharge * 0.18
+  } else {
+    // Indian F&O markets (NSE/NFO/BSE/MCX)
+    // Brokerage: ₹20 flat per order
+    brokerage = 20
+
+    // STT / CTT: sell-side only
+    if (action === 'SELL') {
+      stt = isMCX ? turnover * 0.0005 : turnover * 0.00125 // CTT 0.05% MCX, STT 0.125% NSE options
+    }
+
+    // Exchange transaction charge: both sides
+    const exchangeRate = isMCX ? 0.0005 : 0.00053 // MCX 0.05%, NSE/NFO 0.053%
+    exchangeCharge = turnover * exchangeRate
+
+    // SEBI turnover fee: ₹10 per crore on both sides
+    sebiCharge = (turnover / 1e7) * 10
+
+    // Stamp duty: buy side only, 0.003%
+    stampDuty = action === 'BUY' ? turnover * 0.00003 : 0
+
+    // GST: 18% on (brokerage + exchange charges)
+    gst = (brokerage + exchangeCharge) * 0.18
   }
-
-  // Exchange transaction charge: both sides
-  const exchangeRate = isMCX ? 0.0005 : 0.00053 // MCX 0.05%, NSE/NFO 0.053%
-  const exchangeCharge = turnover * exchangeRate
-
-  // SEBI turnover fee: ₹10 per crore on both sides
-  const sebiCharge = (turnover / 1e7) * 10
-
-  // Stamp duty: buy side only, 0.003%
-  const stampDuty = action === 'BUY' ? turnover * 0.00003 : 0
-
-  // GST: 18% on (brokerage + exchange charges)
-  const gst = (brokerage + exchangeCharge) * 0.18
 
   const totalCharges = brokerage + stt + exchangeCharge + sebiCharge + stampDuty + gst
 
@@ -241,20 +270,38 @@ function canonicalizeStrategyName(name?: string): string {
   if (lower.startsWith('post10')) return 'Post10_Institutional_OB_VWAP'
   if (lower.startsWith('3min_orb') || lower.startsWith('3min orb')) return '3Min_ORB_2Lot_Quant_V2'
   if (lower.startsWith('smc_fvg') || lower.startsWith('smc fvg')) return 'SMC_FVG_ZeroLag_Options'
-  if (lower.startsWith('prime_indicator') || lower.startsWith('prime indicator')) return 'Prime Indicator Scalper Options'
-  if (lower.startsWith('liquid_sweep') || lower.startsWith('liquid sweep') || lower.startsWith('nse_liquidity')) return 'Liquid Sweep Options'
+  if (lower.startsWith('prime_indicator') || lower.startsWith('prime indicator'))
+    return 'Prime Indicator Scalper Options'
+  if (
+    lower.startsWith('liquid_sweep') ||
+    lower.startsWith('liquid sweep') ||
+    lower.startsWith('nse_liquidity')
+  )
+    return 'Liquid Sweep Options'
   if (lower.startsWith('mcx_goldm')) return 'MCX_GOLDM_FVG_Options'
-  if (lower.startsWith('mcx_institutional') || lower.startsWith('mcx institutional') || lower.startsWith('multi-commodity')) return 'Multi-commodity Institutional'
-  if (lower.startsWith('index_options_step') || lower.startsWith('multi-index step')) return 'Index_Options_StepTrailing_Quant'
+  if (
+    lower.startsWith('mcx_institutional') ||
+    lower.startsWith('mcx institutional') ||
+    lower.startsWith('multi-commodity')
+  )
+    return 'Multi-commodity Institutional'
+  if (lower.startsWith('index_options_step') || lower.startsWith('multi-index step'))
+    return 'Index_Options_StepTrailing_Quant'
   return trimmed
 }
 
-function buildStrategyChargesSummaries(trades: Trade[]): StrategyChargesSummary[] {
+function buildStrategyChargesSummaries(trades: Trade[], isCryptoBroker = false): StrategyChargesSummary[] {
   // Pass 1: Resolve known strategies for symbols (e.g. if AUTO_SQUARE_OFF or untagged exit closed a strategy trade)
   const symbolToStrategyMap: Record<string, string> = {}
   for (const t of trades) {
     const strat = t.strategy?.trim()
-    if (strat && strat !== 'AUTO_SQUARE_OFF' && strat !== 'Untagged' && strat !== 'manual' && strat !== 'UNKNOWN') {
+    if (
+      strat &&
+      strat !== 'AUTO_SQUARE_OFF' &&
+      strat !== 'Untagged' &&
+      strat !== 'manual' &&
+      strat !== 'UNKNOWN'
+    ) {
       symbolToStrategyMap[`${t.symbol}||${t.exchange}`] = canonicalizeStrategyName(strat)
     }
   }
@@ -263,7 +310,12 @@ function buildStrategyChargesSummaries(trades: Trade[]): StrategyChargesSummary[
   // And canonicalize all strategy names so version suffixes (e.g. _Production_V5) merge into the same strategy
   const normalizedTrades = trades.map((t) => {
     let strat = t.strategy?.trim() || 'Untagged'
-    if (strat === 'AUTO_SQUARE_OFF' || strat === 'Untagged' || strat === 'manual' || strat === 'UNKNOWN') {
+    if (
+      strat === 'AUTO_SQUARE_OFF' ||
+      strat === 'Untagged' ||
+      strat === 'manual' ||
+      strat === 'UNKNOWN'
+    ) {
       const parentStrat = symbolToStrategyMap[`${t.symbol}||${t.exchange}`]
       if (parentStrat) {
         strat = parentStrat
@@ -295,20 +347,26 @@ function buildStrategyChargesSummaries(trades: Trade[]): StrategyChargesSummary[
 
     if (closedQty <= 0) continue // only open legs — skip
 
-    const avgBuy = totalBuyQty > 0
-      ? buys.reduce((s, t) => s + Number(t.average_price) * Number(t.quantity), 0) / totalBuyQty
-      : 0
-    const avgSell = totalSellQty > 0
-      ? sells.reduce((s, t) => s + Number(t.average_price) * Number(t.quantity), 0) / totalSellQty
-      : 0
+    const avgBuy =
+      totalBuyQty > 0
+        ? buys.reduce((s, t) => s + Number(t.average_price) * Number(t.quantity), 0) / totalBuyQty
+        : 0
+    const avgSell =
+      totalSellQty > 0
+        ? sells.reduce((s, t) => s + Number(t.average_price) * Number(t.quantity), 0) / totalSellQty
+        : 0
 
     // Apply contract multiplier for correct P&L on MCX (GOLDM 0.1, others 1.0)
     const pnlMult = getContractMultiplier(tList[0]?.symbol, tList[0]?.exchange)
     const grossPnl = (avgSell - avgBuy) * closedQty * pnlMult
 
     if (!(strategy in stratMap)) {
+      const ex = tList[0]?.exchange?.toUpperCase() ?? ''
+      const isCrypto = isCryptoBroker || isCryptoItem(ex, tList[0]?.symbol)
       stratMap[strategy] = {
         strategy,
+        exchange: ex,
+        isCrypto,
         closedTrades: 0,
         grossPnl: 0,
         brokerage: 0,
@@ -327,10 +385,11 @@ function buildStrategyChargesSummaries(trades: Trade[]): StrategyChargesSummary[
     summ.closedTrades += tList.length
 
     for (const t of tList) {
-      const ch = computeChargesForTrade(t)
-      const tradePnl = t.action?.toUpperCase() === 'SELL'
-        ? (Number(t.average_price) - avgBuy) * Number(t.quantity) * pnlMult
-        : 0
+      const ch = computeChargesForTrade(t, isCryptoBroker)
+      const tradePnl =
+        t.action?.toUpperCase() === 'SELL'
+          ? (Number(t.average_price) - avgBuy) * Number(t.quantity) * pnlMult
+          : 0
       summ.trades.push({ ...ch, grossPnl: tradePnl, netPnl: tradePnl - ch.totalCharges })
       summ.brokerage += ch.brokerage
       summ.stt += ch.stt
@@ -1109,207 +1168,238 @@ export default function Positions() {
 
         {/* ---- Positions Table ---- */}
         <TabsContent value="positions">
-      <Card>
-        <CardContent className="py-0">
-          {isLoading ? (
-            <div className="flex items-center justify-center py-12">
-              <Loader2 className="h-8 w-8 animate-spin" />
-            </div>
-          ) : error ? (
-            <div className="text-center py-12 text-muted-foreground">{error}</div>
-          ) : filteredPositions.length === 0 ? (
-            <EmptyState
-              icon={ChartCandlestick}
-              title="No positions match your filters"
-              description="Try adjusting or clearing your filters to see results."
-              action={hasActiveFilters ?
-                <Button variant="ghost" size="sm" onClick={clearFilters}>
-                  Clear Filters
-                </Button> : undefined
-              }
-            />
-          ) : (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <SortableHeader column={0} label="Symbol" className="w-[140px]" />
-                    <TableHead className="w-[110px]">Strategy</TableHead>
-                    <TableHead className="w-[80px]">Exchange</TableHead>
-                    {!isCrypto && <TableHead className="w-[80px]">Product</TableHead>}
-                    <SortableHeader column={3} label="Qty" className="w-[80px] text-right" />
-                    <SortableHeader column={4} label="Avg Price" className="w-[120px] text-right" />
-                    <TableHead className="w-[120px] text-right">LTP</TableHead>
-                    <SortableHeader column={6} label="P&L" className="w-[120px] text-right" />
-                    <SortableHeader column={7} label="P&L %" className="w-[100px] text-right" />
-                    <TableHead className="w-[60px] text-right">Action</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {sortedGroupKeys.map((groupKey) => {
-                    const groupPositions = groupedPositions[groupKey]
-                    const isCollapsed = collapsedGroups.has(groupKey)
-                    const groupStats = calculateGroupStats(groupPositions)
+          <Card>
+            <CardContent className="py-0">
+              {isLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="h-8 w-8 animate-spin" />
+                </div>
+              ) : error ? (
+                <div className="text-center py-12 text-muted-foreground">{error}</div>
+              ) : filteredPositions.length === 0 ? (
+                <EmptyState
+                  icon={ChartCandlestick}
+                  title="No positions match your filters"
+                  description="Try adjusting or clearing your filters to see results."
+                  action={
+                    hasActiveFilters ? (
+                      <Button variant="ghost" size="sm" onClick={clearFilters}>
+                        Clear Filters
+                      </Button>
+                    ) : undefined
+                  }
+                />
+              ) : (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <SortableHeader column={0} label="Symbol" className="w-[140px]" />
+                        <TableHead className="w-[110px]">Strategy</TableHead>
+                        <TableHead className="w-[80px]">Exchange</TableHead>
+                        {!isCrypto && <TableHead className="w-[80px]">Product</TableHead>}
+                        <SortableHeader column={3} label="Qty" className="w-[80px] text-right" />
+                        <SortableHeader
+                          column={4}
+                          label="Avg Price"
+                          className="w-[120px] text-right"
+                        />
+                        <TableHead className="w-[120px] text-right">LTP</TableHead>
+                        <SortableHeader column={6} label="P&L" className="w-[120px] text-right" />
+                        <SortableHeader column={7} label="P&L %" className="w-[100px] text-right" />
+                        <TableHead className="w-[60px] text-right">Action</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {sortedGroupKeys.map((groupKey) => {
+                        const groupPositions = groupedPositions[groupKey]
+                        const isCollapsed = collapsedGroups.has(groupKey)
+                        const groupStats = calculateGroupStats(groupPositions)
 
-                    return (
-                      <React.Fragment key={groupKey}>
-                        {/* Group Header Row */}
-                        {grouping !== 'none' && (
-                          <TableRow
-                            className="bg-muted/50 cursor-pointer hover:bg-muted"
-                            onClick={() => toggleGroup(groupKey)}
-                          >
-                            <TableCell colSpan={7}>
-                              <div className="flex items-center gap-3 py-1 font-semibold">
-                                {isCollapsed ? (
-                                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                                ) : (
-                                  <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                                )}
-                                <span>{groupKey}</span>
-                                <Badge variant="outline" className="text-xs">
-                                  {groupStats.count}
-                                </Badge>
-                              </div>
-                            </TableCell>
-                            <TableCell
-                              className={cn(
-                                'text-right font-bold',
-                                isProfit(groupStats.totalPnl) ? 'text-green-600' : 'text-red-600'
-                              )}
-                            >
-                              {groupStats.totalPnl >= 0 ? '+' : ''}
-                              {formatCurrency(groupStats.totalPnl)}
-                            </TableCell>
-                            <TableCell
-                              className={cn(
-                                'text-right font-semibold',
-                                isProfit(groupStats.pnlPercent) ? 'text-green-600' : 'text-red-600'
-                              )}
-                            >
-                              {groupStats.pnlPercent >= 0 ? '+' : ''}
-                              {groupStats.pnlPercent.toFixed(2)}%
-                            </TableCell>
-                            <TableCell />
-                          </TableRow>
-                        )}
-
-                        {/* Position Rows */}
-                        {!isCollapsed &&
-                          groupPositions.map((position, index) => (
-                            <TableRow key={`${position.symbol}-${position.exchange}-${index}`}>
-                              <TableCell className="w-[140px] font-medium">
-                                {position.symbol}
-                              </TableCell>
-                              <TableCell className="w-[110px]">
-                                {position.strategy ? (
-                                  <Badge
-                                    variant="secondary"
-                                    className="bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20 font-medium text-xs whitespace-nowrap"
-                                  >
-                                    {position.strategy}
-                                  </Badge>
-                                ) : (
-                                  <span className="text-muted-foreground text-xs font-mono">Manual</span>
-                                )}
-                              </TableCell>
-                              <TableCell className="w-[80px]">
-                                <Badge
-                                  variant="outline"
-                                  className={EXCHANGE_COLORS[position.exchange] || ''}
-                                >
-                                  {position.exchange}
-                                </Badge>
-                              </TableCell>
-                              {!isCrypto && (
-                                <TableCell className="w-[80px]">
-                                  <Badge
-                                    variant="outline"
-                                    className={PRODUCT_COLORS[position.product] || ''}
-                                  >
-                                    {position.product}
-                                  </Badge>
+                        return (
+                          <React.Fragment key={groupKey}>
+                            {/* Group Header Row */}
+                            {grouping !== 'none' && (
+                              <TableRow
+                                className="bg-muted/50 cursor-pointer hover:bg-muted"
+                                onClick={() => toggleGroup(groupKey)}
+                              >
+                                <TableCell colSpan={7}>
+                                  <div className="flex items-center gap-3 py-1 font-semibold">
+                                    {isCollapsed ? (
+                                      <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                                    ) : (
+                                      <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                                    )}
+                                    <span>{groupKey}</span>
+                                    <Badge variant="outline" className="text-xs">
+                                      {groupStats.count}
+                                    </Badge>
+                                  </div>
                                 </TableCell>
-                              )}
-                              <TableCell
-                                className={cn(
-                                  'w-[80px] text-right font-medium',
-                                  position.quantity > 0 ? 'text-green-600' : 'text-red-600'
-                                )}
-                              >
-                                {position.quantity}
-                              </TableCell>
-                              <TableCell className="w-[120px] text-right font-mono">
-                                {formatCurrency(position.average_price)}
-                              </TableCell>
-                              <TableCell className="w-[120px] text-right font-mono">
-                                {position.ltp !== undefined ? formatCurrency(position.ltp) : '-'}
-                              </TableCell>
-                              <TableCell
-                                className={cn(
-                                  'w-[120px] text-right font-medium',
-                                  isProfit(position.pnl) ? 'text-green-600' : 'text-red-600'
-                                )}
-                              >
-                                <div className="flex items-center justify-end gap-1">
-                                  {isProfit(position.pnl) ? (
-                                    <TrendingUp className="h-4 w-4" />
-                                  ) : (
-                                    <TrendingDown className="h-4 w-4" />
+                                <TableCell
+                                  className={cn(
+                                    'text-right font-bold',
+                                    isProfit(groupStats.totalPnl)
+                                      ? 'text-green-600'
+                                      : 'text-red-600'
                                   )}
-                                  {formatCurrency(position.pnl)}
-                                </div>
-                              </TableCell>
-                              <TableCell
-                                className={cn(
-                                  'w-[100px] text-right',
-                                  isProfit(calculatePnlPercent(position))
-                                    ? 'text-green-600'
-                                    : 'text-red-600'
-                                )}
-                              >
-                                {calculatePnlPercent(position) >= 0 ? '+' : ''}
-                                {calculatePnlPercent(position).toFixed(2)}%
-                              </TableCell>
-                              <TableCell className="w-[60px] text-right">
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                                  onClick={() => handleClosePosition(position)}
-                                  aria-label={`Close ${position.symbol} position`}
                                 >
-                                  <X className="h-4 w-4" />
-                                </Button>
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                      </React.Fragment>
-                    )
-                  })}
-                </TableBody>
-                <TableFooter>
-                  <TableRow className="bg-muted/50">
-                    <TableCell colSpan={6} className="text-right text-muted-foreground">
-                      Total P&L:
-                    </TableCell>
-                    <TableCell
-                      className={cn(
-                        'w-[120px] text-right font-bold',
-                        isProfit(stats.totalPnl) ? 'text-green-600' : 'text-red-600'
-                      )}
-                    >
-                      {stats.totalPnl >= 0 ? '+' : ''}
-                      {formatCurrency(stats.totalPnl)}
-                    </TableCell>
-                    <TableCell colSpan={2} />
-                  </TableRow>
-                </TableFooter>
-              </Table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+                                  {groupStats.totalPnl >= 0 ? '+' : ''}
+                                  {formatCurrency(groupStats.totalPnl)}
+                                </TableCell>
+                                <TableCell
+                                  className={cn(
+                                    'text-right font-semibold',
+                                    isProfit(groupStats.pnlPercent)
+                                      ? 'text-green-600'
+                                      : 'text-red-600'
+                                  )}
+                                >
+                                  {groupStats.pnlPercent >= 0 ? '+' : ''}
+                                  {groupStats.pnlPercent.toFixed(2)}%
+                                </TableCell>
+                                <TableCell />
+                              </TableRow>
+                            )}
+
+                            {/* Position Rows */}
+                            {!isCollapsed &&
+                              groupPositions.map((position, index) => (
+                                <TableRow key={`${position.symbol}-${position.exchange}-${index}`}>
+                                  <TableCell className="w-[140px] font-medium">
+                                    {position.symbol}
+                                  </TableCell>
+                                  <TableCell className="w-[110px]">
+                                    {position.strategy ? (
+                                      <Badge
+                                        variant="secondary"
+                                        className="bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20 font-medium text-xs whitespace-nowrap"
+                                      >
+                                        {position.strategy}
+                                      </Badge>
+                                    ) : (
+                                      <span className="text-muted-foreground text-xs font-mono">
+                                        Manual
+                                      </span>
+                                    )}
+                                  </TableCell>
+                                  <TableCell className="w-[80px]">
+                                    <Badge
+                                      variant="outline"
+                                      className={EXCHANGE_COLORS[position.exchange] || ''}
+                                    >
+                                      {position.exchange}
+                                    </Badge>
+                                  </TableCell>
+                                  {!isCrypto && (
+                                    <TableCell className="w-[80px]">
+                                      <Badge
+                                        variant="outline"
+                                        className={PRODUCT_COLORS[position.product] || ''}
+                                      >
+                                        {position.product}
+                                      </Badge>
+                                    </TableCell>
+                                  )}
+                                  <TableCell
+                                    className={cn(
+                                      'w-[95px] text-right font-medium',
+                                      position.quantity > 0 ? 'text-green-600' : 'text-red-600'
+                                    )}
+                                  >
+                                    <div>{position.quantity}</div>
+                                    {(() => {
+                                      const qInfo = formatQuantityWithMultiplier(
+                                        position.quantity,
+                                        position.symbol,
+                                        position.exchange,
+                                        position.lot_size
+                                      )
+                                      return qInfo.underlying ? (
+                                        <div className="text-[10px] text-muted-foreground font-mono leading-tight">
+                                          {qInfo.underlying}
+                                        </div>
+                                      ) : null
+                                    })()}
+                                  </TableCell>
+                                  <TableCell className="w-[120px] text-right font-mono">
+                                    {formatCurrency(position.average_price)}
+                                  </TableCell>
+                                  <TableCell className="w-[120px] text-right font-mono">
+                                    {position.ltp !== undefined
+                                      ? formatCurrency(position.ltp)
+                                      : '-'}
+                                  </TableCell>
+                                  <TableCell
+                                    className={cn(
+                                      'w-[120px] text-right font-medium',
+                                      isProfit(position.pnl) ? 'text-green-600' : 'text-red-600'
+                                    )}
+                                  >
+                                    <div className="flex items-center justify-end gap-1">
+                                      {isProfit(position.pnl) ? (
+                                        <TrendingUp className="h-4 w-4" />
+                                      ) : (
+                                        <TrendingDown className="h-4 w-4" />
+                                      )}
+                                      {formatCurrency(position.pnl)}
+                                    </div>
+                                  </TableCell>
+                                  <TableCell
+                                    className={cn(
+                                      'w-[100px] text-right',
+                                      isProfit(calculatePnlPercent(position))
+                                        ? 'text-green-600'
+                                        : 'text-red-600'
+                                    )}
+                                  >
+                                    {calculatePnlPercent(position) >= 0 ? '+' : ''}
+                                    {calculatePnlPercent(position).toFixed(2)}%
+                                  </TableCell>
+                                  <TableCell className="w-[60px] text-right">
+                                    {position.quantity !== 0 ? (
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                                        onClick={() => handleClosePosition(position)}
+                                        aria-label={`Close ${position.symbol} position`}
+                                      >
+                                        <X className="h-4 w-4" />
+                                      </Button>
+                                    ) : (
+                                      <span className="text-xs text-muted-foreground font-mono">-</span>
+                                    )}
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                          </React.Fragment>
+                        )
+                      })}
+                    </TableBody>
+                    <TableFooter>
+                      <TableRow className="bg-muted/50">
+                        <TableCell colSpan={6} className="text-right text-muted-foreground">
+                          Total P&L:
+                        </TableCell>
+                        <TableCell
+                          className={cn(
+                            'w-[120px] text-right font-bold',
+                            isProfit(stats.totalPnl) ? 'text-green-600' : 'text-red-600'
+                          )}
+                        >
+                          {stats.totalPnl >= 0 ? '+' : ''}
+                          {formatCurrency(stats.totalPnl)}
+                        </TableCell>
+                        <TableCell colSpan={2} />
+                      </TableRow>
+                    </TableFooter>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
 
         {/* ---- P&L Breakdown Tab ---- */}
@@ -1318,6 +1408,7 @@ export default function Positions() {
             trades={trades}
             isLoading={tradesLoading}
             formatCurrency={formatCurrency}
+            isCryptoBroker={isCrypto}
             expandedStrategies={expandedStrategies}
             setExpandedStrategies={setExpandedStrategies}
           />
@@ -1334,20 +1425,23 @@ function PnlBreakdownTab({
   trades,
   isLoading,
   formatCurrency,
+  isCryptoBroker,
   expandedStrategies,
   setExpandedStrategies,
 }: {
   trades: Trade[]
   isLoading: boolean
   formatCurrency: (v: number) => string
+  isCryptoBroker: boolean
   expandedStrategies: Set<string>
   setExpandedStrategies: React.Dispatch<React.SetStateAction<Set<string>>>
 }) {
-  const summaries = useMemo(() => buildStrategyChargesSummaries(trades), [trades])
+  const summaries = useMemo(() => buildStrategyChargesSummaries(trades, isCryptoBroker), [trades, isCryptoBroker])
 
   const portfolioGross = summaries.reduce((s, x) => s + x.grossPnl, 0)
   const portfolioCharges = summaries.reduce((s, x) => s + x.totalCharges, 0)
   const portfolioNet = summaries.reduce((s, x) => s + x.netPnl, 0)
+  const hasCrypto = summaries.some((s) => s.isCrypto) || isCryptoBroker
 
   const toggleStrategy = (strategy: string) => {
     setExpandedStrategies((prev) => {
@@ -1372,7 +1466,9 @@ function PnlBreakdownTab({
         <CardContent className="flex flex-col items-center justify-center py-16 gap-3 text-muted-foreground">
           <ReceiptText className="h-10 w-10 opacity-30" />
           <p className="text-sm">No closed trades found today.</p>
-          <p className="text-xs opacity-60">P&amp;L Breakdown only shows fully closed (matched buy + sell) positions.</p>
+          <p className="text-xs opacity-60">
+            P&amp;L Breakdown only shows fully closed (matched buy + sell) positions.
+          </p>
         </CardContent>
       </Card>
     )
@@ -1386,13 +1482,10 @@ function PnlBreakdownTab({
           <CardHeader className="pb-2">
             <CardDescription>Gross P&amp;L (closed trades)</CardDescription>
             <CardTitle
-              className={cn(
-                'text-2xl',
-                portfolioGross >= 0 ? 'text-green-600' : 'text-red-600'
-              )}
+              className={cn('text-2xl', portfolioGross >= 0 ? 'text-green-600' : 'text-red-600')}
             >
               {portfolioGross >= 0 ? '+' : ''}
-              {formatCurrency(portfolioGross)}
+              {hasCrypto ? `$${Math.abs(portfolioGross).toFixed(4)}` : formatCurrency(portfolioGross)}
             </CardTitle>
           </CardHeader>
         </Card>
@@ -1400,7 +1493,7 @@ function PnlBreakdownTab({
           <CardHeader className="pb-2">
             <CardDescription>Total Charges</CardDescription>
             <CardTitle className="text-2xl text-orange-500">
-              -{formatCurrency(portfolioCharges)}
+              -{hasCrypto ? `$${portfolioCharges.toFixed(4)}` : formatCurrency(portfolioCharges)}
             </CardTitle>
           </CardHeader>
         </Card>
@@ -1408,13 +1501,10 @@ function PnlBreakdownTab({
           <CardHeader className="pb-2">
             <CardDescription>Net P&amp;L (after charges)</CardDescription>
             <CardTitle
-              className={cn(
-                'text-2xl',
-                portfolioNet >= 0 ? 'text-green-600' : 'text-red-600'
-              )}
+              className={cn('text-2xl', portfolioNet >= 0 ? 'text-green-600' : 'text-red-600')}
             >
               {portfolioNet >= 0 ? '+' : ''}
-              {formatCurrency(portfolioNet)}
+              {hasCrypto ? `$${Math.abs(portfolioNet).toFixed(4)}` : formatCurrency(portfolioNet)}
             </CardTitle>
           </CardHeader>
         </Card>
@@ -1447,18 +1537,29 @@ function PnlBreakdownTab({
               <div className="flex flex-wrap items-center gap-4 text-sm pl-6 sm:pl-0">
                 <span className="text-muted-foreground">
                   Gross:{' '}
-                  <span className={cn('font-medium', s.grossPnl >= 0 ? 'text-green-600' : 'text-red-600')}>
-                    {s.grossPnl >= 0 ? '+' : ''}{formatCurrency(s.grossPnl)}
+                  <span
+                    className={cn(
+                      'font-medium',
+                      s.grossPnl >= 0 ? 'text-green-600' : 'text-red-600'
+                    )}
+                  >
+                    {s.grossPnl >= 0 ? '+' : ''}
+                    {s.isCrypto ? `$${Math.abs(s.grossPnl).toFixed(4)}` : formatCurrency(s.grossPnl)}
                   </span>
                 </span>
                 <span className="text-muted-foreground">
                   Charges:{' '}
-                  <span className="font-medium text-orange-500">-{formatCurrency(s.totalCharges)}</span>
+                  <span className="font-medium text-orange-500">
+                    -{s.isCrypto ? `$${s.totalCharges.toFixed(4)}` : formatCurrency(s.totalCharges)}
+                  </span>
                 </span>
                 <span className="text-muted-foreground">
                   Net:{' '}
-                  <span className={cn('font-bold', s.netPnl >= 0 ? 'text-green-600' : 'text-red-600')}>
-                    {s.netPnl >= 0 ? '+' : ''}{formatCurrency(s.netPnl)}
+                  <span
+                    className={cn('font-bold', s.netPnl >= 0 ? 'text-green-600' : 'text-red-600')}
+                  >
+                    {s.netPnl >= 0 ? '+' : ''}
+                    {s.isCrypto ? `$${Math.abs(s.netPnl).toFixed(4)}` : formatCurrency(s.netPnl)}
                   </span>
                 </span>
               </div>
@@ -1466,15 +1567,50 @@ function PnlBreakdownTab({
 
             {/* Charges summary bar */}
             <div className="flex flex-wrap gap-x-4 gap-y-1 px-5 py-2 bg-muted/20 text-xs text-muted-foreground border-b">
-              <span>Brokerage: <strong className="text-foreground">&#x20B9;{s.brokerage.toFixed(2)}</strong></span>
-              <span>STT/CTT: <strong className="text-foreground">&#x20B9;{s.stt.toFixed(2)}</strong></span>
-              <span>Exch Charges: <strong className="text-foreground">&#x20B9;{s.exchangeCharge.toFixed(2)}</strong></span>
-              <span>SEBI Fee: <strong className="text-foreground">&#x20B9;{s.sebiCharge.toFixed(2)}</strong></span>
-              <span>Stamp Duty: <strong className="text-foreground">&#x20B9;{s.stampDuty.toFixed(2)}</strong></span>
-              <span>GST (18%): <strong className="text-foreground">&#x20B9;{s.gst.toFixed(2)}</strong></span>
-              <span className="ml-auto font-semibold text-orange-500">
-                Total: &#x20B9;{s.totalCharges.toFixed(2)}
-              </span>
+              {s.isCrypto ? (
+                // Delta Exchange: exchange fee (0.03% taker) + 18% GST, no Indian taxes
+                <>
+                  <span>
+                    Exchange Fee (0.03%):{' '}
+                    <strong className="text-foreground">${s.exchangeCharge.toFixed(4)}</strong>
+                  </span>
+                  <span>
+                    GST (18%): <strong className="text-foreground">${s.gst.toFixed(4)}</strong>
+                  </span>
+                  <span className="ml-auto font-semibold text-orange-500">
+                    Total: ${s.totalCharges.toFixed(4)}
+                  </span>
+                </>
+              ) : (
+                // Indian F&O: full statutory charges
+                <>
+                  <span>
+                    Brokerage:{' '}
+                    <strong className="text-foreground">&#x20B9;{s.brokerage.toFixed(2)}</strong>
+                  </span>
+                  <span>
+                    STT/CTT: <strong className="text-foreground">&#x20B9;{s.stt.toFixed(2)}</strong>
+                  </span>
+                  <span>
+                    Exch Charges:{' '}
+                    <strong className="text-foreground">&#x20B9;{s.exchangeCharge.toFixed(2)}</strong>
+                  </span>
+                  <span>
+                    SEBI Fee:{' '}
+                    <strong className="text-foreground">&#x20B9;{s.sebiCharge.toFixed(2)}</strong>
+                  </span>
+                  <span>
+                    Stamp Duty:{' '}
+                    <strong className="text-foreground">&#x20B9;{s.stampDuty.toFixed(2)}</strong>
+                  </span>
+                  <span>
+                    GST (18%): <strong className="text-foreground">&#x20B9;{s.gst.toFixed(2)}</strong>
+                  </span>
+                  <span className="ml-auto font-semibold text-orange-500">
+                    Total: &#x20B9;{s.totalCharges.toFixed(2)}
+                  </span>
+                </>
+              )}
             </div>
 
             {/* Expanded trade-level table */}
@@ -1488,10 +1624,19 @@ function PnlBreakdownTab({
                       <TableHead className="text-right w-[60px]">Qty</TableHead>
                       <TableHead className="text-right w-[90px]">Avg Price</TableHead>
                       <TableHead className="text-right w-[100px]">Turnover</TableHead>
-                      <TableHead className="text-right w-[80px]">Brokerage</TableHead>
-                      <TableHead className="text-right w-[80px]">STT/CTT</TableHead>
-                      <TableHead className="text-right w-[90px]">Exch Chg</TableHead>
-                      <TableHead className="text-right w-[80px]">GST</TableHead>
+                      {s.isCrypto ? (
+                        <>
+                          <TableHead className="text-right w-[110px]">Exch Fee (0.03%)</TableHead>
+                          <TableHead className="text-right w-[90px]">GST (18%)</TableHead>
+                        </>
+                      ) : (
+                        <>
+                          <TableHead className="text-right w-[80px]">Brokerage</TableHead>
+                          <TableHead className="text-right w-[80px]">STT/CTT</TableHead>
+                          <TableHead className="text-right w-[90px]">Exch Chg</TableHead>
+                          <TableHead className="text-right w-[80px]">GST</TableHead>
+                        </>
+                      )}
                       <TableHead className="text-right w-[90px]">Total Chg</TableHead>
                       <TableHead className="text-right w-[100px]">Gross P&amp;L</TableHead>
                       <TableHead className="text-right w-[100px]">Net P&amp;L</TableHead>
@@ -1515,14 +1660,39 @@ function PnlBreakdownTab({
                           </Badge>
                         </TableCell>
                         <TableCell className="text-right font-mono">{t.quantity}</TableCell>
-                        <TableCell className="text-right font-mono">&#x20B9;{t.price.toFixed(2)}</TableCell>
-                        <TableCell className="text-right font-mono">&#x20B9;{t.turnover.toFixed(2)}</TableCell>
-                        <TableCell className="text-right font-mono text-orange-500">&#x20B9;{t.brokerage.toFixed(2)}</TableCell>
-                        <TableCell className="text-right font-mono text-orange-500">&#x20B9;{t.stt.toFixed(2)}</TableCell>
-                        <TableCell className="text-right font-mono text-orange-500">&#x20B9;{t.exchangeCharge.toFixed(2)}</TableCell>
-                        <TableCell className="text-right font-mono text-orange-500">&#x20B9;{t.gst.toFixed(2)}</TableCell>
+                        <TableCell className="text-right font-mono">
+                          {s.isCrypto ? `$${t.price.toFixed(2)}` : `₹${t.price.toFixed(2)}`}
+                        </TableCell>
+                        <TableCell className="text-right font-mono">
+                          {s.isCrypto ? `$${t.turnover.toFixed(4)}` : `₹${t.turnover.toFixed(2)}`}
+                        </TableCell>
+                        {s.isCrypto ? (
+                          <>
+                            <TableCell className="text-right font-mono text-orange-500">
+                              ${t.exchangeCharge.toFixed(4)}
+                            </TableCell>
+                            <TableCell className="text-right font-mono text-orange-500">
+                              ${t.gst.toFixed(4)}
+                            </TableCell>
+                          </>
+                        ) : (
+                          <>
+                            <TableCell className="text-right font-mono text-orange-500">
+                              &#x20B9;{t.brokerage.toFixed(2)}
+                            </TableCell>
+                            <TableCell className="text-right font-mono text-orange-500">
+                              &#x20B9;{t.stt.toFixed(2)}
+                            </TableCell>
+                            <TableCell className="text-right font-mono text-orange-500">
+                              &#x20B9;{t.exchangeCharge.toFixed(2)}
+                            </TableCell>
+                            <TableCell className="text-right font-mono text-orange-500">
+                              &#x20B9;{t.gst.toFixed(2)}
+                            </TableCell>
+                          </>
+                        )}
                         <TableCell className="text-right font-mono font-semibold text-orange-500">
-                          &#x20B9;{t.totalCharges.toFixed(2)}
+                          {s.isCrypto ? `$${t.totalCharges.toFixed(4)}` : `₹${t.totalCharges.toFixed(2)}`}
                         </TableCell>
                         <TableCell
                           className={cn(
@@ -1530,7 +1700,9 @@ function PnlBreakdownTab({
                             t.grossPnl >= 0 ? 'text-green-600' : 'text-red-600'
                           )}
                         >
-                          {t.grossPnl !== 0 ? `${t.grossPnl >= 0 ? '+' : ''}₹${t.grossPnl.toFixed(2)}` : '-'}
+                          {t.grossPnl !== 0
+                            ? `${t.grossPnl >= 0 ? '+' : ''}${s.isCrypto ? '$' : '₹'}${Math.abs(t.grossPnl).toFixed(s.isCrypto ? 4 : 2)}`
+                            : '-'}
                         </TableCell>
                         <TableCell
                           className={cn(
@@ -1538,24 +1710,61 @@ function PnlBreakdownTab({
                             t.netPnl >= 0 ? 'text-green-600' : 'text-red-600'
                           )}
                         >
-                          {t.grossPnl !== 0 ? `${t.netPnl >= 0 ? '+' : ''}₹${t.netPnl.toFixed(2)}` : '-'}
+                          {t.grossPnl !== 0
+                            ? `${t.netPnl >= 0 ? '+' : ''}${s.isCrypto ? '$' : '₹'}${Math.abs(t.netPnl).toFixed(s.isCrypto ? 4 : 2)}`
+                            : '-'}
                         </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
                   <TableFooter>
                     <TableRow className="bg-muted/40 text-xs font-semibold">
-                      <TableCell colSpan={5} className="text-right text-muted-foreground">Strategy Total:</TableCell>
-                      <TableCell className="text-right text-orange-500">&#x20B9;{s.brokerage.toFixed(2)}</TableCell>
-                      <TableCell className="text-right text-orange-500">&#x20B9;{s.stt.toFixed(2)}</TableCell>
-                      <TableCell className="text-right text-orange-500">&#x20B9;{s.exchangeCharge.toFixed(2)}</TableCell>
-                      <TableCell className="text-right text-orange-500">&#x20B9;{s.gst.toFixed(2)}</TableCell>
-                      <TableCell className="text-right text-orange-500">&#x20B9;{s.totalCharges.toFixed(2)}</TableCell>
-                      <TableCell className={cn('text-right', s.grossPnl >= 0 ? 'text-green-600' : 'text-red-600')}>
-                        {s.grossPnl >= 0 ? '+' : ''}&#x20B9;{s.grossPnl.toFixed(2)}
+                      <TableCell colSpan={5} className="text-right text-muted-foreground">
+                        Strategy Total:
                       </TableCell>
-                      <TableCell className={cn('text-right', s.netPnl >= 0 ? 'text-green-600' : 'text-red-600')}>
-                        {s.netPnl >= 0 ? '+' : ''}&#x20B9;{s.netPnl.toFixed(2)}
+                      {s.isCrypto ? (
+                        <>
+                          <TableCell className="text-right text-orange-500">
+                            ${s.exchangeCharge.toFixed(4)}
+                          </TableCell>
+                          <TableCell className="text-right text-orange-500">
+                            ${s.gst.toFixed(4)}
+                          </TableCell>
+                        </>
+                      ) : (
+                        <>
+                          <TableCell className="text-right text-orange-500">
+                            &#x20B9;{s.brokerage.toFixed(2)}
+                          </TableCell>
+                          <TableCell className="text-right text-orange-500">
+                            &#x20B9;{s.stt.toFixed(2)}
+                          </TableCell>
+                          <TableCell className="text-right text-orange-500">
+                            &#x20B9;{s.exchangeCharge.toFixed(2)}
+                          </TableCell>
+                          <TableCell className="text-right text-orange-500">
+                            &#x20B9;{s.gst.toFixed(2)}
+                          </TableCell>
+                        </>
+                      )}
+                      <TableCell className="text-right text-orange-500">
+                        {s.isCrypto ? `$${s.totalCharges.toFixed(4)}` : `₹${s.totalCharges.toFixed(2)}`}
+                      </TableCell>
+                      <TableCell
+                        className={cn(
+                          'text-right',
+                          s.grossPnl >= 0 ? 'text-green-600' : 'text-red-600'
+                        )}
+                      >
+                        {s.grossPnl >= 0 ? '+' : ''}{s.isCrypto ? '$' : '₹'}{Math.abs(s.grossPnl).toFixed(s.isCrypto ? 4 : 2)}
+                      </TableCell>
+                      <TableCell
+                        className={cn(
+                          'text-right',
+                          s.netPnl >= 0 ? 'text-green-600' : 'text-red-600'
+                        )}
+                      >
+                        {s.netPnl >= 0 ? '+' : ''}{s.isCrypto ? '$' : '₹'}{Math.abs(s.netPnl).toFixed(s.isCrypto ? 4 : 2)}
                       </TableCell>
                     </TableRow>
                   </TableFooter>

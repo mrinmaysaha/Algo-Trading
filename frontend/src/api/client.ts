@@ -147,9 +147,7 @@ webClient.interceptors.response.use(
       // Forbidden - user doesn't have permission for this resource
       const data = error.response?.data
       const serverMessage =
-        typeof data === 'string'
-          ? data
-          : data?.message || data?.error || data?.detail
+        typeof data === 'string' ? data : data?.message || data?.error || data?.detail
       error.message = serverMessage || 'You do not have permission to access this resource'
     } else {
       // Surface the server's own explanation instead of axios's generic

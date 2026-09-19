@@ -7,6 +7,7 @@ import type {
   PythonStrategyContent,
   ScheduleConfig,
   StrategyExchange,
+  StrategyLayoutPayload,
 } from '@/types/python-strategy'
 import type { ApiResponse } from '@/types/trading'
 import { webClient } from './client'
@@ -228,11 +229,11 @@ export const pythonStrategyApi = {
    * Run a backtest for a Python strategy
    */
   runBacktest: async (data: {
-    strategy_id: string;
-    symbols: string[];
-    interval: string;
-    lookback_days: number;
-    initial_capital: number;
+    strategy_id: string
+    symbols: string[]
+    interval: string
+    lookback_days: number
+    initial_capital: number
   }): Promise<any> => {
     const response = await webClient.post('/python/api/run-backtest', data)
     return response.data
@@ -250,15 +251,25 @@ export const pythonStrategyApi = {
    * Simulate RL conviction and dynamic risk for custom market conditions
    */
   simulateRL: async (data: {
-    market: 'MCX' | 'NSE';
-    adx: number;
-    relative_volume: number;
-    rejection_wick: number;
-    ema_dist: number;
-    session_pct: number;
+    market: 'MCX' | 'NSE'
+    adx: number
+    relative_volume: number
+    rejection_wick: number
+    ema_dist: number
+    session_pct: number
   }): Promise<any> => {
     const response = await webClient.post('/python/api/rl-simulate', data)
     return response.data
   },
-}
 
+  /**
+   * Save custom ordering and grouping layout for strategies
+   */
+  saveLayout: async (layout: StrategyLayoutPayload): Promise<ApiResponse<null>> => {
+    const response = await webClient.post<ApiResponse<null>>(
+      '/python/api/strategies/layout',
+      layout
+    )
+    return response.data
+  },
+}

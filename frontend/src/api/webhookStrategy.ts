@@ -1,3 +1,4 @@
+import type { ApiResponse } from '@/types/trading'
 import type {
   AddSymbolRequest,
   CreateStrategyRequest,
@@ -5,7 +6,6 @@ import type {
   StrategySymbolMapping,
   SymbolSearchResult,
 } from '@/types/webhookStrategy'
-import type { ApiResponse } from '@/types/trading'
 import { webClient } from './client'
 
 export const webhookStrategyApi = {
@@ -13,7 +13,9 @@ export const webhookStrategyApi = {
    * Get all strategies
    */
   getStrategies: async (): Promise<Strategy[]> => {
-    const response = await webClient.get<{ strategies: Strategy[] }>('/webhook-strategy/api/strategies')
+    const response = await webClient.get<{ strategies: Strategy[] }>(
+      '/webhook-strategy/api/strategies'
+    )
     return response.data.strategies || []
   },
 
@@ -56,7 +58,9 @@ export const webhookStrategyApi = {
    * Delete a strategy
    */
   deleteStrategy: async (strategyId: number): Promise<ApiResponse<void>> => {
-    const response = await webClient.post<ApiResponse<void>>(`/webhook-strategy/${strategyId}/delete`)
+    const response = await webClient.post<ApiResponse<void>>(
+      `/webhook-strategy/${strategyId}/delete`
+    )
     return response.data
   },
 
