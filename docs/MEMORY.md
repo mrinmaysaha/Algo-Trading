@@ -298,3 +298,15 @@
   3. [frontend/src/pages/PnLTracker.tsx](file:///c:/Users/mrinm/Algo_tading/openalgo/frontend/src/pages/PnLTracker.tsx): Added dedicated **Charges & Taxes (All-in)** and **Net MTM (Take-Home Profit)** metrics cards, with full itemized charge pills (Exchange, GST, TDS, Brokerage).
   4. [frontend/src/pages/Positions.tsx](file:///c:/Users/mrinm/Algo_tading/openalgo/frontend/src/pages/Positions.tsx): Upgraded `computeChargesForTrade()` to model Delta India's strike-notional option taker fee and 1% TDS.
 
+### K. Crypto Delta Options: Deep Wing Zero-Bid & Container Restart State Reconciliation (2026-09-26)
+- **Problem Diagnosis**:
+  - Live overnight Iron Condor positions on Delta Exchange did not square off despite short legs decaying past the 60% profit target.
+  - Strategy logs emitted `[WARNING] [DEPTH] ETH...: L2 unavailable, quotes-only (sizes=0, STALE)` and HTTP timeouts.
+  - Root Cause Analysis:
+    1. **Zero-Bid on Protective Wings Blocked TP**: When deep OTM long wings (e.g. `ETH26SEP262620PE`) decay towards zero, the order book bid drops to 0 or becomes empty (`wq.bid is None or 0`). In `_spread_profit()`, the guard `if not sq or not wq or not sq.ask or not wq.bid: return None` treated `wq.bid == 0` as missing data, returning `None`. This caused `if ce and pe:` to evaluate to False, completely silencing the 60% Take-Profit check!
+    2. **Container Restart Desync**: A container restart cleared in-memory active state while an existing session JSON was overwritten or un-reconciled, causing the supervisor to misclassify existing broker positions as unmanaged daytime trades (`open=[]`).
+- **Architectural Solution in [Overnight_Crypto_Delta_Options.py](file:///c:/Users/mrinm/Algo_tading/openalgo/strategies_global/scripts/Overnight_Crypto_Delta_Options.py)**:
+  1. **Wing Decay Invariant**: Long protective wings are catastrophe hedges. When short legs decay profitably, wings naturally decay to 0. Cost to close is strictly buying back short legs at their ask price. `_spread_profit()` now treats zero/None wing bids as `wing_bid = 0.0` rather than aborting.
+  2. **Wing L2 Depth Fallback**: If an orderbook depth query returns empty quotes for a `*_WING` leg, it falls back to `DepthQuote(bid=0.0, ask=0.0, depth_ok=False)` instead of invalidating the tick with `usable = False`.
+  3. **Verification**: Restarting the supervisor immediately triggered the 60% Take-Profit for ETH (+$7.18 USD realized profit against $6.05 target), successfully squaring off all 4 ETH legs on Delta Exchange. BTC condor remained open and actively managed (+40% profit towards 60% target, or 06:00 IST morning TWAP ladder unwind).
+

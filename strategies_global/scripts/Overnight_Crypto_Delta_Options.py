@@ -2321,12 +2321,13 @@ class Engine:
         if q <= 0:
             return None
         sq, wq = quotes.get(f"{side}_SHORT"), quotes.get(f"{side}_WING")
-        if not sq or not wq or not sq.ask or not wq.bid:
+        if not sq or not sq.ask:
             return None
+        wing_bid = float(wq.bid) if (wq and wq.bid is not None and wq.bid > 0) else 0.0
         credit = (s_leg["avg_price"] - w_leg["avg_price"]) * mult * q
         credit -= self._fee_usd(s_leg["avg_price"], q, mult, 1) + self._fee_usd(w_leg["avg_price"], q, mult, 1)
-        cost = (sq.ask - wq.bid) * mult * q
-        cost += self._fee_usd(sq.ask, q, mult, 1) + self._fee_usd(wq.bid, q, mult, 1)
+        cost = (sq.ask - wing_bid) * mult * q
+        cost += self._fee_usd(sq.ask, q, mult, 1) + (self._fee_usd(wing_bid, q, mult, 1) if wing_bid > 0 else 0.0)
         return credit, cost, credit - cost
 
     def _open_unrealized(self, asset: str, quotes: Dict[str, DepthQuote]) -> float:
@@ -2404,9 +2405,12 @@ class Engine:
                 if self._leg_open_qty(asset, k) <= 0:
                     continue
                 q = self.get_l2_depth(leg["symbol"])
-                if q is None or q.bid is None and q.ask is None:
-                    usable = False
-                    break
+                if q is None or (q.bid is None and q.ask is None):
+                    if "WING" in k:
+                        q = DepthQuote(bid=0.0, ask=0.0, bid_size=0, ask_size=0, spread_pct=0.0, spread_dollar=0.0, depth_ok=False)
+                    else:
+                        usable = False
+                        break
                 quotes[k] = q
             if not usable or not quotes:
                 a["stale_ticks"] = int(a.get("stale_ticks", 0)) + 1
