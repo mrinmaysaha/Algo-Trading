@@ -15,7 +15,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from strategies_global.scripts.BTC_Daily_Iron_Condor_Delta import BTCDailyIronCondor
 from strategies_global.scripts.ETH_Daily_Iron_Condor_Delta import ETHDailyIronCondor
-from strategies_global.scripts.Overnight_Crypto_Delta_Options import OvernightCryptoOptionsEngine
+from strategies_global.scripts.Overnight_Crypto_Delta_Options import (
+    Engine,
+    EngineConfig,
+    AssetConfig,
+    SLConfirmer,
+    run_self_tests,
+)
 
 
 class TestCryptoIronCondorHardened(unittest.TestCase):
@@ -57,13 +63,14 @@ class TestCryptoIronCondorHardened(unittest.TestCase):
 
         mock_post.side_effect = [mock_place, mock_status]
 
-        success, fill_price, oid = self.btc_strategy.place_and_verify_order(
+        success, fill_price, oid, filled_qty = self.btc_strategy.place_and_verify_order(
             "BTC18SEP2679500CE", "BUY", 60, timeout_sec=2
         )
 
         self.assertTrue(success)
         self.assertEqual(fill_price, 1.25)
         self.assertEqual(oid, "ORD_TEST_001")
+        self.assertEqual(filled_qty, 60)
 
     @patch("requests.post")
     def test_place_and_verify_order_timeout_cancels_hanging_order(self, mock_post):
@@ -86,13 +93,14 @@ class TestCryptoIronCondorHardened(unittest.TestCase):
         # placeorder, then 2 status polls, then cancelorder
         mock_post.side_effect = [mock_place, mock_status, mock_status, mock_cancel]
 
-        success, fill_price, oid = self.btc_strategy.place_and_verify_order(
+        success, fill_price, oid, filled_qty = self.btc_strategy.place_and_verify_order(
             "BTC18SEP2674400PE", "SELL", 60, timeout_sec=1
         )
 
         self.assertFalse(success)
         self.assertEqual(fill_price, 0.0)
         self.assertEqual(oid, "ORD_HANG_999")
+        self.assertEqual(filled_qty, 0)
 
     # --------------------------------------------------------------------------
     # 2. Atomic Rollback on Partial Fill Test
@@ -111,17 +119,17 @@ class TestCryptoIronCondorHardened(unittest.TestCase):
         # Leg 3 (SHORT_CE): fills
         # Leg 4 (SHORT_PE): FAILS (timeout / no liquidity)
         # Rollbacks:
-        # Revert Leg 1 (SELL): fills
-        # Revert Leg 2 (SELL): fills
-        # Revert Leg 3 (BUY): fills
+        # Revert Short Leg 3 (BUY): fills
+        # Revert Wing Leg 1 (SELL): fills
+        # Revert Wing Leg 2 (SELL): fills
         mock_pvo.side_effect = [
-            (True, 0.55, "ORD_1"),
-            (True, 0.55, "ORD_2"),
-            (True, 1.05, "ORD_3"),
-            (False, 0.0, "ORD_4_FAIL"),  # 4th leg fails!
-            (True, 0.54, "ORD_RB_1"),     # Rollback Leg 1
-            (True, 0.54, "ORD_RB_2"),     # Rollback Leg 2
-            (True, 1.06, "ORD_RB_3"),     # Rollback Leg 3
+            (True, 0.55, "ORD_1", 60),
+            (True, 0.55, "ORD_2", 60),
+            (True, 1.05, "ORD_3", 60),
+            (False, 0.0, "ORD_4_FAIL", 0),  # 4th leg fails!
+            (True, 1.06, "ORD_RB_3", 60),    # Rollback Short Leg 3 (shorts rolled back first)
+            (True, 0.54, "ORD_RB_1", 60),    # Rollback Wing Leg 1
+            (True, 0.54, "ORD_RB_2", 60),    # Rollback Wing Leg 2
         ]
 
         self.btc_strategy.execute_iron_condor()
@@ -136,13 +144,14 @@ class TestCryptoIronCondorHardened(unittest.TestCase):
     @patch("strategies_global.scripts.BTC_Daily_Iron_Condor_Delta.get_current_ist_time")
     @patch.object(
         BTCDailyIronCondor,
-        "get_quote_ltp",
-        side_effect=lambda s: 1.85 if "CE" in s else 1.0,
+        "get_quote_data",
+        side_effect=lambda s: {"ask": 1.85, "bid": 1.80, "ltp": 1.85, "spread": 0.02} if "CE" in s else {"ask": 1.0, "bid": 0.98, "ltp": 1.0, "spread": 0.02},
     )
     @patch.object(BTCDailyIronCondor, "place_and_verify_order")
-    def test_manage_active_positions_stop_loss_verified_unwind(self, mock_pvo, mock_ltp, mock_time):
+    def test_manage_active_positions_stop_loss_verified_unwind(self, mock_pvo, mock_qd, mock_time):
         from datetime import time
         mock_time.return_value = time(11, 0)
+        self.btc_strategy.sl_confirmer.need = 1
         self.btc_strategy.trade_active = True
         self.btc_strategy.positions = {
             "BTC_SHORT_CE": {
@@ -182,8 +191,8 @@ class TestCryptoIronCondorHardened(unittest.TestCase):
         # 1. Close tested short call (BUY) -> verified
         # 2. Close protective long call wing (SELL) -> verified
         mock_pvo.side_effect = [
-            (True, 1.85, "ORD_SL_BUY"),
-            (True, 0.70, "ORD_WING_SELL"),
+            (True, 1.85, "ORD_SL_BUY", 60),
+            (True, 0.70, "ORD_WING_SELL", 60),
         ]
 
         self.btc_strategy.manage_active_positions()
@@ -256,7 +265,7 @@ class TestCryptoIronCondorHardened(unittest.TestCase):
         # Short-First ordering test:
         # Long wings must NOT be closed before short legs!
         mock_live_qty.return_value = 60.0
-        mock_pvo.return_value = (True, 10.0, "ORD_EXIT")
+        mock_pvo.return_value = (True, 10.0, "ORD_EXIT", 60)
 
         self.btc_strategy.trade_active = True
         self.btc_strategy.positions = {
@@ -371,7 +380,7 @@ class TestCryptoIronCondorHardened(unittest.TestCase):
         self.assertEqual(self.btc_strategy.min_premium, 35.0)
         self.assertEqual(self.btc_strategy.max_spread_pct, 0.05)
         self.assertEqual(self.btc_strategy.sl_multiplier, 1.5)
-        self.assertEqual(self.btc_strategy.target_decay_pct, 0.80)
+        self.assertEqual(self.btc_strategy.target_decay_pct, 0.85)
 
         # ETH Arch A2
         self.assertEqual(self.eth_strategy.mode, "condor")
@@ -380,7 +389,7 @@ class TestCryptoIronCondorHardened(unittest.TestCase):
         self.assertEqual(self.eth_strategy.min_premium, 2.0)
         self.assertEqual(self.eth_strategy.max_spread_pct, 0.05)
         self.assertEqual(self.eth_strategy.sl_multiplier, 1.5)
-        self.assertEqual(self.eth_strategy.target_decay_pct, 0.80)
+        self.assertEqual(self.eth_strategy.target_decay_pct, 0.85)
 
     # --------------------------------------------------------------------------
     # 8. Architecture B3 (ATM Straddle with 30% SL) Tests
@@ -402,8 +411,8 @@ class TestCryptoIronCondorHardened(unittest.TestCase):
 
         # 2 legs: SHORT_CE, SHORT_PE
         mock_pvo.side_effect = [
-            (True, 150.0, "ORD_STRADDLE_CE"),
-            (True, 140.0, "ORD_STRADDLE_PE"),
+            (True, 150.0, "ORD_STRADDLE_CE", 10),
+            (True, 140.0, "ORD_STRADDLE_PE", 10),
         ]
 
         success = straddle_strategy.execute_atm_straddle()
@@ -434,9 +443,9 @@ class TestCryptoIronCondorHardened(unittest.TestCase):
 
         # Leg 1 fills, Leg 2 fails -> Rollback Leg 1
         mock_pvo.side_effect = [
-            (True, 8.50, "ORD_ETH_CE"),
-            (False, 0.0, "ORD_ETH_PE_FAIL"),
-            (True, 8.55, "ORD_ETH_RB"),
+            (True, 8.50, "ORD_ETH_CE", 10),
+            (False, 0.0, "ORD_ETH_PE_FAIL", 0),
+            (True, 8.55, "ORD_ETH_RB", 10),
         ]
 
         success = eth_straddle.execute_atm_straddle()
@@ -471,8 +480,8 @@ class TestCryptoIronCondorHardened(unittest.TestCase):
     @patch("strategies_global.scripts.BTC_Daily_Iron_Condor_Delta.get_current_ist_time")
     def test_reentry_rejected_after_1230(self, mock_time):
         from datetime import time
-        # Session 1 finishes at 12:45 IST (after 12:30 cutoff)
-        mock_time.return_value = time(12, 45)
+        # Session 1 finishes at 15:45 IST (after 15:30 cutoff)
+        mock_time.return_value = time(15, 45)
         self.btc_strategy.current_session = 1
         self.btc_strategy.trade_active = True
         self.btc_strategy.positions = {
@@ -529,7 +538,8 @@ class TestCryptoIronCondorHardened(unittest.TestCase):
                 "entry_price": 5.0,
             }
         }
-        self.btc_strategy._get_ltp_cached = MagicMock(return_value=60.0) # SL hit
+        self.btc_strategy.sl_confirmer.need = 1
+        self.btc_strategy._get_quote_cached = MagicMock(return_value={"ask": 60.0, "bid": 59.0, "ltp": 60.0, "spread": 0.02}) # SL hit
         # Broker reports 0 qty for short, 0 qty for wing (already flat)
         self.btc_strategy._get_broker_net_qty = MagicMock(side_effect=lambda sym: 0.0)
         self.btc_strategy.place_and_verify_order = MagicMock()
@@ -544,52 +554,137 @@ class TestCryptoIronCondorHardened(unittest.TestCase):
         self.assertEqual(archived_positions["WING_SYM"]["exit_reason"], "ALREADY_FLAT")
         self.btc_strategy.place_and_verify_order.assert_not_called()
 
+    def test_daily_condor_sl_confirmer_multi_tick_and_spread_guard(self):
+        # Configure 3-tick confirmation on BTC strategy
+        self.btc_strategy.sl_confirmer.need = 3
+        sym = "BTC_SHORT_TEST"
+        sl = 100.0
+
+        # Tick 1 & 2: above SL, but not confirmed yet
+        self.btc_strategy.sl_confirmer.add_tick(sym, ask=105.0, spread=0.10)
+        ok1, _ = self.btc_strategy.sl_confirmer.triggered(sym, sl)
+        self.assertFalse(ok1)
+
+        self.btc_strategy.sl_confirmer.add_tick(sym, ask=106.0, spread=0.10)
+        ok2, _ = self.btc_strategy.sl_confirmer.triggered(sym, sl)
+        self.assertFalse(ok2)
+
+        # Tick 3: confirmed!
+        self.btc_strategy.sl_confirmer.add_tick(sym, ask=107.0, spread=0.10)
+        ok3, why = self.btc_strategy.sl_confirmer.triggered(sym, sl)
+        self.assertTrue(ok3)
+        self.assertEqual(why, "3x_CONFIRMED")
+
+        # Wide spread rejection (>40%)
+        self.btc_strategy.sl_confirmer.ticks[sym] = []
+        for _ in range(3):
+            self.btc_strategy.sl_confirmer.add_tick(sym, ask=110.0, spread=0.50)
+        ok_wide, why_wide = self.btc_strategy.sl_confirmer.triggered(sym, sl)
+        self.assertFalse(ok_wide)
+        self.assertEqual(why_wide, "SPREAD_WIDE")
+
+    def test_daily_condor_rate_limiter_acquires_tokens(self):
+        # Verify rate limiter token bucket logic
+        limiter = self.btc_strategy.limiter
+        self.assertGreaterEqual(limiter.tokens, 0.0)
+        limiter.acquire()
+        self.assertTrue(hasattr(limiter, "rate"))
+        self.assertEqual(limiter.capacity, 16)
+
 
 class TestOvernightCryptoDeltaOptionsHardened(unittest.TestCase):
     def setUp(self):
-        self.host = "http://127.0.0.1:5001"
-        self.api_key = "test_key_456"
-        with patch.object(OvernightCryptoOptionsEngine, "_load_state"), patch.object(OvernightCryptoOptionsEngine, "_save_state"):
-            self.engine = OvernightCryptoOptionsEngine(
-                symbols_to_trade=["BTC"],
-                dry_run=False,
-                force_entry=False,
-                host=self.host,
-                api_key=self.api_key,
-            )
-        self.engine._save_state = MagicMock()
+        self.cfg = EngineConfig(
+            symbols=["BTC"],
+            mode="paper",
+            broker_profile="paper",
+            host="http://127.0.0.1:5001",
+            api_key="mock_key_mock_key_1234",
+            force_entry=False,
+            capital_base_inr=10000.0,
+            margin_util_cap=0.65,
+            margin_safety_mult=1.5,
+            usd_inr=88.0,
+            usd_inr_explicit=True,
+            dynamic_sizing=False,
+            sl_mult=2.0,
+            tp_pct=0.65,
+            taker_fee_bps=30.0,
+            per_order_fee_usd=0.05,
+            exit_slip_bps=10.0,
+            max_nightly_loss_inr=1500.0,
+            max_sl_per_night=2,
+            error_budget=15,
+            assets={
+                "BTC": AssetConfig(
+                    underlying="BTC",
+                    futures_symbol="BTCUSDFUT",
+                    strike_step=100.0,
+                    otm_pct=0.02,
+                    wing_width_strikes=8,
+                    contract_mult=0.001,
+                    default_lots=92,
+                    max_wing_price=65.0,
+                    max_spread_pct=0.15,
+                    max_short_spread_dollar=3.0,
+                    max_wing_spread_pct=0.25,
+                    max_wing_spread_dollar=4.5,
+                    min_depth_contracts=100,
+                )
+            },
+        )
+        self.engine = Engine(self.cfg)
 
-    @patch("requests.post")
-    def test_overnight_square_off_skips_when_broker_already_flat(self, mock_post):
-        # Positionbook returns 0 net qty for symbol
-        self.engine._get_broker_net_qty = MagicMock(return_value=0.0)
+    def test_overnight_production_self_tests_pass(self):
+        # Executes all 18 built-in production test cases
+        rc = run_self_tests()
+        self.assertEqual(rc, 0)
 
-        ok = self.engine.square_off_position("BTC19SEP2682800CE", "SELL", 92, "Test Reason")
+    def test_overnight_sl_confirmer_requires_3_ticks(self):
+        conf = SLConfirmer(need=3, window_s=20.0, max_spread=0.40, max_age=5.0)
+        ticks = []
+        # 1st tick above SL: not confirmed yet
+        conf.add_tick(ticks, ask=85.0, spread=0.10, size=50, age=0.5)
+        ok, reason = conf.triggered(ticks, sl=80.0)
+        self.assertFalse(ok)
+        self.assertEqual(reason, "NEED_MORE_TICKS")
 
+        # 2nd tick
+        conf.add_tick(ticks, ask=86.0, spread=0.10, size=50, age=0.5)
+        ok, reason = conf.triggered(ticks, sl=80.0)
+        self.assertFalse(ok)
+
+        # 3rd tick above SL: confirmed!
+        conf.add_tick(ticks, ask=87.0, spread=0.10, size=50, age=0.5)
+        ok, reason = conf.triggered(ticks, sl=80.0)
         self.assertTrue(ok)
-        # Should not make any placeorder requests
-        mock_post.assert_not_called()
+        self.assertEqual(reason, "3x_CONFIRMED")
 
-    def test_overnight_square_off_entire_condor_unwinds_shorts_first(self):
-        self.engine.state_data["assets"]["BTC"] = {
-            "active": True,
-            "lots": 92,
-            "positions": {
-                "CE_WING": {"symbol": "BTC_CE_WING", "type": "BUY", "active": True},
-                "PE_WING": {"symbol": "BTC_PE_WING", "type": "BUY", "active": True},
-                "CE_SHORT": {"symbol": "BTC_CE_SHORT", "type": "SELL", "active": True},
-                "PE_SHORT": {"symbol": "BTC_PE_SHORT", "type": "SELL", "active": True},
-            }
+    def test_overnight_sl_confirmer_rejects_wide_spread(self):
+        conf = SLConfirmer(need=3, window_s=20.0, max_spread=0.40, max_age=5.0)
+        ticks = []
+        for _ in range(3):
+            conf.add_tick(ticks, ask=90.0, spread=0.55, size=50, age=0.5)  # 55% spread > 40% cap
+        ok, reason = conf.triggered(ticks, sl=80.0)
+        self.assertFalse(ok)
+        self.assertEqual(reason, "SPREAD_WIDE")
+
+    def test_overnight_unwind_all_exact_executes_shorts_before_wings(self):
+        self.engine.state["assets"]["BTC"]["legs"] = {
+            "CE_SHORT": {"symbol": "BTC_CE_SHORT", "filled_qty": 92},
+            "PE_SHORT": {"symbol": "BTC_PE_SHORT", "filled_qty": 92},
+            "CE_WING": {"symbol": "BTC_CE_WING", "filled_qty": 92},
+            "PE_WING": {"symbol": "BTC_PE_WING", "filled_qty": 92},
         }
-
         call_order = []
-        def mock_square_off(symbol, action, qty, reason):
+
+        def mock_exit(symbol, action, qty, reason):
             call_order.append((symbol, action))
-            return True
+            return 0
 
-        self.engine.square_off_position = MagicMock(side_effect=mock_square_off)
+        self.engine._exit_symbol_marketish = MagicMock(side_effect=mock_exit)
 
-        self.engine._square_off_entire_condor("BTC", "Morning_0630_Cutoff")
+        self.engine._unwind_all_exact("BTC", "TEST_EMERGENCY")
 
         # First 2 must be shorts with BUY, last 2 must be wings with SELL
         self.assertEqual(len(call_order), 4)
@@ -598,60 +693,18 @@ class TestOvernightCryptoDeltaOptionsHardened(unittest.TestCase):
         self.assertEqual(call_order[2], ("BTC_CE_WING", "SELL"))
         self.assertEqual(call_order[3], ("BTC_PE_WING", "SELL"))
 
-        # Condor state must be closed
-        btc_state = self.engine.state_data["assets"]["BTC"]
-        self.assertFalse(btc_state["active"])
-        self.assertEqual(btc_state["exit_reason"], "Morning_0630_Cutoff")
+    def test_overnight_exit_skips_when_broker_already_flat(self):
+        # Broker positions report 0 for symbol
+        self.engine._fetch_broker_positions = MagicMock(return_value={"BTC_TEST_SYM": {"quantity": 0.0}})
+        self.engine.place_limit = MagicMock()
 
-    def test_overnight_squaring_off_retry_in_monitor_positions(self):
-        self.engine.state_data["assets"]["BTC"] = {
-            "active": True,
-            "_squaring_off": True,
-            "_square_off_reason": "CE_Short_SL_Triggered",
-            "positions": {
-                "PE_WING": {"symbol": "BTC_PE_WING", "type": "BUY", "active": True},
-            }
-        }
-
-        self.engine._square_off_entire_condor = MagicMock()
-
-        self.engine.monitor_positions()
-
-        # Should immediately invoke _square_off_entire_condor with the stored reason
-        self.engine._square_off_entire_condor.assert_called_once_with("BTC", "CE_Short_SL_Triggered")
-
-    @patch("requests.post")
-    def test_overnight_reconcile_positions_with_broker(self, mock_post):
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        # Broker positionbook shows 0 quantity for BTC_CE_SHORT
-        mock_resp.json.return_value = {
-            "status": "success",
-            "data": [
-                {"symbol": "BTC_CE_SHORT", "quantity": 0, "product": "NRML"},
-            ]
-        }
-        mock_post.return_value = mock_resp
-
-        self.engine.state_data["assets"]["BTC"] = {
-            "active": True,
-            "positions": {
-                "CE_SHORT": {
-                    "symbol": "BTC_CE_SHORT",
-                    "type": "SELL",
-                    "active": True,
-                    "exit_attempted": True,
-                },
-            }
-        }
-
-        self.engine.reconcile_positions_with_broker()
-
-        # Leg should be marked inactive and asset marked inactive
-        btc_state = self.engine.state_data["assets"]["BTC"]
-        self.assertFalse(btc_state["positions"]["CE_SHORT"]["active"])
-        self.assertFalse(btc_state["active"])
+        # In live mode
+        self.engine.paper = False
+        leftover, _ = self.engine._exit_symbol_marketish("BTC_TEST_SYM", "BUY", 92, "TEST_FLAT")
+        self.assertEqual(leftover, 0)
+        self.engine.place_limit.assert_not_called()
 
 
 if __name__ == "__main__":
     unittest.main()
+

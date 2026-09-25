@@ -1,0 +1,462 @@
+{
+  "version": 2,
+  "strategy": "Overnight_Crypto_Delta_Options",
+  "session": "20260923",
+  "broker_profile": "live",
+  "assets": {
+    "BTC": {
+      "active": false,
+      "entry_done": true,
+      "entry_skipped_reason": null,
+      "expiry_date": "24-SEP-26",
+      "expiry_iso": "2026-09-24",
+      "entry_time": "2026-09-23T22:01:11.062159+05:30",
+      "exit_time": "2026-09-24T06:30:17.533037+05:30",
+      "exit_reason": "Ladder_0630_0700",
+      "lots_requested": 92,
+      "initial_net_credit": 14.73,
+      "target_profit_value": 9.58,
+      "fees_entry_usd": 0.34,
+      "fees_exit_est_usd": 0.34,
+      "realized_pnl_usd": 7.07,
+      "sl_count": 0,
+      "ce_exit_time": null,
+      "ce_exit_reason": null,
+      "pe_exit_time": null,
+      "pe_exit_reason": null,
+      "legs": {
+        "CE_WING": {
+          "symbol": "BTC24SEP2686000CE",
+          "side": "BUY",
+          "status": "FILLED",
+          "requested_qty": 92,
+          "filled_qty": 92,
+          "avg_price": 69.95,
+          "fill_estimated": false,
+          "order_ids": [
+            "26092302047664"
+          ],
+          "idem_key": "20260923:BTC:CE_WING:entry",
+          "active": false,
+          "exit_attempted": true,
+          "exited_qty": 92,
+          "exit_avg": 23.12,
+          "sl_price": 0.0
+        },
+        "PE_WING": {
+          "symbol": "BTC24SEP2682400PE",
+          "side": "BUY",
+          "status": "FILLED",
+          "requested_qty": 92,
+          "filled_qty": 92,
+          "avg_price": 92.73,
+          "fill_estimated": false,
+          "order_ids": [
+            "26092319145882"
+          ],
+          "idem_key": "20260923:BTC:PE_WING:entry",
+          "active": false,
+          "exit_attempted": true,
+          "exited_qty": 92,
+          "exit_avg": 12.63,
+          "sl_price": 0.0
+        },
+        "CE_SHORT": {
+          "symbol": "BTC24SEP2685200CE",
+          "side": "SELL",
+          "status": "FILLED",
+          "requested_qty": 92,
+          "filled_qty": 92,
+          "avg_price": 168.85,
+          "fill_estimated": false,
+          "order_ids": [
+            "26092359983210"
+          ],
+          "idem_key": "20260923:BTC:CE_SHORT:entry",
+          "active": false,
+          "exit_attempted": true,
+          "exited_qty": 92,
+          "exit_avg": 64.89,
+          "sl_price": 337.7
+        },
+        "PE_SHORT": {
+          "symbol": "BTC24SEP2683200PE",
+          "side": "SELL",
+          "status": "FILLED",
+          "requested_qty": 92,
+          "filled_qty": 92,
+          "avg_price": 157.63,
+          "fill_estimated": false,
+          "order_ids": [
+            "26092389191053"
+          ],
+          "idem_key": "20260923:BTC:PE_SHORT:entry",
+          "active": false,
+          "exit_attempted": true,
+          "exited_qty": 92,
+          "exit_avg": 55.24,
+          "sl_price": 315.26
+        }
+      },
+      "pending_exit": null,
+      "sl_ticks": {
+        "CE_SHORT": [
+          {
+            "ts": 1790211482.1499553,
+            "ask": 64.0,
+            "spread": 0.046875,
+            "size": 6431,
+            "age": 0.40079569816589355
+          },
+          {
+            "ts": 1790211497.288258,
+            "ask": 65.0,
+            "spread": 0.046153846153846156,
+            "size": 6429,
+            "age": 0.3997654914855957
+          },
+          {
+            "ts": 1790211513.2182827,
+            "ask": 65.0,
+            "spread": 0.03076923076923077,
+            "size": 6430,
+            "age": 0.3015427589416504
+          },
+          {
+            "ts": 1790211529.641368,
+            "ask": 67.0,
+            "spread": 0.04477611940298507,
+            "size": 6428,
+            "age": 0.240828275680542
+          },
+          {
+            "ts": 1790211545.7493985,
+            "ask": 67.0,
+            "spread": 0.04477611940298507,
+            "size": 6428,
+            "age": 0.21113157272338867
+          },
+          {
+            "ts": 1790211561.8487084,
+            "ask": 71.0,
+            "spread": 0.04225352112676056,
+            "size": 6425,
+            "age": 0.24413847923278809
+          },
+          {
+            "ts": 1790211578.1193125,
+            "ask": 65.0,
+            "spread": 0.046153846153846156,
+            "size": 6427,
+            "age": 0.20200538635253906
+          },
+          {
+            "ts": 1790211594.8995018,
+            "ask": 65.0,
+            "spread": 0.046153846153846156,
+            "size": 6468,
+            "age": 0.5413768291473389
+          }
+        ],
+        "PE_SHORT": [
+          {
+            "ts": 1790211482.1632879,
+            "ask": 61.0,
+            "spread": 0.04918032786885246,
+            "size": 8663,
+            "age": 0.01334691047668457
+          },
+          {
+            "ts": 1790211497.308452,
+            "ask": 60.0,
+            "spread": 0.05,
+            "size": 8712,
+            "age": 0.020209074020385742
+          },
+          {
+            "ts": 1790211513.2310503,
+            "ask": 59.0,
+            "spread": 0.05084745762711865,
+            "size": 8712,
+            "age": 0.012779712677001953
+          },
+          {
+            "ts": 1790211529.654314,
+            "ask": 57.0,
+            "spread": 0.05263157894736842,
+            "size": 8711,
+            "age": 0.012961149215698242
+          },
+          {
+            "ts": 1790211545.7647698,
+            "ask": 57.0,
+            "spread": 0.05263157894736842,
+            "size": 8711,
+            "age": 0.015385150909423828
+          },
+          {
+            "ts": 1790211561.8608623,
+            "ask": 52.0,
+            "spread": 0.038461538461538464,
+            "size": 8707,
+            "age": 0.012166500091552734
+          },
+          {
+            "ts": 1790211578.131238,
+            "ask": 57.0,
+            "spread": 0.05263157894736842,
+            "size": 8710,
+            "age": 0.01193857192993164
+          },
+          {
+            "ts": 1790211594.9115705,
+            "ask": 55.0,
+            "spread": 0.05454545454545454,
+            "size": 8751,
+            "age": 0.012081146240234375
+          }
+        ]
+      },
+      "stale_ticks": 0,
+      "entry_attempts": 0,
+      "next_entry_retry_ts": 0.0,
+      "fatal_for_night": null,
+      "unwind_phase": "DONE",
+      "last_ladder_ts": 1790211608.9094913,
+      "held_to_settle": false,
+      "settle_info": null,
+      "used_otm": 0.012,
+      "sl_mult": 2.0
+    },
+    "ETH": {
+      "active": false,
+      "entry_done": true,
+      "entry_skipped_reason": null,
+      "expiry_date": "24-SEP-26",
+      "expiry_iso": "2026-09-24",
+      "entry_time": "2026-09-23T22:00:14.677377+05:30",
+      "exit_time": "2026-09-24T06:30:34.016808+05:30",
+      "exit_reason": "Ladder_0630_0700",
+      "lots_requested": 246,
+      "initial_net_credit": 41.67,
+      "target_profit_value": 27.09,
+      "fees_entry_usd": 0.45,
+      "fees_exit_est_usd": 0.45,
+      "realized_pnl_usd": 10.1,
+      "sl_count": 0,
+      "ce_exit_time": null,
+      "ce_exit_reason": null,
+      "pe_exit_time": null,
+      "pe_exit_reason": null,
+      "legs": {
+        "CE_WING": {
+          "symbol": "ETH24SEP262720CE",
+          "side": "BUY",
+          "status": "FILLED",
+          "requested_qty": 246,
+          "filled_qty": 246,
+          "avg_price": 4.36,
+          "fill_estimated": false,
+          "order_ids": [
+            "26092311300660"
+          ],
+          "idem_key": "20260923:ETH:CE_WING:entry",
+          "active": false,
+          "exit_attempted": true,
+          "exited_qty": 246,
+          "exit_avg": 2.11,
+          "sl_price": 0.0
+        },
+        "PE_WING": {
+          "symbol": "ETH24SEP262600PE",
+          "side": "BUY",
+          "status": "FILLED",
+          "requested_qty": 246,
+          "filled_qty": 246,
+          "avg_price": 3.71,
+          "fill_estimated": false,
+          "order_ids": [
+            "26092345498869"
+          ],
+          "idem_key": "20260923:ETH:PE_WING:entry",
+          "active": false,
+          "exit_attempted": true,
+          "exited_qty": 246,
+          "exit_avg": 0.3,
+          "sl_price": 0.0
+        },
+        "CE_SHORT": {
+          "symbol": "ETH24SEP262680CE",
+          "side": "SELL",
+          "status": "FILLED",
+          "requested_qty": 246,
+          "filled_qty": 246,
+          "avg_price": 13.88,
+          "fill_estimated": false,
+          "order_ids": [
+            "26092387193424"
+          ],
+          "idem_key": "20260923:ETH:CE_SHORT:entry",
+          "active": false,
+          "exit_attempted": true,
+          "exited_qty": 246,
+          "exit_avg": 13.63,
+          "sl_price": 27.76
+        },
+        "PE_SHORT": {
+          "symbol": "ETH24SEP262640PE",
+          "side": "SELL",
+          "status": "FILLED",
+          "requested_qty": 246,
+          "filled_qty": 246,
+          "avg_price": 11.31,
+          "fill_estimated": false,
+          "order_ids": [
+            "26092327241038"
+          ],
+          "idem_key": "20260923:ETH:PE_SHORT:entry",
+          "active": false,
+          "exit_attempted": true,
+          "exited_qty": 246,
+          "exit_avg": 1.66,
+          "sl_price": 22.62
+        }
+      },
+      "pending_exit": null,
+      "sl_ticks": {
+        "CE_SHORT": [
+          {
+            "ts": 1790211483.1080835,
+            "ask": 13.6,
+            "spread": 0.022058823529411686,
+            "size": 3856,
+            "age": 0.19718050956726074
+          },
+          {
+            "ts": 1790211498.4494534,
+            "ask": 13.9,
+            "spread": 0.028776978417266213,
+            "size": 3855,
+            "age": 0.20002365112304688
+          },
+          {
+            "ts": 1790211514.9592392,
+            "ask": 14.0,
+            "spread": 0.0285714285714286,
+            "size": 3855,
+            "age": 0.3303501605987549
+          },
+          {
+            "ts": 1790211530.4881895,
+            "ask": 14.3,
+            "spread": 0.02097902097902103,
+            "size": 3853,
+            "age": 0.19696974754333496
+          },
+          {
+            "ts": 1790211547.3377483,
+            "ask": 14.5,
+            "spread": 0.02068965517241384,
+            "size": 3853,
+            "age": 0.4689621925354004
+          },
+          {
+            "ts": 1790211563.1398983,
+            "ask": 14.5,
+            "spread": 0.02068965517241384,
+            "size": 3852,
+            "age": 0.19152450561523438
+          },
+          {
+            "ts": 1790211579.588448,
+            "ask": 14.4,
+            "spread": 0.02083333333333338,
+            "size": 3852,
+            "age": 0.34070754051208496
+          },
+          {
+            "ts": 1790211595.7782626,
+            "ask": 14.3,
+            "spread": 0.02097902097902103,
+            "size": 3853,
+            "age": 0.22048497200012207
+          }
+        ],
+        "PE_SHORT": [
+          {
+            "ts": 1790211483.1211982,
+            "ask": 1.8,
+            "spread": 0.16666666666666669,
+            "size": 3632,
+            "age": 0.013129234313964844
+          },
+          {
+            "ts": 1790211498.4640942,
+            "ask": 1.7,
+            "spread": 0.11764705882352938,
+            "size": 3631,
+            "age": 0.014655113220214844
+          },
+          {
+            "ts": 1790211514.973268,
+            "ask": 1.7,
+            "spread": 0.11764705882352938,
+            "size": 3631,
+            "age": 0.014051675796508789
+          },
+          {
+            "ts": 1790211530.5000222,
+            "ask": 1.7,
+            "spread": 0.17647058823529416,
+            "size": 3629,
+            "age": 0.011845588684082031
+          },
+          {
+            "ts": 1790211547.3526037,
+            "ask": 1.6,
+            "spread": 0.1250000000000001,
+            "size": 3628,
+            "age": 0.014866352081298828
+          },
+          {
+            "ts": 1790211563.1548145,
+            "ask": 1.6,
+            "spread": 0.1250000000000001,
+            "size": 3628,
+            "age": 0.014931917190551758
+          },
+          {
+            "ts": 1790211579.6000912,
+            "ask": 1.7,
+            "spread": 0.17647058823529416,
+            "size": 3628,
+            "age": 0.011655330657958984
+          },
+          {
+            "ts": 1790211595.791856,
+            "ask": 1.7,
+            "spread": 0.17647058823529416,
+            "size": 3628,
+            "age": 0.013605117797851562
+          }
+        ]
+      },
+      "stale_ticks": 0,
+      "entry_attempts": 0,
+      "next_entry_retry_ts": 0.0,
+      "fatal_for_night": null,
+      "unwind_phase": "DONE",
+      "last_ladder_ts": 1790211617.5641937,
+      "held_to_settle": false,
+      "settle_info": null,
+      "used_otm": 0.012,
+      "sl_mult": 2.0
+    }
+  },
+  "portfolio": {
+    "sl_total": 0,
+    "halted": false,
+    "halt_reason": null
+  },
+  "updated_at": "2026-09-24T07:00:00.858980+05:30"
+}

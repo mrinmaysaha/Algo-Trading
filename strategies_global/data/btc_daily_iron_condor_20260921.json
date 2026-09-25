@@ -1,0 +1,191 @@
+{
+  "date": "2026-09-21",
+  "updated_at": "2026-09-21T13:53:36.425271+05:30",
+  "current_session": 2,
+  "session_history": [
+    {
+      "session": 1,
+      "positions": {
+        "BTC21SEP2682800CE": {
+          "leg_type": "LONG_CE",
+          "symbol": "BTC21SEP2682800CE",
+          "action": "BUY",
+          "requested_qty": 10,
+          "quantity": 10,
+          "entry_price": 48.0,
+          "status": "CLOSED",
+          "order_id": "26092150512893",
+          "stop_loss": 0.0,
+          "exit_attempted": true,
+          "exit_reason": "WING_UNWIND"
+        },
+        "BTC21SEP2679600PE": {
+          "leg_type": "LONG_PE",
+          "symbol": "BTC21SEP2679600PE",
+          "action": "BUY",
+          "requested_qty": 10,
+          "quantity": 10,
+          "entry_price": 36.0,
+          "status": "CLOSED",
+          "order_id": "26092150871158",
+          "stop_loss": 0.0,
+          "exit_attempted": true,
+          "exit_reason": "TARGET_PROFIT_DECAY"
+        },
+        "BTC21SEP2682000CE": {
+          "leg_type": "SHORT_CE",
+          "symbol": "BTC21SEP2682000CE",
+          "action": "SELL",
+          "requested_qty": 10,
+          "quantity": 10,
+          "entry_price": 118.0,
+          "status": "CLOSED",
+          "order_id": "26092164338462",
+          "stop_loss": 177.0,
+          "exit_attempted": true,
+          "exit_reason": "SL_HIT"
+        },
+        "BTC21SEP2680400PE": {
+          "leg_type": "SHORT_PE",
+          "symbol": "BTC21SEP2680400PE",
+          "action": "SELL",
+          "requested_qty": 10,
+          "quantity": 10,
+          "entry_price": 77.0,
+          "status": "CLOSED",
+          "order_id": "26092166018435",
+          "stop_loss": 115.5,
+          "exit_attempted": true,
+          "exit_reason": "TARGET_PROFIT_DECAY"
+        }
+      },
+      "exit_time": "2026-09-21T11:53:27.609105+05:30",
+      "trigger": "TARGET_PROFIT_DECAY",
+      "net_credit": 1101.43,
+      "target_profit": 936.2155
+    },
+    {
+      "session": 2,
+      "positions": {
+        "BTC21SEP2683200CE": {
+          "leg_type": "LONG_CE",
+          "symbol": "BTC21SEP2683200CE",
+          "action": "BUY",
+          "requested_qty": 10,
+          "quantity": 10,
+          "entry_price": 18.0,
+          "status": "CLOSED",
+          "order_id": "26092145968967",
+          "stop_loss": 0.0,
+          "exit_attempted": true,
+          "exit_reason": "WING_UNWIND"
+        },
+        "BTC21SEP2680000PE": {
+          "leg_type": "LONG_PE",
+          "symbol": "BTC21SEP2680000PE",
+          "action": "BUY",
+          "requested_qty": 10,
+          "quantity": 10,
+          "entry_price": 9.0,
+          "status": "CLOSED",
+          "order_id": "26092149451494",
+          "stop_loss": 0.0,
+          "exit_attempted": true,
+          "exit_reason": "WING_UNWIND"
+        },
+        "BTC21SEP2681000PE": {
+          "leg_type": "SHORT_PE",
+          "symbol": "BTC21SEP2681000PE",
+          "action": "SELL",
+          "requested_qty": 10,
+          "quantity": 10,
+          "entry_price": 39.0,
+          "status": "CLOSED",
+          "order_id": "26092198083963",
+          "stop_loss": 58.5,
+          "exit_attempted": true,
+          "exit_reason": "SL_HIT"
+        },
+        "BTC21SEP2682400CE": {
+          "leg_type": "SHORT_CE",
+          "symbol": "BTC21SEP2682400CE",
+          "action": "SELL",
+          "requested_qty": 10,
+          "quantity": 10,
+          "entry_price": 75.0,
+          "status": "CLOSED",
+          "order_id": "26092115416658",
+          "stop_loss": 112.5,
+          "exit_attempted": true,
+          "exit_reason": "SL_HIT"
+        }
+      },
+      "exit_time": "2026-09-21T13:53:36.418305+05:30",
+      "trigger": "ALL_LEGS_CLOSED",
+      "net_credit": 865.57,
+      "target_profit": 735.7345
+    }
+  ],
+  "trade_taken_today": true,
+  "trade_active": false,
+  "positions": {
+    "BTC21SEP2683200CE": {
+      "leg_type": "LONG_CE",
+      "symbol": "BTC21SEP2683200CE",
+      "action": "BUY",
+      "requested_qty": 10,
+      "quantity": 10,
+      "entry_price": 18.0,
+      "status": "CLOSED",
+      "order_id": "26092145968967",
+      "stop_loss": 0.0,
+      "exit_attempted": true,
+      "exit_reason": "WING_UNWIND"
+    },
+    "BTC21SEP2680000PE": {
+      "leg_type": "LONG_PE",
+      "symbol": "BTC21SEP2680000PE",
+      "action": "BUY",
+      "requested_qty": 10,
+      "quantity": 10,
+      "entry_price": 9.0,
+      "status": "CLOSED",
+      "order_id": "26092149451494",
+      "stop_loss": 0.0,
+      "exit_attempted": true,
+      "exit_reason": "WING_UNWIND"
+    },
+    "BTC21SEP2681000PE": {
+      "leg_type": "SHORT_PE",
+      "symbol": "BTC21SEP2681000PE",
+      "action": "SELL",
+      "requested_qty": 10,
+      "quantity": 10,
+      "entry_price": 39.0,
+      "status": "CLOSED",
+      "order_id": "26092198083963",
+      "stop_loss": 58.5,
+      "exit_attempted": true,
+      "exit_reason": "SL_HIT"
+    },
+    "BTC21SEP2682400CE": {
+      "leg_type": "SHORT_CE",
+      "symbol": "BTC21SEP2682400CE",
+      "action": "SELL",
+      "requested_qty": 10,
+      "quantity": 10,
+      "entry_price": 75.0,
+      "status": "CLOSED",
+      "order_id": "26092115416658",
+      "stop_loss": 112.5,
+      "exit_attempted": true,
+      "exit_reason": "SL_HIT"
+    }
+  },
+  "net_credit_collected": 865.57,
+  "target_profit": 735.7345,
+  "expiry_date": "21-SEP-26",
+  "entry_time": "2026-09-21T11:56:38.348454+05:30",
+  "entry_attempts": 2,
+  "last_attempt_time": 1789971994.5238225
+}

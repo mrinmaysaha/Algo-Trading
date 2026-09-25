@@ -1,0 +1,260 @@
+{
+  "date": "2026-09-22",
+  "updated_at": "2026-09-22T17:15:02.511444+05:30",
+  "current_session": 1,
+  "session_history": [
+    {
+      "session": 1,
+      "positions": {
+        "ETH22SEP262690PE": {
+          "leg_type": "LONG_PE",
+          "symbol": "ETH22SEP262690PE",
+          "action": "BUY",
+          "requested_qty": 226,
+          "quantity": 226,
+          "entry_price": 2.0,
+          "status": "CLOSED",
+          "order_id": "26092289440230",
+          "stop_loss": 0.0,
+          "exit_attempted": true,
+          "exit_price": 2.4,
+          "exit_reason": "WING_UNWIND"
+        },
+        "ETH22SEP262810CE": {
+          "leg_type": "LONG_CE",
+          "symbol": "ETH22SEP262810CE",
+          "action": "BUY",
+          "requested_qty": 226,
+          "quantity": 226,
+          "entry_price": 3.4,
+          "status": "CLOSED",
+          "order_id": "26092289881029",
+          "stop_loss": 0.0,
+          "exit_attempted": true,
+          "exit_price": 0.18,
+          "exit_reason": "TARGET_PROFIT_DECAY"
+        },
+        "ETH22SEP262770CE": {
+          "leg_type": "SHORT_CE",
+          "symbol": "ETH22SEP262770CE",
+          "action": "SELL",
+          "requested_qty": 226,
+          "quantity": 226,
+          "entry_price": 11.4,
+          "status": "CLOSED",
+          "order_id": "26092297610007",
+          "stop_loss": 17.1,
+          "exit_attempted": true,
+          "exit_price": 1.8,
+          "exit_reason": "TARGET_PROFIT_DECAY"
+        },
+        "ETH22SEP262740PE": {
+          "leg_type": "SHORT_PE",
+          "symbol": "ETH22SEP262740PE",
+          "action": "SELL",
+          "requested_qty": 226,
+          "quantity": 226,
+          "entry_price": 12.7,
+          "status": "CLOSED",
+          "order_id": "26092205414869",
+          "stop_loss": 19.049999999999997,
+          "exit_attempted": true,
+          "exit_price": 20.8,
+          "exit_reason": "SL_HIT"
+        }
+      },
+      "exit_time": "2026-09-22T10:19:12.443965+05:30",
+      "trigger": "TARGET_PROFIT_DECAY",
+      "net_credit": 41.861990000000006,
+      "target_profit": 35.5826915
+    },
+    {
+      "session": 2,
+      "positions": {
+        "ETH22SEP262790CE": {
+          "leg_type": "LONG_CE",
+          "symbol": "ETH22SEP262790CE",
+          "action": "BUY",
+          "requested_qty": 226,
+          "quantity": 226,
+          "entry_price": 0.7,
+          "status": "CLOSED",
+          "order_id": "26092226339108",
+          "stop_loss": 0.0,
+          "exit_attempted": true,
+          "exit_price": 0.95,
+          "exit_reason": "WING_UNWIND"
+        },
+        "ETH22SEP262660PE": {
+          "leg_type": "LONG_PE",
+          "symbol": "ETH22SEP262660PE",
+          "action": "BUY",
+          "requested_qty": 226,
+          "quantity": 226,
+          "entry_price": 0.3,
+          "status": "CLOSED",
+          "order_id": "26092228619025",
+          "stop_loss": 0.0,
+          "exit_attempted": true,
+          "exit_price": 0.27,
+          "exit_reason": "WING_UNWIND"
+        },
+        "ETH22SEP262710PE": {
+          "leg_type": "SHORT_PE",
+          "symbol": "ETH22SEP262710PE",
+          "action": "SELL",
+          "requested_qty": 226,
+          "quantity": 226,
+          "entry_price": 5.0,
+          "status": "CLOSED",
+          "order_id": "26092238199373",
+          "stop_loss": 7.5,
+          "exit_attempted": true,
+          "exit_price": 7.9,
+          "exit_reason": "SL_HIT"
+        },
+        "ETH22SEP262740CE": {
+          "leg_type": "SHORT_CE",
+          "symbol": "ETH22SEP262740CE",
+          "action": "SELL",
+          "requested_qty": 226,
+          "quantity": 226,
+          "entry_price": 8.6,
+          "status": "CLOSED",
+          "order_id": "26092241103038",
+          "stop_loss": 12.899999999999999,
+          "exit_attempted": true,
+          "exit_price": 12.9,
+          "exit_reason": "SL_HIT"
+        }
+      },
+      "exit_time": "2026-09-22T14:15:19.147830+05:30",
+      "trigger": "ALL_LEGS_CLOSED",
+      "net_credit": 28.177011999999998,
+      "target_profit": 23.9504602
+    },
+    {
+      "session": 1,
+      "positions": {
+        "ETH22SEP262800CE": {
+          "leg_type": "LONG_CE",
+          "symbol": "ETH22SEP262800CE",
+          "action": "BUY",
+          "requested_qty": 226,
+          "quantity": 226,
+          "entry_price": 0.35,
+          "status": "CLOSED",
+          "order_id": "26092236692057",
+          "stop_loss": 0.0,
+          "exit_attempted": true,
+          "exit_reason": "ALREADY_FLAT"
+        },
+        "ETH22SEP262690PE": {
+          "leg_type": "LONG_PE",
+          "symbol": "ETH22SEP262690PE",
+          "action": "BUY",
+          "requested_qty": 226,
+          "quantity": 226,
+          "entry_price": 0.28,
+          "status": "CLOSED",
+          "order_id": "26092237166159",
+          "stop_loss": 0.0,
+          "exit_attempted": true,
+          "exit_reason": "ALREADY_FLAT"
+        },
+        "ETH22SEP262750PE": {
+          "leg_type": "SHORT_PE",
+          "symbol": "ETH22SEP262750PE",
+          "action": "SELL",
+          "requested_qty": 226,
+          "quantity": 226,
+          "entry_price": 10.4,
+          "status": "CLOSED",
+          "order_id": "26092261376994",
+          "stop_loss": 20.8,
+          "exit_attempted": true,
+          "exit_reason": "ALREADY_FLAT"
+        },
+        "ETH22SEP262740CE": {
+          "leg_type": "SHORT_CE",
+          "symbol": "ETH22SEP262740CE",
+          "action": "SELL",
+          "requested_qty": 226,
+          "quantity": 226,
+          "entry_price": 9.3,
+          "status": "CLOSED",
+          "order_id": "26092280911824",
+          "stop_loss": 18.6,
+          "exit_attempted": true,
+          "exit_reason": "ALREADY_FLAT"
+        }
+      },
+      "exit_time": "2026-09-22T17:15:02.463092+05:30",
+      "trigger": "EOD_FORCE_EXIT",
+      "net_credit": 42.76036260000001,
+      "target_profit": 36.346308210000004
+    }
+  ],
+  "trade_taken_today": true,
+  "trade_active": false,
+  "positions": {
+    "ETH22SEP262800CE": {
+      "leg_type": "LONG_CE",
+      "symbol": "ETH22SEP262800CE",
+      "action": "BUY",
+      "requested_qty": 226,
+      "quantity": 226,
+      "entry_price": 0.35,
+      "status": "CLOSED",
+      "order_id": "26092236692057",
+      "stop_loss": 0.0,
+      "exit_attempted": true,
+      "exit_reason": "ALREADY_FLAT"
+    },
+    "ETH22SEP262690PE": {
+      "leg_type": "LONG_PE",
+      "symbol": "ETH22SEP262690PE",
+      "action": "BUY",
+      "requested_qty": 226,
+      "quantity": 226,
+      "entry_price": 0.28,
+      "status": "CLOSED",
+      "order_id": "26092237166159",
+      "stop_loss": 0.0,
+      "exit_attempted": true,
+      "exit_reason": "ALREADY_FLAT"
+    },
+    "ETH22SEP262750PE": {
+      "leg_type": "SHORT_PE",
+      "symbol": "ETH22SEP262750PE",
+      "action": "SELL",
+      "requested_qty": 226,
+      "quantity": 226,
+      "entry_price": 10.4,
+      "status": "CLOSED",
+      "order_id": "26092261376994",
+      "stop_loss": 20.8,
+      "exit_attempted": true,
+      "exit_reason": "ALREADY_FLAT"
+    },
+    "ETH22SEP262740CE": {
+      "leg_type": "SHORT_CE",
+      "symbol": "ETH22SEP262740CE",
+      "action": "SELL",
+      "requested_qty": 226,
+      "quantity": 226,
+      "entry_price": 9.3,
+      "status": "CLOSED",
+      "order_id": "26092280911824",
+      "stop_loss": 18.6,
+      "exit_attempted": true,
+      "exit_reason": "ALREADY_FLAT"
+    }
+  },
+  "net_credit_collected": 42.76036260000001,
+  "target_profit": 36.346308210000004,
+  "expiry_date": "22-SEP-26",
+  "entry_time": "2026-09-22T15:12:11.766166+05:30",
+  "entry_attempts": 1,
+  "last_attempt_time": 1790070123.1468642
+}

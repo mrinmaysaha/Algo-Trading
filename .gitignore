@@ -40,6 +40,7 @@ tmp/
 *.log
 *.jsonl
 *.tmp
+*.lock
 checkpoint.txt
 checkpoints.json
 log/ws_proxy_stats.json

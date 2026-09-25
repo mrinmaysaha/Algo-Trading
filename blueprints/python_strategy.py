@@ -447,6 +447,46 @@ def start_strategy_process(strategy_id):
         if not config:
             return False, "Strategy configuration not found"
 
+        # Check if an instance is already running on the OS (detached or from prior run)
+        file_name = config.get("file_name") or Path(config.get("file_path", "")).name
+        stored_pid = config.get("pid")
+        adopted_pid = None
+
+        if stored_pid and check_process_status(stored_pid):
+            adopted_pid = stored_pid
+        elif file_name:
+            try:
+                for p in psutil.process_iter(["pid", "cmdline"]):
+                    cmd = p.info.get("cmdline") or []
+                    if any(file_name in arg for arg in cmd) and p.pid != os.getpid():
+                        adopted_pid = p.pid
+                        break
+            except Exception as e:
+                logger.debug(f"psutil process scan notice: {e}")
+
+        if adopted_pid:
+            ist_now = get_ist_time()
+            RUNNING_STRATEGIES[strategy_id] = {
+                "process": None,
+                "pid": adopted_pid,
+                "started_at": ist_now,
+                "log_file": str(LOGS_DIR / f"{strategy_id}_adopted.log"),
+            }
+            config["is_running"] = True
+            config["pid"] = adopted_pid
+            config["last_started"] = ist_now.isoformat()
+            config.pop("is_error", None)
+            config.pop("error_message", None)
+            config.pop("error_time", None)
+            config.pop("manually_stopped", None)
+            save_configs()
+            broadcast_status_update(strategy_id, "running", f"Adopted running PID {adopted_pid}")
+            logger.info(f"Adopted already running strategy {strategy_id} (PID {adopted_pid})")
+            return (
+                True,
+                f"Strategy already running with PID {adopted_pid}, adopted successfully",
+            )
+
         file_path = Path(str(config["file_path"]).replace("\\", "/"))
         if not file_path.exists():
             # Fallback check relative to STRATEGIES_DIR / file_name if relative path resolution fails
@@ -1463,20 +1503,27 @@ def is_within_schedule_time(strategy_id: str) -> bool:
         else:
             user_end_ms = midnight_ms + 86_399_000
 
+        # Handle continuous 24/7 schedules (e.g. 00:00 - 23:59 / 00:00)
+        is_continuous_24_7 = (schedule_start == "00:00" and (not schedule_stop or schedule_stop in ("23:59", "00:00")))
+        is_overnight = user_start_ms > user_end_ms
+        if is_continuous_24_7:
+            in_user_window = True
+        elif is_overnight:
+            in_user_window = (now_ms >= user_start_ms) or (now_ms <= user_end_ms)
+        else:
+            in_user_window = user_start_ms <= now_ms <= user_end_ms
+
+        if not in_user_window:
+            return False
+
         # Exchange-aware: intersect with today's effective session window
         if exch in CRYPTO_EXCHANGES:
-            effective_start, effective_end = user_start_ms, user_end_ms
+            return True
         else:
             window = get_effective_session_window(now.date(), exch)
             if not window:
                 return False  # exchange closed today
-            effective_start = max(user_start_ms, window["start_ms"])
-            effective_end = min(user_end_ms, window["end_ms"])
-            if effective_start > effective_end:
-                # User's window doesn't overlap today's session
-                return False
-
-        return effective_start <= now_ms <= effective_end
+            return window["start_ms"] <= now_ms <= window["end_ms"]
 
     except Exception as e:
         logger.exception(f"Error checking schedule time for {strategy_id}: {e}")
@@ -1519,10 +1566,26 @@ def market_hours_enforcer():
             if status.get("is_trading"):
                 # Exchange tradeable today — check if scheduled strategy should be running
                 is_running = _is_strategy_running(strategy_id, config)
+
+                # For overnight schedules in early morning before stop time, the session began yesterday
+                effective_days = {today_day}
+                sched_start = config.get("schedule_start", "")
+                sched_stop = config.get("schedule_stop", "")
+                if sched_start and sched_stop:
+                    try:
+                        sh, sm = map(int, sched_start.split(":"))
+                        eh, em = map(int, sched_stop.split(":"))
+                        is_overnight = (sh > eh) or (sh == eh and sm > em)
+                        if is_overnight and (now.hour < eh or (now.hour == eh and now.minute <= em)):
+                            yesterday_day = day_names[(now.weekday() - 1) % 7]
+                            effective_days.add(yesterday_day)
+                    except Exception:
+                        pass
+
                 if (
                     not is_running
                     and not config.get("manually_stopped")
-                    and (not schedule_days or today_day in schedule_days)
+                    and (not schedule_days or any(d in schedule_days for d in effective_days))
                     and is_within_schedule_time(strategy_id)
                 ):
                     paused_reason = config.get("paused_reason") or "server_restart"
@@ -1679,12 +1742,21 @@ def schedule_strategy(strategy_id, start_time, stop_time=None, days=None):
         replace_existing=True,
     )
 
-    # Schedule stop if provided (always runs for safety)
-    if stop_time:
+    # Continuous 24/7 check: if 00:00 to 23:59 (or 00:00 to 00:00), suppress daily midnight stop cron
+    is_continuous_24_7 = (start_time == "00:00" and (not stop_time or stop_time in ("23:59", "00:00")))
+    if stop_time and not is_continuous_24_7:
         hour, minute = map(int, stop_time.split(":"))
+        hour_start, min_start = map(int, start_time.split(":"))
+        is_overnight = (hour_start > hour) or (hour_start == hour and min_start > minute)
+        if is_overnight:
+            day_order = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+            stop_days = [day_order[(day_order.index(d) + 1) % 7] for d in days if d in day_order]
+        else:
+            stop_days = days
+
         SCHEDULER.add_job(
             func=lambda: scheduled_stop_strategy(strategy_id),
-            trigger=CronTrigger(hour=hour, minute=minute, day_of_week=",".join(days), timezone=IST),
+            trigger=CronTrigger(hour=hour, minute=minute, day_of_week=",".join(stop_days), timezone=IST),
             id=stop_job_id,
             replace_existing=True,
         )
@@ -1735,6 +1807,27 @@ def index():
             if not config["is_running"]:
                 config["pid"] = None
                 save_configs()
+        else:
+            # Auto-adopt running OS process if PID was lost or detached
+            file_name = config.get("file_name") or Path(config.get("file_path", "")).name
+            if file_name:
+                try:
+                    for p in psutil.process_iter(["pid", "cmdline"]):
+                        cmd = p.info.get("cmdline") or []
+                        if any(file_name in arg for arg in cmd) and p.pid != os.getpid():
+                            config["pid"] = p.pid
+                            config["is_running"] = True
+                            if sid not in RUNNING_STRATEGIES:
+                                RUNNING_STRATEGIES[sid] = {
+                                    "process": None,
+                                    "pid": p.pid,
+                                    "started_at": get_ist_time(),
+                                    "log_file": str(LOGS_DIR / f"{sid}_adopted.log"),
+                                }
+                            save_configs()
+                            break
+                except Exception as e:
+                    logger.debug(f"psutil process scan in index notice: {e}")
 
         strategy_info = {
             "id": sid,
@@ -2013,7 +2106,9 @@ def start_strategy(strategy_id):
             next_start = f"next scheduled day ({', '.join(next_days)}) at {schedule_start} IST"
         else:
             reason = f"Outside schedule hours ({schedule_start} - {schedule_stop} IST)"
-            if now < start_time:
+            if stop_time < start_time:
+                next_start = f"today at {schedule_start} IST"
+            elif now < start_time:
                 next_start = f"today at {schedule_start} IST"
             else:
                 next_start = f"next scheduled day at {schedule_start} IST"
@@ -2459,11 +2554,17 @@ def get_schedule_status(config):
 
     # Today is a scheduled day - check time
     if schedule_start and schedule_stop:
-        if current_time < schedule_start:
-            return "scheduled", f"Starts today at {schedule_start} IST"
-        elif current_time > schedule_stop:
-            # After today's window, will start next scheduled day
-            return "scheduled", f"Next scheduled day at {schedule_start} IST"
+        if schedule_stop < schedule_start:
+            # Overnight schedule crossing midnight (e.g. 21:45 - 06:45)
+            # Daytime gap between stop and start is outside window
+            if schedule_stop < current_time < schedule_start:
+                return "scheduled", f"Starts today at {schedule_start} IST"
+        else:
+            if current_time < schedule_start:
+                return "scheduled", f"Starts today at {schedule_start} IST"
+            elif current_time > schedule_stop:
+                # After today's window, will start next scheduled day
+                return "scheduled", f"Next scheduled day at {schedule_start} IST"
 
     # Within schedule window
     return "scheduled", f"Active window: {schedule_start} - {schedule_stop} IST"

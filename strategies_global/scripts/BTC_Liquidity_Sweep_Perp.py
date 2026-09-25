@@ -55,16 +55,24 @@ SYMBOL = "BTCUSDFUT"
 DELTA_SYMBOL = "BTCUSD"
 EXCHANGE = "CRYPTO"
 PRODUCT = "NRML"
-TIMEFRAME = "15m"
+TIMEFRAME = "1h"
 
-SWING_LOOKBACK_BARS = int(os.getenv("BTC_SWING_LOOKBACK", "36"))     # 36 bars = 9 hours rolling swing (Filters chop)
-MIN_REJECTION_WICK_RATIO = float(os.getenv("BTC_WICK_RATIO", "0.35")) # 35% wick rejection minimum
-MAX_LEVERAGE = float(os.getenv("BTC_MAX_LEVERAGE", "12.0"))           # Strict 12x leverage cap to eliminate high brokerage
-MIN_RISK_DIST_PCT = float(os.getenv("BTC_MIN_RISK_DIST", "0.0025"))   # 0.25% minimum stop distance to reject micro-wicks
-MAX_HOLD_BARS = int(os.getenv("BTC_MAX_HOLD_BARS", "28"))             # 28 bars = 7 hours max intraday hold
+SWING_LOOKBACK_BARS = int(os.getenv("BTC_SWING_LOOKBACK", "24"))       # 24 1H bars = 24 hours rolling swing
+MIN_REJECTION_WICK_RATIO = float(os.getenv("BTC_WICK_RATIO", "0.30")) # Confirmed 30% rejection wick
+MIN_VOLUME_RATIO = float(os.getenv("BTC_MIN_VOLUME_RATIO", "0.75"))
+MIN_SWEEP_DEPTH_PCT = float(os.getenv("BTC_MIN_SWEEP_DEPTH", "0.0003"))
+ENABLE_EMA_FILTER = True                                               # Enforce 4H Macro Trend (50 > 200 EMA)
+EMA_FAST_SPAN = int(os.getenv("BTC_EMA_FAST", "50"))
+EMA_SLOW_SPAN = int(os.getenv("BTC_EMA_SLOW", "200"))
+TARGET_RR = float(os.getenv("BTC_TARGET_RR", "2.5"))                   # 1:2.5 Risk-to-Reward
+EXECUTION_ORDER_TYPE = os.getenv("BTC_ORDER_TYPE", "MARKET")
+
+MAX_LEVERAGE = float(os.getenv("BTC_MAX_LEVERAGE", "12.0"))             # Strict 12x leverage cap
+MIN_RISK_DIST_PCT = float(os.getenv("BTC_MIN_RISK_DIST", "0.0020"))     # 0.20% minimum stop distance
+MAX_HOLD_BARS = int(os.getenv("BTC_MAX_HOLD_BARS", "72"))               # 72 hours max hold
 CAPITAL_BASE_INR = float(os.getenv("CAPITAL_BASE_INR", os.getenv("BTC_FUT_CAPITAL_INR", "10000.0")))
 USD_INR_RATE = float(os.getenv("USD_INR_RATE", "88.0"))
-RISK_PER_TRADE_PCT = float(os.getenv("BTC_RISK_PER_TRADE", "0.06"))   # Risk 6% of capital per trade with 12x cap
+RISK_PER_TRADE_PCT = float(os.getenv("BTC_RISK_PER_TRADE", "0.05"))     # 5% capital risk per trade
 
 def get_state_file_path() -> Path:
     base_dir = Path(__file__).resolve().parent.parent / "data"
@@ -161,34 +169,40 @@ class BTCLiquiditySweep:
             logger.error(f"[STATE SAVE ERROR] {e}")
 
     def get_market_candles(self, limit: int = 100) -> Optional[pd.DataFrame]:
+        now_epoch = int(time.time())
         try:
             url = f"{self.host}/api/v1/history"
             payload = {
                 "apikey": self.api_key,
                 "symbol": SYMBOL,
                 "exchange": EXCHANGE,
-                "interval": "15m",
-                "start_date": (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%d"),
+                "interval": "1h",
+                "start_date": (datetime.now(timezone.utc) - timedelta(days=15)).strftime("%Y-%m-%d"),
                 "end_date": datetime.now(timezone.utc).strftime("%Y-%m-%d")
             }
             res = requests.post(url, json=payload, timeout=6)
             if res.status_code == 200:
                 d = res.json().get("data", [])
-                if d and len(d) >= SWING_LOOKBACK_BARS + 5:
+                if d:
                     df = pd.DataFrame(d)
                     df.columns = [str(c).lower() for c in df.columns]
                     for col in ['open', 'high', 'low', 'close', 'volume']:
                         if col in df.columns:
                             df[col] = df[col].astype(float)
-                    return df.tail(limit).reset_index(drop=True)
-        except Exception:
-            pass
+                    if 'volume' in df.columns:
+                        df = df[df['volume'] > 0]
+                    if 'timestamp' in df.columns:
+                        df = df[df['timestamp'] <= now_epoch]
+                    if len(df) >= SWING_LOOKBACK_BARS + 5:
+                        return df.tail(limit).reset_index(drop=True)
+        except Exception as e:
+            logger.warning(f"History fetch notice: {e}")
 
         try:
             now = int(time.time())
-            start = now - (5 * 86400)
+            start = now - (15 * 86400)
             r = requests.get("https://api.india.delta.exchange/v2/history/candles",
-                             params={"symbol": DELTA_SYMBOL, "resolution": "15m", "start": start, "end": now},
+                             params={"symbol": DELTA_SYMBOL, "resolution": "1h", "start": start, "end": now},
                              timeout=8)
             if r.status_code == 200:
                 c = r.json().get("result", [])
@@ -197,9 +211,32 @@ class BTCLiquiditySweep:
                     for col in ['open', 'high', 'low', 'close', 'volume']:
                         if col in df.columns:
                             df[col] = df[col].astype(float)
-                    return df.tail(limit).reset_index(drop=True)
+                    if 'volume' in df.columns:
+                        df = df[df['volume'] > 0]
+                    if len(df) >= SWING_LOOKBACK_BARS + 5:
+                        return df.tail(limit).reset_index(drop=True)
         except Exception as e:
             logger.warning(f"Candle fetch fallback notice: {e}")
+        return None
+
+    def get_4h_candles(self, limit: int = 60) -> Optional[pd.DataFrame]:
+        try:
+            now = int(time.time())
+            start = now - (60 * 86400)
+            r = requests.get("https://api.india.delta.exchange/v2/history/candles",
+                             params={"symbol": DELTA_SYMBOL, "resolution": "4h", "start": start, "end": now},
+                             timeout=8)
+            if r.status_code == 200:
+                c = r.json().get("result", [])
+                if c:
+                    df = pd.DataFrame(c).drop_duplicates('time').sort_values('time').reset_index(drop=True)
+                    for col in ['open', 'high', 'low', 'close', 'volume']:
+                        if col in df.columns:
+                            df[col] = df[col].astype(float)
+                    if len(df) >= 30:
+                        return df.tail(limit).reset_index(drop=True)
+        except Exception as e:
+            logger.warning(f"4H Candle fetch notice: {e}")
         return None
 
     def place_order(self, action: str, quantity: int, price: Optional[float] = None) -> Dict[str, Any]:
@@ -251,25 +288,45 @@ class BTCLiquiditySweep:
             pass
         return 0, 0.0
 
-    def evaluate_signals(self, df: pd.DataFrame):
+    def evaluate_signals(self, df: pd.DataFrame, df_4h: Optional[pd.DataFrame] = None):
         highs = df['high'].values
         lows = df['low'].values
         closes = df['close'].values
         opens = df['open'].values
         n = len(df)
 
-        curr_bar = n - 1
-        curr_o = opens[curr_bar]
-        curr_h = highs[curr_bar]
-        curr_l = lows[curr_bar]
-        curr_c = closes[curr_bar]
+        now_epoch = int(time.time())
+        # Evaluate on the last completed/closed 1H candle to prevent false intra-bar signals
+        eval_bar = n - 1
+        if 'timestamp' in df.columns and n >= SWING_LOOKBACK_BARS + 3:
+            last_bar_ts = df['timestamp'].iloc[-1]
+            if now_epoch < (last_bar_ts + 3600): # Bar still active (< 1 hour old)
+                eval_bar = n - 2
+
+        curr_o = opens[eval_bar]
+        curr_h = highs[eval_bar]
+        curr_l = lows[eval_bar]
+        curr_c = closes[eval_bar]
+        latest_spot = closes[-1] # Always monitor active positions against latest spot
         candle_range = max(curr_h - curr_l, 1e-5)
 
-        ema200_series = pd.Series(closes).ewm(span=200, adjust=False).mean()
-        curr_ema = float(ema200_series.iloc[curr_bar])
+        # 4H Macro Trend Calculation (50 fast vs 200 slow)
+        macro_bull = True
+        macro_bear = True
+        curr_4h_ema50 = 0.0
+        curr_4h_ema200 = 0.0
+        if df_4h is not None and len(df_4h) >= 30:
+            c4 = df_4h['close']
+            ema50_4h = c4.ewm(span=EMA_FAST_SPAN, adjust=False).mean()
+            ema200_4h = c4.ewm(span=EMA_SLOW_SPAN, adjust=False).mean()
+            curr_4h_ema50 = float(ema50_4h.iloc[-1])
+            curr_4h_ema200 = float(ema200_4h.iloc[-1])
+            macro_bull = curr_4h_ema50 > curr_4h_ema200
+            macro_bear = curr_4h_ema50 < curr_4h_ema200
 
-        lookback_slice_high = highs[curr_bar - SWING_LOOKBACK_BARS: curr_bar]
-        lookback_slice_low = lows[curr_bar - SWING_LOOKBACK_BARS: curr_bar]
+        # Rolling 24-Hour Swing High / Low strictly prior to evaluation candle
+        lookback_slice_high = highs[eval_bar - SWING_LOOKBACK_BARS : eval_bar]
+        lookback_slice_low = lows[eval_bar - SWING_LOOKBACK_BARS : eval_bar]
         swing_high = float(np.max(lookback_slice_high))
         swing_low = float(np.min(lookback_slice_low))
 
@@ -289,11 +346,11 @@ class BTCLiquiditySweep:
                 self._save_state()
                 return
 
-            logger.info(f"[MONITORING] {self.position_side} {self.rem_qty}/{self.position_qty} lots | Spot=${curr_c:.2f} | MTM PnL=${pnl:.2f} | Hold={self.bars_held}/{MAX_HOLD_BARS} bars | SL=${self.stop_loss:.2f} | TP1=${self.target1_p:.2f} | TP2=${self.target2_p:.2f}")
+            logger.info(f"[MONITORING] {self.position_side} {self.rem_qty}/{self.position_qty} lots | Spot=${latest_spot:.2f} | MTM PnL=${pnl:.2f} | Hold={self.bars_held}/{MAX_HOLD_BARS} bars | SL=${self.stop_loss:.2f} | TP1=${self.target1_p:.2f} | TP2=${self.target2_p:.2f}")
 
             if self.position_side == "LONG":
                 # 1. Milestone TP1 (+1.0R): Close 33% lots & Lock Stop Loss to Entry + fees
-                if not self.tp1_hit and curr_h >= self.target1_p:
+                if not self.tp1_hit and latest_spot >= self.target1_p:
                     lots_to_close = max(1, min(int(self.position_qty * 0.33), self.rem_qty))
                     logger.info(f"🎯 [TP1 HIT (+1.0R)] Closing {lots_to_close} lots @ ${self.target1_p:.2f} | Locking Stop Loss to Breakeven!")
                     res = self.place_order("SELL", lots_to_close)
@@ -306,7 +363,7 @@ class BTCLiquiditySweep:
                         logger.error(f"❌ [TP1 ORDER FAILED] {res}. Will retry on next check.")
 
                 # 2. Milestone TP2 (+2.0R): Close 33% lots & Ratchet Stop Loss to +1.0R locked profit
-                if self.tp1_hit and not self.tp2_hit and curr_h >= self.target2_p:
+                if self.tp1_hit and not self.tp2_hit and latest_spot >= self.target2_p:
                     lots_to_close = max(1, min(int(self.position_qty * 0.33), self.rem_qty))
                     logger.info(f"🎯 [TP2 HIT (+2.0R)] Closing {lots_to_close} lots @ ${self.target2_p:.2f} | Ratcheting Stop Loss to +1.0R (${self.entry_price + (1.0 * risk_dist):.2f})!")
                     res = self.place_order("SELL", lots_to_close)
@@ -319,7 +376,7 @@ class BTCLiquiditySweep:
                         logger.error(f"❌ [TP2 ORDER FAILED] {res}. Will retry on next check.")
 
                 # 3. Final TP3 (+3.5R): Close remaining runner lots
-                if curr_h >= self.target3_p and self.rem_qty > 0:
+                if latest_spot >= self.target3_p and self.rem_qty > 0:
                     logger.info(f"🚀 [TP3 RUNNER HIT (+3.5R)] Closing remaining {self.rem_qty} lots @ ${self.target3_p:.2f}!")
                     res = self.place_order("SELL", self.rem_qty)
                     if res.get("status") == "success":
@@ -332,8 +389,8 @@ class BTCLiquiditySweep:
                         logger.error(f"❌ [TP3 ORDER FAILED] {res}. Will retry on next bar.")
 
                 # 4. Stop Loss / Ratchet Stop hit
-                elif curr_l <= self.stop_loss and self.rem_qty > 0:
-                    logger.info(f"🛡️ [STOP HIT] Price (${curr_l:.2f}) breached SL (${self.stop_loss:.2f}). Exiting {self.rem_qty} lots.")
+                elif latest_spot <= self.stop_loss and self.rem_qty > 0:
+                    logger.info(f"🛡️ [STOP HIT] Price (${latest_spot:.2f}) breached SL (${self.stop_loss:.2f}). Exiting {self.rem_qty} lots.")
                     res = self.place_order("SELL", self.rem_qty)
                     if res.get("status") == "success":
                         self.in_position = False
@@ -359,7 +416,7 @@ class BTCLiquiditySweep:
 
             elif self.position_side == "SHORT":
                 # 1. Milestone TP1 (+1.0R): Close 33% lots & Lock Stop Loss to Entry + fees
-                if not self.tp1_hit and curr_l <= self.target1_p:
+                if not self.tp1_hit and latest_spot <= self.target1_p:
                     lots_to_close = max(1, min(int(self.position_qty * 0.33), self.rem_qty))
                     logger.info(f"🎯 [TP1 HIT (+1.0R)] Closing {lots_to_close} lots @ ${self.target1_p:.2f} | Locking Stop Loss to Breakeven!")
                     res = self.place_order("BUY", lots_to_close)
@@ -372,7 +429,7 @@ class BTCLiquiditySweep:
                         logger.error(f"❌ [TP1 ORDER FAILED] {res}. Will retry on next check.")
 
                 # 2. Milestone TP2 (+2.0R): Close 33% lots & Ratchet Stop Loss to +1.0R locked profit
-                if self.tp1_hit and not self.tp2_hit and curr_l <= self.target2_p:
+                if self.tp1_hit and not self.tp2_hit and latest_spot <= self.target2_p:
                     lots_to_close = max(1, min(int(self.position_qty * 0.33), self.rem_qty))
                     logger.info(f"🎯 [TP2 HIT (+2.0R)] Closing {lots_to_close} lots @ ${self.target2_p:.2f} | Ratcheting Stop Loss to +1.0R (${self.entry_price - (1.0 * risk_dist):.2f})!")
                     res = self.place_order("BUY", lots_to_close)
@@ -385,7 +442,7 @@ class BTCLiquiditySweep:
                         logger.error(f"❌ [TP2 ORDER FAILED] {res}. Will retry on next check.")
 
                 # 3. Final TP3 (+3.5R): Close remaining runner lots
-                if curr_l <= self.target3_p and self.rem_qty > 0:
+                if latest_spot <= self.target3_p and self.rem_qty > 0:
                     logger.info(f"🚀 [TP3 RUNNER HIT (+3.5R)] Closing remaining {self.rem_qty} lots @ ${self.target3_p:.2f}!")
                     res = self.place_order("BUY", self.rem_qty)
                     if res.get("status") == "success":
@@ -398,8 +455,8 @@ class BTCLiquiditySweep:
                         logger.error(f"❌ [TP3 ORDER FAILED] {res}. Will retry on next bar.")
 
                 # 4. Stop Loss / Ratchet Stop hit
-                elif curr_h >= self.stop_loss and self.rem_qty > 0:
-                    logger.info(f"🛡️ [STOP HIT] Price (${curr_h:.2f}) breached SL (${self.stop_loss:.2f}). Exiting {self.rem_qty} lots.")
+                elif latest_spot >= self.stop_loss and self.rem_qty > 0:
+                    logger.info(f"🛡️ [STOP HIT] Price (${latest_spot:.2f}) breached SL (${self.stop_loss:.2f}). Exiting {self.rem_qty} lots.")
                     res = self.place_order("BUY", self.rem_qty)
                     if res.get("status") == "success":
                         self.in_position = False
@@ -428,8 +485,8 @@ class BTCLiquiditySweep:
         # ======================================================================
         # SCANNING FOR NEW LIQUIDITY SWEEP SETUPS WHEN FLAT
         # ======================================================================
-        regime = "BULLISH" if curr_c > curr_ema else "BEARISH"
-        logger.info(f"[HEARTBEAT] Spot=${curr_c:.2f} | 200 EMA=${curr_ema:.2f} [{regime}] | 9h Swing High=${swing_high:.2f} | Swing Low=${swing_low:.2f}")
+        regime = "BULLISH" if macro_bull else ("BEARISH" if macro_bear else "NEUTRAL")
+        logger.info(f"[HEARTBEAT] Spot=${latest_spot:.2f} (1H Candle Close=${curr_c:.2f}) | 4H 50 EMA=${curr_4h_ema50:.2f} | 4H 200 EMA=${curr_4h_ema200:.2f} [{regime}] | 24h Swing High=${swing_high:.2f} | Swing Low=${swing_low:.2f}")
 
         capital_usd = self.capital_inr / USD_INR_RATE
         try:
@@ -446,51 +503,54 @@ class BTCLiquiditySweep:
             pass
 
         vols = df['volume'].values
-        curr_v = vols[curr_bar]
-        v_avg = float(pd.Series(vols).rolling(20).mean().iloc[curr_bar])
+        curr_v = vols[eval_bar]
+        v_avg = float(pd.Series(vols).rolling(20).mean().iloc[eval_bar])
 
-        # 1. Bullish Liquidity Sweep (Sweeping Key Swing Low + Volume + 12x Leverage Cap)
-        lower_wick_ratio = (curr_c - curr_l) / candle_range
+        # 1. Bullish Liquidity Sweep (Sweeping Key Swing Low + Rejection Wick + 4H Bullish Macro)
+        lower_wick_ratio = (min(curr_o, curr_c) - curr_l) / candle_range
         sweep_depth_pct = (swing_low - curr_l) / swing_low if swing_low > 0 else 0
-        if (curr_l < swing_low and curr_c > swing_low and 
-            lower_wick_ratio >= MIN_REJECTION_WICK_RATIO and curr_c >= curr_o and 
-            curr_c > curr_ema and sweep_depth_pct >= 0.0006 and curr_v >= (1.2 * v_avg)):
 
-            entry_price = swing_low * 1.0005 # Limit order at swing touch for Maker fill
-            stop_loss = curr_l * 0.9990
+        if (curr_l < swing_low and curr_c > swing_low and 
+            lower_wick_ratio >= MIN_REJECTION_WICK_RATIO and 
+            macro_bull and sweep_depth_pct >= MIN_SWEEP_DEPTH_PCT and curr_v >= (MIN_VOLUME_RATIO * v_avg)):
+
+            entry_price = round(curr_c, 1)
+            stop_loss = round(curr_l - 1.0, 1) # Hard buffer below sweep wick extreme
             risk_dist = entry_price - stop_loss
             risk_pct = risk_dist / entry_price
-            if MIN_RISK_DIST_PCT < risk_pct < 0.018:
+            if MIN_RISK_DIST_PCT <= risk_pct <= 0.030:
                 risk_usd = capital_usd * RISK_PER_TRADE_PCT
                 loss_per_contract = risk_dist * 0.001
                 raw_lots = int(risk_usd / loss_per_contract)
-                # STRICT 12x LEVERAGE CAP:
                 max_lots = int((capital_usd * MAX_LEVERAGE) / (entry_price * 0.001))
                 lots = max(2, min(raw_lots, max_lots))
 
-                target1_p = entry_price + (1.0 * risk_dist)
-                target2_p = entry_price + (2.0 * risk_dist)
-                target3_p = entry_price + (3.5 * risk_dist)
+                target1_p = round(entry_price + (1.0 * risk_dist), 1)
+                target2_p = round(entry_price + (2.0 * risk_dist), 1)
+                target3_p = round(entry_price + (TARGET_RR * risk_dist), 1)
 
                 logger.info("=" * 80)
-                logger.info(f"🚀 INSTITUTIONAL BULLISH SFP DETECTED (LIMIT MAKER ORDER)!")
-                logger.info(f"  • Swept Swing Low : ${swing_low:.2f} (Candle Low: ${curr_l:.2f} | Depth: {sweep_depth_pct*100:.2f}%)")
-                logger.info(f"  • Volume Confirm  : {curr_v:.1f} vs Avg {v_avg:.1f} ({curr_v/max(v_avg,1):.2f}x)")
-                logger.info(f"  • Macro Trend     : Bullish (Close ${curr_c:.2f} > 200 EMA ${curr_ema:.2f})")
-                logger.info(f"  • Entry (Limit)   : ${entry_price:.2f}")
+                logger.info(f"🚀 INSTITUTIONAL BULLISH SFP DETECTED ({EXECUTION_ORDER_TYPE})!")
+                logger.info(f"  • Swept Swing Low : ${swing_low:.2f} (Low: ${curr_l:.2f} | Depth: {sweep_depth_pct*100:.2f}%)")
+                logger.info(f"  • Macro 4H Trend  : 50 EMA (${curr_4h_ema50:.2f}) > 200 EMA (${curr_4h_ema200:.2f}) [BULLISH]")
+                logger.info(f"  • Rejection Wick  : {lower_wick_ratio*100:.1f}% (Min: {MIN_REJECTION_WICK_RATIO*100:.0f}%)")
+                logger.info(f"  • Entry Price     : ${entry_price:.2f}")
                 logger.info(f"  • Stop Loss       : ${stop_loss:.2f} (-{risk_pct*100:.2f}%)")
-                logger.info(f"  • Targets         : TP1=${target1_p:.2f} (1R) | TP2=${target2_p:.2f} (2R) | TP3=${target3_p:.2f} (3.5R)")
-                logger.info(f"  • Position Sizing : {lots} lots (Capped at {MAX_LEVERAGE}x | Risk: ${risk_usd:.2f})")
+                logger.info(f"  • Targets         : TP1=${target1_p:.2f} (1R) | TP2=${target2_p:.2f} (2R) | TP3=${target3_p:.2f} ({TARGET_RR}R)")
+                logger.info(f"  • Position Sizing : {lots} lots (Cap: {MAX_LEVERAGE}x | Risk: ${risk_usd:.2f})")
                 logger.info("=" * 80)
 
-                res = self.place_order("BUY", lots, price=entry_price)
+                order_p = entry_price if EXECUTION_ORDER_TYPE == "LIMIT" else None
+                res = self.place_order("BUY", lots, price=order_p)
                 if res.get("status") == "success":
+                    time.sleep(2)
+                    b_qty, _ = self.check_position_in_broker()
                     self.in_position = True
                     self.position_side = "LONG"
                     self.entry_price = entry_price
                     self.stop_loss = stop_loss
-                    self.position_qty = lots
-                    self.rem_qty = lots
+                    self.position_qty = abs(b_qty) if b_qty != 0 else lots
+                    self.rem_qty = self.position_qty
                     self.target1_p = target1_p
                     self.target2_p = target2_p
                     self.target3_p = target3_p
@@ -498,49 +558,55 @@ class BTCLiquiditySweep:
                     self.tp2_hit = False
                     self.bars_held = 0
                     self._save_state()
+                    logger.info(f"✅ Position recorded successfully: {self.position_qty} contracts.")
+                else:
+                    logger.error(f"❌ [ENTRY ORDER FAILED] {res}")
 
-        # 2. Bearish Liquidity Sweep (Sweeping Key Swing High + Volume + 12x Leverage Cap)
-        upper_wick_ratio = (curr_h - curr_c) / candle_range
+        # 2. Bearish Liquidity Sweep (Sweeping Key Swing High + Rejection Wick + 4H Bearish Macro)
+        upper_wick_ratio = (curr_h - max(curr_o, curr_c)) / candle_range
         sweep_depth_high_pct = (curr_h - swing_high) / swing_high if swing_high > 0 else 0
-        if (curr_h > swing_high and curr_c < swing_high and 
-            upper_wick_ratio >= MIN_REJECTION_WICK_RATIO and curr_c <= curr_o and 
-            curr_c < curr_ema and sweep_depth_high_pct >= 0.0006 and curr_v >= (1.2 * v_avg)):
 
-            entry_price = swing_high * 0.9995 # Limit order at swing touch for Maker fill
-            stop_loss = curr_h * 1.0010
+        if (curr_h > swing_high and curr_c < swing_high and 
+            upper_wick_ratio >= MIN_REJECTION_WICK_RATIO and 
+            macro_bear and sweep_depth_high_pct >= MIN_SWEEP_DEPTH_PCT and curr_v >= (MIN_VOLUME_RATIO * v_avg)):
+
+            entry_price = round(curr_c, 1)
+            stop_loss = round(curr_h + 1.0, 1) # Hard buffer above sweep wick extreme
             risk_dist = stop_loss - entry_price
             risk_pct = risk_dist / entry_price
-            if MIN_RISK_DIST_PCT < risk_pct < 0.018:
+            if MIN_RISK_DIST_PCT <= risk_pct <= 0.030:
                 risk_usd = capital_usd * RISK_PER_TRADE_PCT
                 loss_per_contract = risk_dist * 0.001
                 raw_lots = int(risk_usd / loss_per_contract)
-                # STRICT 12x LEVERAGE CAP:
                 max_lots = int((capital_usd * MAX_LEVERAGE) / (entry_price * 0.001))
                 lots = max(2, min(raw_lots, max_lots))
 
-                target1_p = entry_price - (1.0 * risk_dist)
-                target2_p = entry_price - (2.0 * risk_dist)
-                target3_p = entry_price - (3.5 * risk_dist)
+                target1_p = round(entry_price - (1.0 * risk_dist), 1)
+                target2_p = round(entry_price - (2.0 * risk_dist), 1)
+                target3_p = round(entry_price - (TARGET_RR * risk_dist), 1)
 
                 logger.info("=" * 80)
-                logger.info(f"🔻 INSTITUTIONAL BEARISH SFP DETECTED (LIMIT MAKER ORDER)!")
-                logger.info(f"  • Swept Swing High: ${swing_high:.2f} (Candle High: ${curr_h:.2f} | Depth: {sweep_depth_high_pct*100:.2f}%)")
-                logger.info(f"  • Volume Confirm  : {curr_v:.1f} vs Avg {v_avg:.1f} ({curr_v/max(v_avg,1):.2f}x)")
-                logger.info(f"  • Macro Trend     : Bearish (Close ${curr_c:.2f} < 200 EMA ${curr_ema:.2f})")
-                logger.info(f"  • Entry (Limit)   : ${entry_price:.2f}")
+                logger.info(f"🔻 INSTITUTIONAL BEARISH SFP DETECTED ({EXECUTION_ORDER_TYPE})!")
+                logger.info(f"  • Swept Swing High: ${swing_high:.2f} (High: ${curr_h:.2f} | Depth: {sweep_depth_high_pct*100:.2f}%)")
+                logger.info(f"  • Macro 4H Trend  : 50 EMA (${curr_4h_ema50:.2f}) < 200 EMA (${curr_4h_ema200:.2f}) [BEARISH]")
+                logger.info(f"  • Rejection Wick  : {upper_wick_ratio*100:.1f}% (Min: {MIN_REJECTION_WICK_RATIO*100:.0f}%)")
+                logger.info(f"  • Entry Price     : ${entry_price:.2f}")
                 logger.info(f"  • Stop Loss       : ${stop_loss:.2f} (+{risk_pct*100:.2f}%)")
-                logger.info(f"  • Targets         : TP1=${target1_p:.2f} (1R) | TP2=${target2_p:.2f} (2R) | TP3=${target3_p:.2f} (3.5R)")
-                logger.info(f"  • Position Sizing : {lots} lots (Capped at {MAX_LEVERAGE}x | Risk: ${risk_usd:.2f})")
+                logger.info(f"  • Targets         : TP1=${target1_p:.2f} (1R) | TP2=${target2_p:.2f} (2R) | TP3=${target3_p:.2f} ({TARGET_RR}R)")
+                logger.info(f"  • Position Sizing : {lots} lots (Cap: {MAX_LEVERAGE}x | Risk: ${risk_usd:.2f})")
                 logger.info("=" * 80)
 
-                res = self.place_order("SELL", lots, price=entry_price)
+                order_p = entry_price if EXECUTION_ORDER_TYPE == "LIMIT" else None
+                res = self.place_order("SELL", lots, price=order_p)
                 if res.get("status") == "success":
+                    time.sleep(2)
+                    b_qty, _ = self.check_position_in_broker()
                     self.in_position = True
                     self.position_side = "SHORT"
                     self.entry_price = entry_price
                     self.stop_loss = stop_loss
-                    self.position_qty = lots
-                    self.rem_qty = lots
+                    self.position_qty = abs(b_qty) if b_qty != 0 else lots
+                    self.rem_qty = self.position_qty
                     self.target1_p = target1_p
                     self.target2_p = target2_p
                     self.target3_p = target3_p
@@ -548,14 +614,18 @@ class BTCLiquiditySweep:
                     self.tp2_hit = False
                     self.bars_held = 0
                     self._save_state()
+                    logger.info(f"✅ Position recorded successfully: {self.position_qty} contracts.")
+                else:
+                    logger.error(f"❌ [ENTRY ORDER FAILED] {res}")
 
     def run_loop(self):
-        logger.info(f"Starting {STRATEGY_NAME} Monitoring Loop on 15m Candles...")
+        logger.info(f"Starting {STRATEGY_NAME} Monitoring Loop on 1H Candles (4H Macro Trend)...")
         while True:
             try:
                 df = self.get_market_candles(limit=80)
+                df_4h = self.get_4h_candles(limit=60)
                 if df is not None and len(df) >= SWING_LOOKBACK_BARS + 5:
-                    self.evaluate_signals(df)
+                    self.evaluate_signals(df, df_4h)
                 else:
                     logger.warning("Insufficient candle data retrieved. Retrying next cycle...")
             except Exception as e:
@@ -565,8 +635,9 @@ class BTCLiquiditySweep:
     def run_test(self, place_test_order: bool = False):
         logger.info("🧪 RUNNING ONE-SHOT TEST VALIDATION...")
         df = self.get_market_candles(limit=80)
+        df_4h = self.get_4h_candles(limit=60)
         if df is not None and len(df) >= SWING_LOOKBACK_BARS + 5:
-            self.evaluate_signals(df)
+            self.evaluate_signals(df, df_4h)
             logger.info("✅ Candle analysis and sweep evaluation validated successfully.")
         else:
             logger.error("Failed to fetch sufficient candles for test.")

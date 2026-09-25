@@ -1,0 +1,25 @@
+# OpenAlgo Agent & Cursor Rules
+
+## 1. Session Start Ritual (Long-Term Memory)
+- **Always read docs first**: At the beginning of any session or prior to any significant code change, read:
+  - `docs/PROJECT.md`
+  - `docs/ARCHITECTURE.md`
+  - `docs/MEMORY.md`
+- Treat `docs/` as the single source of truth for repository architecture, data schemas, and invariants.
+- Keep documentation living: after modifying any module, table schema, or strategy parameter, update the relevant file in `docs/` immediately.
+
+## 2. Token Hygiene & Progressive Disclosure
+- **Hierarchical Reading**: Use high-level docs first. Never scan entire directory trees or pull 500+ line files into context.
+- **Search over Dump**: Use `grep_search` and targeted line views.
+- **Diffs Only**: Provide concise unified diffs or minimal function overrides (`# ... existing code ...`).
+- **Zero Conversational Filler**: Lead directly with code changes, terminal commands, or factual explanations.
+- **Resilience to Compaction**: Summarize task state and rely on `docs/MEMORY.md` rather than carrying bloated conversation histories.
+
+## 3. Strict Architectural Invariants
+- **Dual-Instance Separation**:
+  - Port 5000 (`openalgo-angel`, WS 8765): Strictly Indian domestic markets (NSE, BSE, MCX). Code in `strategies/`.
+  - Port 5001 (`openalgo-global`, WS 8766): Strictly Delta Exchange crypto derivatives. Code in `strategies_global/`.
+  - Zero cross-pollution.
+- **Fail-Closed Execution**: Never use unverified fallback approximations or bare `except: pass`. Multi-leg orders must write atomic transition journals.
+- **Workspace Hygiene**: Scratch files, temporary test scripts, and test data dumps must be deleted before concluding any turn.
+- **UI Strictness**: All UI work must adhere strictly to `docs/DESIGN_SYSTEM.md`.

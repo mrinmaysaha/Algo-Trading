@@ -1,0 +1,15 @@
+{
+  "date": "2026-09-25",
+  "updated_at": "2026-09-25T16:27:06.026111+05:30",
+  "current_session": 1,
+  "session_history": [],
+  "trade_taken_today": false,
+  "trade_active": false,
+  "positions": {},
+  "net_credit_collected": 0.0,
+  "target_profit": 0.0,
+  "expiry_date": "25-SEP-26",
+  "entry_time": null,
+  "entry_attempts": 3,
+  "last_attempt_time": 1790333823.4828985
+}

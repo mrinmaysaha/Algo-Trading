@@ -1,11 +1,30 @@
 # OpenAlgo Documentation Map
 
 The entry point for humans and AI agents. This file is a **map, not a copy** —
-it points at the canonical docs that already live under `docs/`. Edit a source
+it points at the canonical docs that live under `docs/`. Edit a source
 doc once; everything that reads through this map sees the change immediately.
 
 **How to use (progressive disclosure):** read this map → open the one area you
 need → drill into the specific file. Don't load everything at once.
+
+---
+
+## Core System Knowledge Base (Agent Long-Term Memory)
+
+| Document | Description | Path |
+|---|---|---|
+| **PROJECT.md** | Entry point manifest, tech stack, execution commands, sprint goals | [PROJECT.md](PROJECT.md) |
+| **ARCHITECTURE.md** | High-level Mermaid diagrams, module responsibilities, dual-instance invariants | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| **DESIGN.md** | Product vision, feature status, acceptance criteria, non-functional requirements | [DESIGN.md](DESIGN.md) |
+| **DESIGN_SYSTEM.md** | Dark-mode color palette, UI tokens, component specs, interaction patterns | [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) |
+| **DATA_MODEL.md** | SQLite & Historify database schemas, ER diagrams, state JSON schemas | [DATA_MODEL.md](DATA_MODEL.md) |
+| **API.md** | Unified REST endpoints, envelope contracts, WebSocket streaming schemas | [API.md](API.md) |
+| **CONVENTIONS.md** | Coding standards, token hygiene, PR workflows, error handling protocols | [CONVENTIONS.md](CONVENTIONS.md) |
+| **ROADMAP.md** | Prioritized roadmap, milestone gantt chart, feature deliverables | [ROADMAP.md](ROADMAP.md) |
+| **CHANGELOG.md** | Chronological record of features, bug fixes, and releases | [CHANGELOG.md](CHANGELOG.md) |
+| **TESTING.md** | Test suites, pytest commands, mocking standards, verification protocols | [TESTING.md](TESTING.md) |
+| **DEPLOYMENT.md** | Docker compose, dual-container setup (Port 5000 & 5001), operations | [DEPLOYMENT.md](DEPLOYMENT.md) |
+| **MEMORY.md** | Persistent agent memory: dual-instance rules, backtest insights, active PIDs | [MEMORY.md](MEMORY.md) |
 
 ---
 

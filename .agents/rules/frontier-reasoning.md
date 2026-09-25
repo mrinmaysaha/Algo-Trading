@@ -14,3 +14,9 @@
 - **Test-Driven Grounding:** Mathematical, algorithmic, or financial claims must be backed by empirical execution (e.g., vectorized DuckDB simulations, pytest runs, or syntax verification via `ast.parse`).
 - **Defensive Error Analysis:** When a test or script fails, never retry the exact same approach blindly. Read the exact exception, trace the root cause, adapt the hypothesis, and re-verify.
 - **Workspace Cleanliness:** Temporary scratch scripts, ad-hoc backtesters, or benchmark dumps must be automatically purged upon verification.
+
+## 4. Ultra-Compact Output Protocol (Opus Depth, Minimal Tokens)
+- **Zero Conversational Fluff:** Skip introductory pleasantries and restating questions. Lead directly with the technical breakdown, code diffs, or commands.
+- **Diffs & Function Overrides Only:** Output minimal unified diffs or targeted functions with `# ... existing code ...`. Never re-print unmodified files.
+- **High-Density Scannability:** Use structured tables and concise bullets instead of paragraphs of narrative prose.
+- **Line Slices:** Read only 30–60 line slices (`StartLine`/`EndLine`). Never load 1,000+ line files into context when a grep slice suffices.

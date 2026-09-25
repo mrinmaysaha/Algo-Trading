@@ -1,0 +1,81 @@
+{
+  "date": "2026-09-23",
+  "updated_at": "2026-09-23T16:29:16.627092+05:30",
+  "current_session": 2,
+  "session_history": [
+    {
+      "session": 1,
+      "positions": {
+        "BTC23SEP2684800PE": {
+          "leg_type": "LONG_PE",
+          "symbol": "BTC23SEP2684800PE",
+          "action": "BUY",
+          "requested_qty": 84,
+          "quantity": 84,
+          "entry_price": 42.0,
+          "status": "CLOSED",
+          "order_id": "26092309584664",
+          "stop_loss": 0.0,
+          "exit_attempted": true,
+          "exit_price": 0.5,
+          "exit_reason": "TARGET_PROFIT_DECAY"
+        },
+        "BTC23SEP2688400CE": {
+          "leg_type": "LONG_CE",
+          "symbol": "BTC23SEP2688400CE",
+          "action": "BUY",
+          "requested_qty": 84,
+          "quantity": 84,
+          "entry_price": 48.0,
+          "status": "CLOSED",
+          "order_id": "26092309710458",
+          "stop_loss": 0.0,
+          "exit_attempted": true,
+          "exit_price": 70.0,
+          "exit_reason": "WING_UNWIND"
+        },
+        "BTC23SEP2687600CE": {
+          "leg_type": "SHORT_CE",
+          "symbol": "BTC23SEP2687600CE",
+          "action": "SELL",
+          "requested_qty": 84,
+          "quantity": 84,
+          "entry_price": 102.0,
+          "status": "CLOSED",
+          "order_id": "26092338387632",
+          "stop_loss": 204.0,
+          "exit_attempted": true,
+          "exit_price": 204.0,
+          "exit_reason": "SL_HIT"
+        },
+        "BTC23SEP2685600PE": {
+          "leg_type": "SHORT_PE",
+          "symbol": "BTC23SEP2685600PE",
+          "action": "SELL",
+          "requested_qty": 84,
+          "quantity": 84,
+          "entry_price": 86.0,
+          "status": "CLOSED",
+          "order_id": "26092342023346",
+          "stop_loss": 172.0,
+          "exit_attempted": true,
+          "exit_price": 15.0,
+          "exit_reason": "TARGET_PROFIT_DECAY"
+        }
+      },
+      "exit_time": "2026-09-23T16:29:08.831085+05:30",
+      "trigger": "TARGET_PROFIT_DECAY",
+      "net_credit": 7.961943999999999,
+      "target_profit": 6.767652399999999
+    }
+  ],
+  "trade_taken_today": false,
+  "trade_active": false,
+  "positions": {},
+  "net_credit_collected": 7.961943999999999,
+  "target_profit": 6.767652399999999,
+  "expiry_date": "23-SEP-26",
+  "entry_time": "2026-09-23T07:00:07.591586+05:30",
+  "entry_attempts": 1,
+  "last_attempt_time": 1790161153.8829017
+}

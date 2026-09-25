@@ -1,0 +1,143 @@
+{
+  "date": "2026-09-23",
+  "updated_at": "2026-09-23T16:24:50.890465+05:30",
+  "current_session": 3,
+  "session_history": [
+    {
+      "session": 1,
+      "positions": {
+        "ETH23SEP262820CE": {
+          "leg_type": "LONG_CE",
+          "symbol": "ETH23SEP262820CE",
+          "action": "BUY",
+          "requested_qty": 226,
+          "quantity": 226,
+          "entry_price": 2.7,
+          "status": "CLOSED",
+          "order_id": "26092319700301",
+          "stop_loss": 0.0,
+          "exit_attempted": true,
+          "exit_price": 0.15,
+          "exit_reason": "TARGET_PROFIT_DECAY"
+        },
+        "ETH23SEP262700PE": {
+          "leg_type": "LONG_PE",
+          "symbol": "ETH23SEP262700PE",
+          "action": "BUY",
+          "requested_qty": 226,
+          "quantity": 226,
+          "entry_price": 0.82,
+          "status": "CLOSED",
+          "order_id": "26092320458107",
+          "stop_loss": 0.0,
+          "exit_attempted": true,
+          "exit_price": 1.9,
+          "exit_reason": "WING_UNWIND"
+        },
+        "ETH23SEP262780CE": {
+          "leg_type": "SHORT_CE",
+          "symbol": "ETH23SEP262780CE",
+          "action": "SELL",
+          "requested_qty": 226,
+          "quantity": 226,
+          "entry_price": 10.8,
+          "status": "CLOSED",
+          "order_id": "26092388058727",
+          "stop_loss": 21.6,
+          "exit_attempted": true,
+          "exit_price": 1.8,
+          "exit_reason": "TARGET_PROFIT_DECAY"
+        },
+        "ETH23SEP262740PE": {
+          "leg_type": "SHORT_PE",
+          "symbol": "ETH23SEP262740PE",
+          "action": "SELL",
+          "requested_qty": 226,
+          "quantity": 226,
+          "entry_price": 5.8,
+          "status": "CLOSED",
+          "order_id": "26092327866847",
+          "stop_loss": 11.6,
+          "exit_attempted": true,
+          "exit_price": 11.6,
+          "exit_reason": "SL_HIT"
+        }
+      },
+      "exit_time": "2026-09-23T13:04:47.588145+05:30",
+      "trigger": "TARGET_PROFIT_DECAY",
+      "net_credit": 29.224386400000004,
+      "target_profit": 24.840728440000003
+    },
+    {
+      "session": 2,
+      "positions": {
+        "ETH23SEP262680PE": {
+          "leg_type": "LONG_PE",
+          "symbol": "ETH23SEP262680PE",
+          "action": "BUY",
+          "requested_qty": 226,
+          "quantity": 226,
+          "entry_price": 0.3,
+          "status": "CLOSED",
+          "order_id": "26092353005840",
+          "stop_loss": 0.0,
+          "exit_attempted": true,
+          "exit_price": 0.07,
+          "exit_reason": "WING_UNWIND"
+        },
+        "ETH23SEP262800CE": {
+          "leg_type": "LONG_CE",
+          "symbol": "ETH23SEP262800CE",
+          "action": "BUY",
+          "requested_qty": 226,
+          "quantity": 226,
+          "entry_price": 0.32,
+          "status": "CLOSED",
+          "order_id": "26092353317371",
+          "stop_loss": 0.0,
+          "exit_attempted": true,
+          "exit_reason": "ALREADY_FLAT"
+        },
+        "ETH23SEP262760CE": {
+          "leg_type": "SHORT_CE",
+          "symbol": "ETH23SEP262760CE",
+          "action": "SELL",
+          "requested_qty": 226,
+          "quantity": 226,
+          "entry_price": 5.4,
+          "status": "CLOSED",
+          "order_id": "26092365604095",
+          "stop_loss": 10.8,
+          "exit_attempted": true,
+          "exit_reason": "ALREADY_FLAT"
+        },
+        "ETH23SEP262740PE": {
+          "leg_type": "SHORT_PE",
+          "symbol": "ETH23SEP262740PE",
+          "action": "SELL",
+          "requested_qty": 226,
+          "quantity": 226,
+          "entry_price": 8.5,
+          "status": "CLOSED",
+          "order_id": "26092367135030",
+          "stop_loss": 17.0,
+          "exit_attempted": true,
+          "exit_reason": "ALREADY_FLAT"
+        }
+      },
+      "exit_time": "2026-09-23T15:57:30.603138+05:30",
+      "trigger": "TARGET_PROFIT_DECAY",
+      "net_credit": 29.7143544,
+      "target_profit": 25.25720124
+    }
+  ],
+  "trade_taken_today": false,
+  "trade_active": false,
+  "positions": {},
+  "net_credit_collected": 29.7143544,
+  "target_profit": 25.25720124,
+  "expiry_date": "23-SEP-26",
+  "entry_time": "2026-09-23T13:07:57.767508+05:30",
+  "entry_attempts": 3,
+  "last_attempt_time": 1790160889.254453
+}

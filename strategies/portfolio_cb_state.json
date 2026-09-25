@@ -1,11 +1,12 @@
 {
-  "date": "2026-09-18",
+  "date": "2026-09-25",
   "nse": {
-    "session_pnl": -6275.500000000002,
+    "session_pnl": -13147.656055173,
     "halted": false,
     "halt_reason": "",
     "strategies": {
-      "Post10_Institutional_OB_VWAP_Production_V5": -6275.500000000002
+      "Post10_Institutional_OB_VWAP_Production_V5": -2836.9999999999973,
+      "SMC_FVG_ZeroLag_Options": -10310.656055173004
     }
   },
   "bse": {
@@ -15,26 +16,17 @@
     "strategies": {}
   },
   "mcx": {
-    "session_pnl": 115.0,
+    "session_pnl": 1151626.5563896,
     "halted": false,
     "halt_reason": "",
     "strategies": {
-      "MCX_Institutional_MIS_V3.0": 115.0
+      "MCX_Institutional_MIS_V3.0": 1151735.0,
+      "MCX_GOLDM_FVG_Options_Scalper": -108.44361040000001
     }
   },
   "active_positions": {
-    "BANKNIFTY": {
-      "Combined_ORB_Quant_Options": {
-        "symbol": "BANKNIFTY29SEP2656100PE",
-        "registered_at": 1789704070.1605537
-      }
-    },
     "NIFTY": {},
-    "SENSEX": {
-      "Combined_ORB_Quant_Options": {
-        "symbol": "SENSEX24SEP2674500PE",
-        "registered_at": 1789704211.3393223
-      }
-    }
+    "BANKNIFTY": {},
+    "SENSEX": {}
   }
 }

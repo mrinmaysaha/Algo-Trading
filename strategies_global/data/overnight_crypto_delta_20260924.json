@@ -1,0 +1,234 @@
+{
+  "version": 2,
+  "strategy": "Overnight_Crypto_Delta_Options",
+  "session": "20260924",
+  "broker_profile": "live",
+  "assets": {
+    "BTC": {
+      "active": false,
+      "entry_done": true,
+      "entry_skipped_reason": null,
+      "expiry_date": "25-SEP-26",
+      "expiry_iso": "2026-09-25",
+      "entry_time": "2026-09-24T22:02:04.795209+05:30",
+      "exit_time": "2026-09-25T06:30:20.474289+05:30",
+      "exit_reason": "Ladder_0630_0700",
+      "lots_requested": 92,
+      "initial_net_credit": 21.42,
+      "target_profit_value": 12.85,
+      "fees_entry_usd": 0.36,
+      "fees_exit_est_usd": 0.36,
+      "realized_pnl_usd": 7.18,
+      "sl_count": 0,
+      "ce_exit_time": null,
+      "ce_exit_reason": null,
+      "pe_exit_time": null,
+      "pe_exit_reason": null,
+      "legs": {
+        "CE_WING": {
+          "symbol": "BTC25SEP2686500CE",
+          "side": "BUY",
+          "status": "FILLED",
+          "requested_qty": 92,
+          "filled_qty": 92,
+          "avg_price": 60.86,
+          "fill_estimated": false,
+          "order_ids": [
+            "26092420599957"
+          ],
+          "idem_key": "20260924:BTC:CE_WING:entry",
+          "active": false,
+          "exit_attempted": true,
+          "exited_qty": 92,
+          "exit_avg": 23.42,
+          "sl_price": 0.0
+        },
+        "PE_WING": {
+          "symbol": "BTC25SEP2682500PE",
+          "side": "BUY",
+          "status": "FILLED",
+          "requested_qty": 92,
+          "filled_qty": 92,
+          "avg_price": 108.87,
+          "fill_estimated": false,
+          "order_ids": [
+            "26092411547650"
+          ],
+          "idem_key": "20260924:BTC:PE_WING:entry",
+          "active": false,
+          "exit_attempted": true,
+          "exited_qty": 92,
+          "exit_avg": 38.97,
+          "sl_price": 0.0
+        },
+        "CE_SHORT": {
+          "symbol": "BTC25SEP2685500CE",
+          "side": "SELL",
+          "status": "FILLED",
+          "requested_qty": 92,
+          "filled_qty": 92,
+          "avg_price": 196.43,
+          "fill_estimated": false,
+          "order_ids": [
+            "26092435433301"
+          ],
+          "idem_key": "20260924:BTC:CE_SHORT:entry",
+          "active": false,
+          "exit_attempted": true,
+          "exited_qty": 92,
+          "exit_avg": 121.99,
+          "sl_price": 392.86
+        },
+        "PE_SHORT": {
+          "symbol": "BTC25SEP2683500PE",
+          "side": "SELL",
+          "status": "FILLED",
+          "requested_qty": 92,
+          "filled_qty": 92,
+          "avg_price": 209.99,
+          "fill_estimated": false,
+          "order_ids": [
+            "26092459150123"
+          ],
+          "idem_key": "20260924:BTC:PE_SHORT:entry",
+          "active": false,
+          "exit_attempted": true,
+          "exited_qty": 92,
+          "exit_avg": 95.96,
+          "sl_price": 419.98
+        }
+      },
+      "pending_exit": null,
+      "sl_ticks": {
+        "CE_SHORT": [],
+        "PE_SHORT": []
+      },
+      "stale_ticks": 0,
+      "entry_attempts": 0,
+      "next_entry_retry_ts": 0.0,
+      "fatal_for_night": null,
+      "unwind_phase": "DONE",
+      "last_ladder_ts": 1790298011.804951,
+      "held_to_settle": false,
+      "settle_info": null,
+      "used_otm": 0.012,
+      "sl_mult": 2.0
+    },
+    "ETH": {
+      "active": false,
+      "entry_done": true,
+      "entry_skipped_reason": null,
+      "expiry_date": "25-SEP-26",
+      "expiry_iso": "2026-09-25",
+      "entry_time": "2026-09-24T22:03:43.687598+05:30",
+      "exit_time": "2026-09-25T06:30:36.259406+05:30",
+      "exit_reason": "Ladder_0630_0700",
+      "lots_requested": 246,
+      "initial_net_credit": 46.89,
+      "target_profit_value": 28.13,
+      "fees_entry_usd": 0.44,
+      "fees_exit_est_usd": 0.44,
+      "realized_pnl_usd": 19.87,
+      "sl_count": 0,
+      "ce_exit_time": null,
+      "ce_exit_reason": null,
+      "pe_exit_time": null,
+      "pe_exit_reason": null,
+      "legs": {
+        "CE_WING": {
+          "symbol": "ETH25SEP262750CE",
+          "side": "BUY",
+          "status": "FILLED",
+          "requested_qty": 246,
+          "filled_qty": 246,
+          "avg_price": 4.7,
+          "fill_estimated": false,
+          "order_ids": [
+            "26092483065626"
+          ],
+          "idem_key": "20260924:ETH:CE_WING:entry",
+          "active": false,
+          "exit_attempted": true,
+          "exited_qty": 246,
+          "exit_avg": 0.94,
+          "sl_price": 0.0
+        },
+        "PE_WING": {
+          "symbol": "ETH25SEP262600PE",
+          "side": "BUY",
+          "status": "FILLED",
+          "requested_qty": 246,
+          "filled_qty": 246,
+          "avg_price": 2.12,
+          "fill_estimated": false,
+          "order_ids": [
+            "26092402149588"
+          ],
+          "idem_key": "20260924:ETH:PE_WING:entry",
+          "active": false,
+          "exit_attempted": true,
+          "exited_qty": 246,
+          "exit_avg": 0.2,
+          "sl_price": 0.0
+        },
+        "CE_SHORT": {
+          "symbol": "ETH25SEP262700CE",
+          "side": "SELL",
+          "status": "FILLED",
+          "requested_qty": 246,
+          "filled_qty": 246,
+          "avg_price": 17.2,
+          "fill_estimated": false,
+          "order_ids": [
+            "26092419166276"
+          ],
+          "idem_key": "20260924:ETH:CE_SHORT:entry",
+          "active": false,
+          "exit_attempted": true,
+          "exited_qty": 246,
+          "exit_avg": 9.73,
+          "sl_price": 34.4
+        },
+        "PE_SHORT": {
+          "symbol": "ETH25SEP262650PE",
+          "side": "SELL",
+          "status": "FILLED",
+          "requested_qty": 246,
+          "filled_qty": 246,
+          "avg_price": 8.86,
+          "fill_estimated": false,
+          "order_ids": [
+            "26092454036868"
+          ],
+          "idem_key": "20260924:ETH:PE_SHORT:entry",
+          "active": false,
+          "exit_attempted": true,
+          "exited_qty": 246,
+          "exit_avg": 2.45,
+          "sl_price": 17.72
+        }
+      },
+      "pending_exit": null,
+      "sl_ticks": {
+        "CE_SHORT": [],
+        "PE_SHORT": []
+      },
+      "stale_ticks": 0,
+      "entry_attempts": 0,
+      "next_entry_retry_ts": 0.0,
+      "fatal_for_night": null,
+      "unwind_phase": "DONE",
+      "last_ladder_ts": 1790298020.4952946,
+      "held_to_settle": false,
+      "settle_info": null,
+      "used_otm": 0.012,
+      "sl_mult": 2.0
+    }
+  },
+  "portfolio": {
+    "sl_total": 0,
+    "halted": false,
+    "halt_reason": null
+  },
+  "updated_at": "2026-09-25T07:00:00.612806+05:30"
+}
