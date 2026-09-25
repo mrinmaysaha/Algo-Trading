@@ -319,7 +319,7 @@ def compute_dynamic_sl_mult(otm_pct: float) -> float:
 
 
 SL_MULTIPLIER = compute_dynamic_sl_mult(OTM_PCT)        # Dynamic SL based on OTM distance (Option 1)
-TARGET_DECAY_PCT = float(os.getenv("BTC_IC_TARGET_PCT", "0.80")) # 80% to 85% decay target
+TARGET_DECAY_PCT = float(os.getenv("BTC_IC_TARGET_PCT", "0.75")) # 75% decay target
 ENABLE_BASKET_SL = os.getenv("BTC_ENABLE_BASKET_SL", "true").lower() in ("true", "1", "yes")
 BASKET_SL_MULT = float(os.getenv("BTC_BASKET_SL_MULT", "1.0"))
 DISABLE_LEG_SL = os.getenv("BTC_DISABLE_LEG_SL", "true").lower() in ("true", "1", "yes")
@@ -330,7 +330,7 @@ MAX_SPREAD_PCT = float(os.getenv("BTC_IC_MAX_SPREAD", "0.05"))   # 5% max bid-as
 STRADDLE_SL_PCT = float(os.getenv("BTC_STRADDLE_SL_PCT", "0.30")) # 30% per-leg stop loss
 STRATEGY_MODE = os.getenv("BTC_STRATEGY_MODE", "condor").lower()  # "condor" (Arch A2) or "straddle" (Arch B3)
 
-ENTRY_TIME_START = datetime.strptime(os.getenv("BTC_IC_ENTRY_START", "07:00"), "%H:%M").time()    # 07:00 IST
+ENTRY_TIME_START = datetime.strptime(os.getenv("BTC_IC_ENTRY_START", "06:45"), "%H:%M").time()    # 06:45 IST
 ENTRY_TIME_END = datetime.strptime(os.getenv("BTC_IC_ENTRY_END", "16:30"), "%H:%M").time()        # 16:30 IST (Extended for afternoon session)
 REENTRY_CUTOFF_TIME = datetime.strptime(os.getenv("BTC_REENTRY_CUTOFF", "16:30"), "%H:%M").time() # Cutoff for Session 2/3
 MAX_DAILY_SESSIONS = int(os.getenv("BTC_MAX_SESSIONS", "3"))        # Max 3 sessions per day
@@ -1910,14 +1910,16 @@ class BTCDailyIronCondor:
         total_unrealized_usd = 0.0
         for s, p in self.positions.items():
             if p.get("status") == "OPEN":
-                ltp = self._get_ltp_cached(s)
-                if ltp and ltp > 0:
-                    mult = self.multiplier
-                    qty = p.get("quantity", 0)
-                    if p.get("action") == "SELL":
-                        total_unrealized_usd += (p.get("entry_price", 0.0) - ltp) * mult * qty
-                    else:
-                        total_unrealized_usd += (ltp - p.get("entry_price", 0.0)) * mult * qty
+                mult = self.multiplier
+                qty = p.get("quantity", 0)
+                qd = self._get_quote_cached(s)
+                if p.get("action") == "SELL":
+                    px = qd.get("ask") if qd.get("ask") is not None else qd.get("ltp")
+                    if px is not None and px >= 0:
+                        total_unrealized_usd += (p.get("entry_price", 0.0) - px) * mult * qty
+                else:
+                    px = qd.get("bid") if qd.get("bid") is not None else (qd.get("ltp") or 0.0)
+                    total_unrealized_usd += (px - p.get("entry_price", 0.0)) * mult * qty
         if total_unrealized_usd < 0:
             loss_inr = -total_unrealized_usd * self.usd_inr_rate
             if loss_inr >= MAX_DAILY_LOSS_INR:
@@ -1942,7 +1944,7 @@ class BTCDailyIronCondor:
                 self.square_off_all("BASKET_SL_HIT")
                 return
 
-        # 2. Target Profit Check (80% to 85% Theta Decay Captured)
+        # 2. Target Profit Check (Theta Decay Captured)
         short_legs = [p for p in self.positions.values() if p["status"] == "OPEN" and p["action"] == "SELL"]
         if short_legs:
             initial_short_prem = sum(p["entry_price"] for p in short_legs)
@@ -1950,9 +1952,10 @@ class BTCDailyIronCondor:
             quotes_ok = True
             for pos in short_legs:
                 sym = [s for s, p in self.positions.items() if p == pos][0]
-                ltp = self._get_ltp_cached(sym)
-                if ltp and ltp > 0:
-                    current_short_prem += ltp
+                qd = self._get_quote_cached(sym)
+                ask_px = qd.get("ask") if qd.get("ask") is not None else qd.get("ltp")
+                if ask_px is not None and ask_px >= 0.0:
+                    current_short_prem += ask_px
                 else:
                     quotes_ok = False
 
@@ -2122,10 +2125,22 @@ class BTCDailyIronCondor:
                     pos["exit_reason"] = reason
                     logger.info(f"  ✅ Closed {sym} ({close_action} {qty_to_close}) @ ${pos['exit_price']:.2f} - Reason: {reason}")
                 else:
-                    pos["status"] = "STUCK"
-                    pos["stuck_reason"] = f"SQUARE_OFF_FAILED_{reason}"
-                    logger.error(f"  ❌ Square-off failed for {sym}. Marked STUCK.")
-                    send_alert(f"STUCK POSITION: {sym} - square-off failed ({reason}). Manual broker intervention required.", level="critical")
+                    # If this was a long wing (BUY) being closed (SELL) and market has zero bids,
+                    # the short legs are ALREADY closed (due to sorted_legs processing shorts first).
+                    # A worthless expiring long wing cannot create naked risk or margin breach.
+                    is_wing = (pos.get("leg_type") in ("LONG_CE", "LONG_PE") or pos.get("action") == "BUY")
+                    wing_qd = self._get_quote_cached(sym)
+                    wing_bid = wing_qd.get("bid")
+                    if is_wing and (wing_bid is None or wing_bid <= 0.0):
+                        pos["status"] = "CLOSED"
+                        pos["exit_price"] = 0.0
+                        pos["exit_reason"] = f"{reason}_WORTHLESS_WING"
+                        logger.info(f"  ℹ️ Long wing {sym} has zero bids (worthless). Short legs already flat; marking wing closed at $0.00.")
+                    else:
+                        pos["status"] = "STUCK"
+                        pos["stuck_reason"] = f"SQUARE_OFF_FAILED_{reason}"
+                        logger.error(f"  ❌ Square-off failed for {sym}. Marked STUCK.")
+                        send_alert(f"STUCK POSITION: {sym} - square-off failed ({reason}). Manual broker intervention required.", level="critical")
 
         all_closed = all(p.get("status") == "CLOSED" for p in self.positions.values())
         if all_closed:
