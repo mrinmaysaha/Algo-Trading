@@ -216,9 +216,24 @@ function computeChargesForTrade(trade: Trade, isCryptoBroker = false): Omit<Trad
   let gst = 0
 
   if (isCryptoTrade) {
-    // Delta Exchange: 0.03% taker fee on notional USD turnover + 18% GST on trading fee. No STT, SEBI, Stamp.
-    exchangeCharge = turnover * 0.0003
-    gst = exchangeCharge * 0.18
+    // Delta Exchange India:
+    // Options: 0.03% taker fee on underlying strike notional (capped at 10% of premium) + 18% GST + 1% TDS on sell leg.
+    // Futures/Perps: 0.03% taker fee on contract turnover + 18% GST.
+    const optMatch = (trade.symbol || '').match(/(?:BTC|ETH|SOL).*?(\d+)(?:CE|PE)/i)
+    if (optMatch && optMatch[1]) {
+      const strike = parseFloat(optMatch[1])
+      const underlyingNotional = qty * strike * mult
+      const premiumTurnover = turnover
+      const baseFee = Math.min(underlyingNotional * 0.0003, premiumTurnover * 0.10)
+      exchangeCharge = baseFee
+      gst = exchangeCharge * 0.18
+      if (action === 'SELL') {
+        stt = premiumTurnover * 0.01 // 1% Indian TDS on crypto transfer (mapped to statutory tax)
+      }
+    } else {
+      exchangeCharge = turnover * 0.0003
+      gst = exchangeCharge * 0.18
+    }
   } else {
     // Indian F&O markets (NSE/NFO/BSE/MCX)
     // Brokerage: ₹20 flat per order

@@ -285,3 +285,16 @@
   - **Original Strategy**: 17 trades, 8 wins (47.1%), Net PnL: **-₹27.40** (live execution: **-₹129.75**).
   - **Institutional Model**: 13 trades, 6 wins (46.2%), 7 losses, Net PnL: **+₹78.68 to +₹93.45 (PROFITABLE)**.
   - Payoff Ratio flipped from **0.50:1 to 2.14:1** (Avg Win: ₹33.88 vs Avg Loss: -₹16.03). Profit Factor: **1.63 - 2.14**.
+
+
+### J. Full Accounting & Real-World Charges Integration in PnL Tracker & Positions (2026-09-26)
+- **Problem Diagnosis**:
+  - PnL Tracker displayed only Gross MTM without accounting for brokerage, exchange fees, GST, or Indian statutory TDS.
+  - On small capital runs (~$7-$8 gross profit), fees of $1.50-$2.50 (~₹94-₹150) represent 40-50% of trade earnings, blinding the trader to net take-home profitability.
+  - Furthermore, crypto option fee calculation in Positions previously multiplied by premium turnover instead of underlying strike notional, underestimating Delta Exchange charges.
+- **Architectural Implementation**:
+  1. [services/accounting_engine.py](file:///c:/Users/mrinm/Algo_tading/openalgo/services/accounting_engine.py): Enhanced `CryptoAccountingEngine` to recognize options by symbol regex (`(?:BTC|ETH|SOL).*?(\d+)(?:CE|PE)`). Applies Delta Exchange's exact formula: min(0.0003 * Strike * Qty * Mult, 0.10 * Premium Turnover) + 18% GST + 1% Indian TDS on sell legs.
+  2. [blueprints/pnltracker.py](file:///c:/Users/mrinm/Algo_tading/openalgo/blueprints/pnltracker.py): Integrated `_compute_pnl_charges()` into `/pnltracker/api/pnl`. Returns `total_charges`, `net_mtm`, and itemized `charges_breakdown` (brokerage, exchange charges, gst, tds, stt).
+  3. [frontend/src/pages/PnLTracker.tsx](file:///c:/Users/mrinm/Algo_tading/openalgo/frontend/src/pages/PnLTracker.tsx): Added dedicated **Charges & Taxes (All-in)** and **Net MTM (Take-Home Profit)** metrics cards, with full itemized charge pills (Exchange, GST, TDS, Brokerage).
+  4. [frontend/src/pages/Positions.tsx](file:///c:/Users/mrinm/Algo_tading/openalgo/frontend/src/pages/Positions.tsx): Upgraded `computeChargesForTrade()` to model Delta India's strike-notional option taker fee and 1% TDS.
+

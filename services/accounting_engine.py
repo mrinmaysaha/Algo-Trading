@@ -3,6 +3,7 @@ services/accounting_engine.py
 Indian F&O Derivatives Accounting & Asymmetric Taxation Engine (2026 Regulations)
 """
 
+import re
 from typing import Dict, Any, Optional
 
 
@@ -168,13 +169,14 @@ class CryptoAccountingEngine:
         is_option: bool = True,
         contract_multiplier: float = 1.0,
         fee_rate: Optional[float] = None,
+        symbol: str = "",
     ) -> Dict[str, Any]:
         qty = abs(float(qty))
         if qty == 0:
             return {
                 "gross_pnl": 0.0, "net_pnl": 0.0, "brokerage": 0.0, "stt": 0.0,
                 "stamp_duty": 0.0, "exchange_charges": 0.0, "sebi_charges": 0.0,
-                "gst": 0.0, "total_charges": 0.0, "buy_turnover": 0.0, "sell_turnover": 0.0
+                "gst": 0.0, "tds": 0.0, "total_charges": 0.0, "buy_turnover": 0.0, "sell_turnover": 0.0
             }
 
         mult = float(contract_multiplier or 1.0)
@@ -192,9 +194,28 @@ class CryptoAccountingEngine:
         sell_turnover = sell_price * qty * mult
         total_turnover = buy_turnover + sell_turnover
 
-        exchange_charges = round(total_turnover * rate, 4)
-        gst = round(exchange_charges * 0.18, 4)
-        total_charges = round(exchange_charges + gst, 4)
+        strike = None
+        if symbol:
+            m = re.search(r'(?:BTC|ETH|SOL).*?(\d+)(?:CE|PE)', symbol, re.I)
+            if m:
+                try:
+                    strike = float(m.group(1))
+                except Exception:
+                    pass
+
+        tds = 0.0
+        if is_option and strike is not None:
+            underlying_notional = strike * qty * mult
+            fee_buy = min(underlying_notional * rate, buy_turnover * 0.10)
+            fee_sell = min(underlying_notional * rate, sell_turnover * 0.10)
+            exchange_charges = round(fee_buy + fee_sell, 4)
+            gst = round(exchange_charges * 0.18, 4)
+            tds = round(sell_turnover * 0.01, 4)
+        else:
+            exchange_charges = round(total_turnover * rate, 4)
+            gst = round(exchange_charges * 0.18, 4)
+
+        total_charges = round(exchange_charges + gst + tds, 4)
         net_pnl = round(gross_pnl - total_charges, 4)
 
         return {
@@ -206,6 +227,7 @@ class CryptoAccountingEngine:
             "exchange_charges": exchange_charges,
             "sebi_charges": 0.0,
             "gst": gst,
+            "tds": tds,
             "total_charges": total_charges,
             "buy_turnover": round(buy_turnover, 4),
             "sell_turnover": round(sell_turnover, 4)
@@ -222,13 +244,14 @@ class CryptoAccountingEngine:
         is_option: bool = True,
         contract_multiplier: float = 1.0,
         fee_rate: Optional[float] = None,
+        symbol: str = "",
     ) -> Dict[str, Any]:
         qty = abs(float(qty))
         if qty == 0:
             return {
                 "gross_mtm": 0.0, "net_mtm": 0.0, "accrued_and_exit_charges": 0.0,
                 "stt": 0.0, "stamp_duty": 0.0, "exchange_charges": 0.0, "sebi_charges": 0.0,
-                "gst": 0.0, "brokerage": 0.0, "entry_turnover": 0.0, "est_exit_turnover": 0.0
+                "gst": 0.0, "tds": 0.0, "brokerage": 0.0, "entry_turnover": 0.0, "est_exit_turnover": 0.0
             }
 
         mult = float(contract_multiplier or 1.0)
@@ -247,9 +270,30 @@ class CryptoAccountingEngine:
             est_exit_turnover = ltp * qty * mult
 
         total_est_turnover = entry_turnover + est_exit_turnover
-        exchange_charges = round(total_est_turnover * rate, 4)
-        gst = round(exchange_charges * 0.18, 4)
-        total_charges = round(exchange_charges + gst, 4)
+
+        strike = None
+        if symbol:
+            m = re.search(r'(?:BTC|ETH|SOL).*?(\d+)(?:CE|PE)', symbol, re.I)
+            if m:
+                try:
+                    strike = float(m.group(1))
+                except Exception:
+                    pass
+
+        tds = 0.0
+        if is_option and strike is not None:
+            underlying_notional = strike * qty * mult
+            fee_entry = min(underlying_notional * rate, entry_turnover * 0.10)
+            fee_exit = min(underlying_notional * rate, est_exit_turnover * 0.10)
+            exchange_charges = round(fee_entry + fee_exit, 4)
+            gst = round(exchange_charges * 0.18, 4)
+            sell_turnover = est_exit_turnover if is_long else entry_turnover
+            tds = round(sell_turnover * 0.01, 4)
+        else:
+            exchange_charges = round(total_est_turnover * rate, 4)
+            gst = round(exchange_charges * 0.18, 4)
+
+        total_charges = round(exchange_charges + gst + tds, 4)
         net_mtm = round(gross_mtm - total_charges, 4)
 
         return {
@@ -261,6 +305,7 @@ class CryptoAccountingEngine:
             "exchange_charges": exchange_charges,
             "sebi_charges": 0.0,
             "gst": gst,
+            "tds": tds,
             "brokerage": 0.0,
             "entry_turnover": round(entry_turnover, 4),
             "est_exit_turnover": round(est_exit_turnover, 4)

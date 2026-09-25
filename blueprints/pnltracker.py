@@ -118,6 +118,82 @@ def pnltracker():
     return render_template("pnltracker.html")
 
 
+def _compute_pnl_charges(trades, current_positions, broker=""):
+    charges = {
+        "brokerage": 0.0,
+        "exchange_charges": 0.0,
+        "gst": 0.0,
+        "stt": 0.0,
+        "stamp_duty": 0.0,
+        "sebi_charges": 0.0,
+        "tds": 0.0,
+        "total_charges": 0.0,
+    }
+    try:
+        from services.accounting_engine import get_accounting_engine
+        from utils.symbol_utils import get_contract_multiplier
+
+        if trades:
+            for t in trades:
+                sym = str(t.get("symbol") or "")
+                exch = str(t.get("exchange") or "")
+                qty = abs(float(t.get("quantity") or 0))
+                price = float(t.get("average_price") or t.get("price") or 0)
+                act = str(t.get("action") or "BUY").upper()
+                if qty <= 0 or price <= 0:
+                    continue
+                mult = get_contract_multiplier(sym, exch)
+                eng = get_accounting_engine(exchange=exch, broker=broker)
+
+                res = eng.calculate_open_position_mtm(
+                    entry_price=price,
+                    current_ltp=price,
+                    qty=qty,
+                    direction=act,
+                    contract_multiplier=mult,
+                    is_option=("CE" in sym or "PE" in sym) and "FUT" not in sym,
+                    symbol=sym
+                )
+                for k in ("brokerage", "exchange_charges", "gst", "stt", "stamp_duty", "sebi_charges", "tds"):
+                    val = float(res.get(k, 0.0))
+                    if k in ("exchange_charges", "gst"):
+                        charges[k] += val / 2.0
+                    else:
+                        charges[k] += val
+                charges["total_charges"] += float(res.get("accrued_and_exit_charges", 0.0)) / 2.0
+        elif current_positions:
+            for pos_key, p in current_positions.items():
+                sym = pos_key.split("_")[0] if "_" in pos_key else ""
+                exch = pos_key.split("_")[1] if "_" in pos_key else ""
+                qty = abs(float(p.get("quantity") or 0))
+                avg_p = float(p.get("average_price") or 0)
+                ltp = float(p.get("ltp") or avg_p)
+                if qty <= 0 or avg_p <= 0:
+                    continue
+                direction = "BUY" if float(p.get("quantity") or 0) > 0 else "SELL"
+                mult = get_contract_multiplier(sym, exch)
+                eng = get_accounting_engine(exchange=exch, broker=broker)
+
+                res = eng.calculate_open_position_mtm(
+                    entry_price=avg_p,
+                    current_ltp=ltp,
+                    qty=qty,
+                    direction=direction,
+                    contract_multiplier=mult,
+                    is_option=("CE" in sym or "PE" in sym) and "FUT" not in sym,
+                    symbol=sym
+                )
+                for k in ("brokerage", "exchange_charges", "gst", "stt", "stamp_duty", "sebi_charges", "tds"):
+                    charges[k] += float(res.get(k, 0.0))
+                charges["total_charges"] += float(res.get("accrued_and_exit_charges", 0.0))
+    except Exception as e:
+        logger.warning(f"Error computing PnL charges: {e}")
+
+    for k in charges:
+        charges[k] = round(charges[k], 2)
+    return charges
+
+
 @pnltracker_bp.route("/pnltracker/api/pnl", methods=["POST"])
 @cross_origin()
 @check_session_validity
@@ -167,6 +243,7 @@ def get_pnl_data():
                 "data": {
                     "current_mtm": 0, "max_mtm": 0, "max_mtm_time": None,
                     "min_mtm": 0, "min_mtm_time": None, "max_drawdown": 0,
+                    "total_charges": 0, "net_mtm": 0, "charges_breakdown": {},
                     "pnl_series": [], "drawdown_series": [],
                 },
             }), 200
@@ -316,10 +393,17 @@ def get_pnl_data():
                 except Exception:
                     continue
 
+            charges = _compute_pnl_charges(trades, current_positions, broker=broker)
+            total_charges = charges["total_charges"]
+            net_mtm = round(latest_mtm - total_charges, 2)
+
             return jsonify({
                 "status": "success",
                 "data": {
                     "current_mtm": round(latest_mtm, 2),
+                    "total_charges": total_charges,
+                    "net_mtm": net_mtm,
+                    "charges_breakdown": charges,
                     "max_mtm": round(max_mtm, 2),
                     "max_mtm_time": portfolio_pnl["Total_PnL"].idxmax().strftime("%H:%M") if not portfolio_pnl.empty else None,
                     "min_mtm": round(min_mtm, 2),
@@ -334,6 +418,10 @@ def get_pnl_data():
             now_ts = datetime.now(ist)
             start_ts = first_trade_time or now_ts
             current_mtm = sum(float(p.get("pnl", 0)) for p in current_positions.values())
+            charges = _compute_pnl_charges(trades, current_positions, broker=broker)
+            total_charges = charges["total_charges"]
+            net_mtm = round(current_mtm - total_charges, 2)
+
             ts_start_ms = int(start_ts.tz_convert("UTC").timestamp() * 1000) if hasattr(start_ts, "tz") and start_ts.tz else int(start_ts.timestamp() * 1000)
             ts_now_ms = int(now_ts.tz_convert("UTC").timestamp() * 1000) if hasattr(now_ts, "tz") and now_ts.tz else int(now_ts.timestamp() * 1000)
 
@@ -349,6 +437,9 @@ def get_pnl_data():
                 "status": "success",
                 "data": {
                     "current_mtm": round(current_mtm, 2),
+                    "total_charges": total_charges,
+                    "net_mtm": net_mtm,
+                    "charges_breakdown": charges,
                     "max_mtm": max(0.0, round(current_mtm, 2)),
                     "max_mtm_time": now_ts.strftime("%H:%M"),
                     "min_mtm": min(0.0, round(current_mtm, 2)),
@@ -364,6 +455,7 @@ def get_pnl_data():
             "data": {
                 "current_mtm": 0, "max_mtm": 0, "max_mtm_time": None,
                 "min_mtm": 0, "min_mtm_time": None, "max_drawdown": 0,
+                "total_charges": 0, "net_mtm": 0, "charges_breakdown": {},
                 "pnl_series": [], "drawdown_series": [],
             },
         }), 200

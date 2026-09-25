@@ -1,5 +1,6 @@
-import { AlertTriangle, Camera, RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
+import { AlertTriangle, Camera, ReceiptText, RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { makeFormatCurrency } from '@/lib/utils'
@@ -51,8 +52,22 @@ interface PnLDataPoint {
   value: number
 }
 
+interface ChargesBreakdown {
+  brokerage?: number
+  exchange_charges?: number
+  gst?: number
+  stt?: number
+  stamp_duty?: number
+  sebi_charges?: number
+  tds?: number
+  total_charges?: number
+}
+
 interface PnLData {
   current_mtm: number
+  net_mtm?: number
+  total_charges?: number
+  charges_breakdown?: ChargesBreakdown
   max_mtm: number
   max_mtm_time: string
   min_mtm: number
@@ -73,6 +88,18 @@ export default function PnLTracker() {
   const [isCapturing, setIsCapturing] = useState(false)
   const [metrics, setMetrics] = useState({
     currentMtm: 0,
+    netMtm: 0,
+    totalCharges: 0,
+    chargesBreakdown: {
+      brokerage: 0,
+      exchange_charges: 0,
+      gst: 0,
+      stt: 0,
+      stamp_duty: 0,
+      sebi_charges: 0,
+      tds: 0,
+      total_charges: 0,
+    },
     maxMtm: 0,
     maxMtmTime: '--:--',
     minMtm: 0,
@@ -308,6 +335,18 @@ export default function PnLTracker() {
         // Update metrics
         setMetrics({
           currentMtm: data.current_mtm,
+          netMtm: data.net_mtm ?? data.current_mtm,
+          totalCharges: data.total_charges ?? 0,
+          chargesBreakdown: {
+            brokerage: data.charges_breakdown?.brokerage ?? 0,
+            exchange_charges: data.charges_breakdown?.exchange_charges ?? 0,
+            gst: data.charges_breakdown?.gst ?? 0,
+            stt: data.charges_breakdown?.stt ?? 0,
+            stamp_duty: data.charges_breakdown?.stamp_duty ?? 0,
+            sebi_charges: data.charges_breakdown?.sebi_charges ?? 0,
+            tds: data.charges_breakdown?.tds ?? 0,
+            total_charges: data.total_charges ?? (data.charges_breakdown?.total_charges ?? 0),
+          },
           maxMtm: data.max_mtm,
           maxMtmTime: data.max_mtm_time || '--:--',
           minMtm: data.min_mtm,
@@ -500,12 +539,15 @@ export default function PnLTracker() {
       {/* Screenshot Container */}
       <div ref={screenshotContainerRef}>
         {/* Metrics Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4 mb-6">
           {/* Current MTM */}
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Current MTM
+              <CardTitle className="text-sm font-medium text-muted-foreground flex items-center justify-between">
+                <span>Gross MTM</span>
+                <Badge variant="outline" className="text-[10px]">
+                  Unrealized
+                </Badge>
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -519,6 +561,55 @@ export default function PnLTracker() {
               >
                 {metrics.currentMtm >= 0 ? '+' : ''}
                 {((metrics.currentMtm / 100000) * 100).toFixed(2)}%
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Charges & Taxes */}
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground flex items-center justify-between">
+                <span className="flex items-center gap-1">
+                  <ReceiptText className="h-4 w-4 text-amber-500" />
+                  Charges & Taxes
+                </span>
+                <Badge variant="outline" className="text-[10px] font-mono">
+                  All-in
+                </Badge>
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold font-mono text-amber-500">
+                {formatCurrency(metrics.totalCharges)}
+              </div>
+              <div className="text-[11px] text-muted-foreground mt-1 flex flex-wrap gap-x-2">
+                <span>Exch: {formatCurrency(metrics.chargesBreakdown.exchange_charges)}</span>
+                <span>GST: {formatCurrency(metrics.chargesBreakdown.gst)}</span>
+                {metrics.chargesBreakdown.brokerage > 0 && <span>Brok: {formatCurrency(metrics.chargesBreakdown.brokerage)}</span>}
+                {metrics.chargesBreakdown.tds > 0 && <span>TDS: {formatCurrency(metrics.chargesBreakdown.tds)}</span>}
+                {metrics.chargesBreakdown.stt > 0 && <span>STT: {formatCurrency(metrics.chargesBreakdown.stt)}</span>}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Net MTM */}
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground flex items-center justify-between">
+                <span>Net MTM</span>
+                <Badge variant={metrics.netMtm >= 0 ? 'secondary' : 'destructive'} className="text-[10px]">
+                  Take-Home
+                </Badge>
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div
+                className={`text-2xl font-bold font-mono ${metrics.netMtm >= 0 ? 'text-green-500' : 'text-red-500'}`}
+              >
+                {formatCurrency(metrics.netMtm)}
+              </div>
+              <div className="text-xs text-muted-foreground mt-1">
+                Gross − Charges
               </div>
             </CardContent>
           </Card>
