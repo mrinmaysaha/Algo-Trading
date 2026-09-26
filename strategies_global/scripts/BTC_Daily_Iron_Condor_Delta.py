@@ -328,7 +328,7 @@ def compute_dynamic_sl_mult(otm_pct: float) -> float:
 
 
 SL_MULTIPLIER = compute_dynamic_sl_mult(OTM_PCT)        # Dynamic SL based on OTM distance (Option 1)
-TARGET_DECAY_PCT = float(os.getenv("BTC_IC_TARGET_PCT", "0.75")) # 75% decay target
+TARGET_DECAY_PCT = float(os.getenv("BTC_IC_TARGET_PCT", "0.70")) # 70% decay target (User Rule)
 ENABLE_BASKET_SL = os.getenv("BTC_ENABLE_BASKET_SL", "true").lower() in ("true", "1", "yes")
 BASKET_SL_MULT = float(os.getenv("BTC_BASKET_SL_MULT", "1.0"))
 DISABLE_LEG_SL = os.getenv("BTC_DISABLE_LEG_SL", "false").lower() in ("true", "1", "yes")
@@ -340,10 +340,10 @@ STRADDLE_SL_PCT = float(os.getenv("BTC_STRADDLE_SL_PCT", "0.30")) # 30% per-leg 
 STRATEGY_MODE = os.getenv("BTC_STRATEGY_MODE", "condor").lower()  # "condor" (Arch A2) or "straddle" (Arch B3)
 
 ENTRY_TIME_START = datetime.strptime(os.getenv("BTC_IC_ENTRY_START", "06:45"), "%H:%M").time()    # 06:45 IST
-ENTRY_TIME_END = datetime.strptime(os.getenv("BTC_IC_ENTRY_END", "16:30"), "%H:%M").time()        # 16:30 IST (Extended for afternoon session)
-REENTRY_CUTOFF_TIME = datetime.strptime(os.getenv("BTC_REENTRY_CUTOFF", "16:30"), "%H:%M").time() # Cutoff for Session 2/3
-MAX_DAILY_SESSIONS = int(os.getenv("BTC_MAX_SESSIONS", "3"))        # Max 3 sessions per day
-EOD_EXIT_TIME = datetime.strptime("17:15", "%H:%M").time()       # 15 mins before 17:30 IST expiry
+ENTRY_TIME_END = datetime.strptime(os.getenv("BTC_IC_ENTRY_END", "13:00"), "%H:%M").time()        # Entry window closes at 13:00 IST
+REENTRY_CUTOFF_TIME = datetime.strptime(os.getenv("BTC_REENTRY_CUTOFF", "13:00"), "%H:%M").time() # Cutoff for Session 2 Re-entry (1:00 PM IST)
+MAX_DAILY_SESSIONS = int(os.getenv("BTC_MAX_SESSIONS", "2"))        # Max 2 sessions per day
+EOD_EXIT_TIME = datetime.strptime(os.getenv("BTC_EOD_EXIT", "17:15"), "%H:%M").time()       # 15 mins before 17:30 IST expiry
 
 
 def get_state_file_path(dry_run: bool = False) -> Path:
@@ -2186,8 +2186,8 @@ class BTCDailyIronCondor:
     def run(self):
         logger.info("=" * 80)
         logger.info(f"🚀 BTC DAILY HEDGED IRON CONDOR RUNNING — {STRATEGY_NAME}")
-        logger.info(f"Target: Port 5001 | Lots: {self.lots} contracts | OTM: {OTM_PCT*100:.1f}% | Wing: ${SPREAD_WIDTH:.0f}")
-        logger.info(f"Session 1 Window: {ENTRY_TIME_START.strftime('%H:%M')} - {ENTRY_TIME_END.strftime('%H:%M')} IST")
+        logger.info(f"Target: Port 5001 | Sizing: Dynamic (65% Margin Cap, 35% Free Cash Buffer) | OTM: {OTM_PCT*100:.1f}% | Wing: ${SPREAD_WIDTH:.0f}")
+        logger.info(f"Session 1 Window: {ENTRY_TIME_START.strftime('%H:%M')} - {ENTRY_TIME_END.strftime('%H:%M')} IST (Hold to {EOD_EXIT_TIME.strftime('%H:%M')} unless 70% target reached)")
         logger.info(f"Session 2 Re-Strike Cutoff: {REENTRY_CUTOFF_TIME.strftime('%H:%M')} IST | Max Sessions: {MAX_DAILY_SESSIONS} | EOD Exit: {EOD_EXIT_TIME.strftime('%H:%M')} IST")
         logger.info("=" * 80)
 
@@ -2230,8 +2230,26 @@ class BTCDailyIronCondor:
             # Heartbeat and broker reconciliation every 60s
             if now_epoch - last_hb >= 60.0:
                 last_hb = now_epoch
+                leg_details = []
+                total_unrealized_usd = 0.0
                 if self.trade_active:
                     self.reconcile_positions_with_broker()
+                    for s, p in self.positions.items():
+                        if p.get("status") == "OPEN":
+                            mult = self.multiplier
+                            qty = p.get("quantity", 0)
+                            qd = self._get_quote_cached(s)
+                            ltp = qd.get("ltp") or 0.0
+                            entry = p.get("entry_price", 0.0)
+                            sl = p.get("stop_loss", 0.0)
+                            if p.get("action") == "SELL":
+                                px = qd.get("ask") if qd.get("ask") is not None else ltp
+                                if px is not None and px >= 0:
+                                    total_unrealized_usd += (entry - px) * mult * qty
+                                leg_details.append(f"{s} (SELL @ ${entry:.2f} | LTP: ${ltp:.2f} | SL: ${sl:.2f})")
+                            else:
+                                px = qd.get("bid") if qd.get("bid") is not None else ltp
+                                total_unrealized_usd += (px - entry) * mult * qty
                 open_count = sum(1 for p in self.positions.values() if p.get("status") == "OPEN")
                 stuck_count = sum(1 for p in self.positions.values() if p.get("status") == "STUCK")
                 if self.trade_active:
@@ -2253,6 +2271,14 @@ class BTCDailyIronCondor:
                     cd_left = max(0, int(self.retry_cooldown_sec - elapsed))
                     status_str = f"SESSION {self.current_session} WINDOW OPEN (Attempts: {self.entry_attempts}/{self.max_entry_attempts}, Cooldown: {cd_left}s)"
                 logger.info(f"💓 [HEARTBEAT] Time: {get_current_ist_datetime().strftime('%H:%M:%S IST')} | Status: {status_str}")
+                if self.trade_active:
+                    unrealized_inr = total_unrealized_usd * self.usd_inr_rate
+                    target_usd = getattr(self, "target_profit", 0.0)
+                    target_inr = target_usd * self.usd_inr_rate
+                    basket_sl_thresh = -1.0 * getattr(self, "net_credit_collected", 0.0) * self.basket_sl_mult
+                    logger.info(f"   📊 [PNL TRACKER] Unrealized: ${total_unrealized_usd:+.2f} USD ({unrealized_inr:+,.2f} INR) | Target (70%): ${target_usd:.2f} ({target_inr:,.2f} INR) | Basket SL: ${basket_sl_thresh:.2f}")
+                    for leg in leg_details:
+                        logger.info(f"   🛡️ [LEG PROTECTION] {leg}")
 
             # 1. Trigger Entry if in entry window and no trade active for current session
             if not self.trade_taken_today and not self.trade_active:
