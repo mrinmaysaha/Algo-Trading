@@ -168,14 +168,23 @@ _usd_inr_cache: Optional[Tuple[float, float]] = None  # (rate, timestamp)
 
 
 def fetch_usd_inr_rate() -> float:
-    """Fetch live USD/INR rate; fall back to env/hardcoded with a loud warning."""
+    """Fetch live USD/INR rate; prioritize configured USD_INR_RATE if explicitly provided."""
     global _usd_inr_cache
     now = time.time()
     if _usd_inr_cache and (now - _usd_inr_cache[1]) < 3600:
         return _usd_inr_cache[0]
 
     env_rate = os.getenv("USD_INR_RATE")
-    fallback = float(env_rate) if env_rate else 88.0
+    if env_rate:
+        try:
+            rate = float(env_rate)
+            if rate > 0:
+                _usd_inr_cache = (rate, now)
+                return rate
+        except ValueError:
+            pass
+
+    fallback = 88.0
 
     endpoints = [
         "https://api.exchangerate-api.com/v4/latest/USD",
@@ -323,7 +332,7 @@ TARGET_DECAY_PCT = float(os.getenv("BTC_IC_TARGET_PCT", "0.75")) # 75% decay tar
 ENABLE_BASKET_SL = os.getenv("BTC_ENABLE_BASKET_SL", "true").lower() in ("true", "1", "yes")
 BASKET_SL_MULT = float(os.getenv("BTC_BASKET_SL_MULT", "1.0"))
 DISABLE_LEG_SL = os.getenv("BTC_DISABLE_LEG_SL", "true").lower() in ("true", "1", "yes")
-MIN_PREMIUM_THRESHOLD = float(os.getenv("BTC_IC_MIN_PREMIUM", "5.0")) # $5.0 minimum premium for 1.5% OTM shorts
+MIN_PREMIUM_THRESHOLD = float(os.getenv("BTC_IC_MIN_PREMIUM", "100.0")) # $100.0 minimum premium for shorts
 MAX_SPREAD_PCT = float(os.getenv("BTC_IC_MAX_SPREAD", "0.05"))   # 5% max bid-ask spread
 
 # Architecture B3 Parameters (Dynamic ATM Straddle with 30% SL)
@@ -1029,14 +1038,14 @@ class BTCDailyIronCondor:
                 elif option_type == "CE" and r > short_strike_ref and r not in candidate_strikes:
                     candidate_strikes.append(r)
         else:
-            # Walk inwards towards ATM to pick up higher premium & tighter spreads
+            # Walk inwards towards ATM to pick up higher premium & tighter spreads (meeting MIN_PREMIUM_THRESHOLD)
             if option_type == "CE":
-                for step in [1, 2, 3, 4, 5]:
+                for step in range(1, 35):
                     cand = primary_strike - (step * strike_step)
                     if cand not in candidate_strikes:
                         candidate_strikes.append(cand)
             elif option_type == "PE":
-                for step in [1, 2, 3, 4, 5]:
+                for step in range(1, 35):
                     cand = primary_strike + (step * strike_step)
                     if cand not in candidate_strikes:
                         candidate_strikes.append(cand)
@@ -1478,11 +1487,17 @@ class BTCDailyIronCondor:
                 logger.warning(f"  ⚠️ [ADAPTIVE LADDER] Short legs unavailable/illiquid at {cand_otm*100:.2f}% OTM. Trying next tier...")
                 continue
 
+            # Base wing hedge targets on actual resolved short strikes to maintain exact spread width
+            actual_s_ce_strike = parse_strike_from_symbol(cand_s_ce) or short_call_target
+            actual_s_pe_strike = parse_strike_from_symbol(cand_s_pe) or short_put_target
+            resolved_l_ce_target = actual_s_ce_strike + self.spread_width
+            resolved_l_pe_target = actual_s_pe_strike - self.spread_width
+
             cand_l_ce = self.resolve_liquid_option_symbol(
-                long_call_target, "CE", expiry, action="BUY", is_wing=True, short_strike_ref=short_call_target, max_wing_price=max_wing_px
+                resolved_l_ce_target, "CE", expiry, action="BUY", is_wing=True, short_strike_ref=actual_s_ce_strike, max_wing_price=max_wing_px
             )
             cand_l_pe = self.resolve_liquid_option_symbol(
-                long_put_target, "PE", expiry, action="BUY", is_wing=True, short_strike_ref=short_put_target, max_wing_price=max_wing_px
+                resolved_l_pe_target, "PE", expiry, action="BUY", is_wing=True, short_strike_ref=actual_s_pe_strike, max_wing_price=max_wing_px
             )
             if not cand_l_ce or not cand_l_pe:
                 logger.warning(f"  ⚠️ [ADAPTIVE LADDER] Wing hedges unavailable/over ceiling at {cand_otm*100:.2f}% OTM. Trying next tier...")
