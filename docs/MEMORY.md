@@ -341,5 +341,10 @@
   5. **Verified Live Execution (Delta Exchange)**:
      - ETH 4-leg entry established: Short 132x 2690CE ($6.60), Short 132x 2690PE ($6.90), Long 132x 2720CE ($0.50), Long 132x 2660PE ($0.49). Net credit: **$16.26 USD (~₹1,430.51 INR)**.
      - BTC 4-leg entry established: Short 49x 84000CE ($146.00), Short 49x 84000PE ($155.00), Long 49x 84800CE ($23.00), Long 49x 83200PE ($14.00). Net credit: **$12.69 USD (~₹1,116.40 INR)**.
+  6. **Session-Differentiated Premium Hunting & Dual SL Protection**:
+     - **Session 1 (First Trade)**: Enforces $5.00 (ETH) / $100.00 (BTC) minimum selling premium to harvest high morning theta decay.
+     - **Session 2+ (Re-entry / Later in day)**: The $5 / $100 floor is bypassed (`min_prem = 0.05` ETH / `1.0` BTC). Strikes start at 1.5% OTM and select immediately if liquid, preventing forced inward march to ATM/ITM late in the day where gamma spikes cause rapid SL hits. Inward hunt is capped at 6 steps only for illiquidity fallback.
+     - **Dual SL Architecture**: Enabled both Leg SL (`DISABLE_LEG_SL = false` with 2-tick confirmation and spread <= 35% guard) AND Basket SL (-1.0x credit) simultaneously.
+
 
 
