@@ -974,7 +974,7 @@ class ETHDailyIronCondor:
                     if ask > 0.0 and ask <= max_wp:
                         return True, bid, ask
                 elif action == "SELL":
-                    min_prem = getattr(self, "min_premium", 2.0)
+                    min_prem = getattr(self, "min_premium", MIN_PREMIUM_THRESHOLD)
                     if bid >= min_prem:
                         return True, bid, ask
                     elif bid > 0.0:
@@ -1563,9 +1563,9 @@ class ETHDailyIronCondor:
 
             strike_s_ce = _get_strike(cand_s_ce)
             strike_s_pe = _get_strike(cand_s_pe)
-            if strike_s_ce <= strike_s_pe:
+            if strike_s_ce < strike_s_pe:
                 logger.warning(
-                    f"  ⚠️ [ADAPTIVE LADDER] Inverted strikes ({cand_s_ce} [${strike_s_ce}] <= {cand_s_pe} [${strike_s_pe}]) "
+                    f"  ⚠️ [ADAPTIVE LADDER] Inverted strikes ({cand_s_ce} [${strike_s_ce}] < {cand_s_pe} [${strike_s_pe}]) "
                     f"at {cand_otm*100:.2f}% OTM. Trying next tier..."
                 )
                 continue
