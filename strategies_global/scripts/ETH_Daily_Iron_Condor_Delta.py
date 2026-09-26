@@ -391,8 +391,8 @@ SL_MULTIPLIER = compute_dynamic_sl_mult(OTM_PCT)        # Dynamic SL based on OT
 TARGET_DECAY_PCT = float(os.getenv("ETH_IC_TARGET_PCT", "0.75")) # 75% decay target
 ENABLE_BASKET_SL = os.getenv("ETH_ENABLE_BASKET_SL", "true").lower() in ("true", "1", "yes")
 BASKET_SL_MULT = float(os.getenv("ETH_BASKET_SL_MULT", "1.0"))
-DISABLE_LEG_SL = os.getenv("ETH_DISABLE_LEG_SL", "true").lower() in ("true", "1", "yes")
-MIN_PREMIUM_THRESHOLD = float(os.getenv("ETH_IC_MIN_PREMIUM", "5.0")) # $5.0 minimum premium for shorts
+DISABLE_LEG_SL = os.getenv("ETH_DISABLE_LEG_SL", "false").lower() in ("true", "1", "yes")
+MIN_PREMIUM_THRESHOLD = float(os.getenv("ETH_IC_MIN_PREMIUM", "5.0")) # $5.0 minimum premium for shorts in Session 1
 MAX_SPREAD_PCT = float(os.getenv("ETH_IC_MAX_SPREAD", "0.05"))   # 5% max bid-ask spread
 
 # Architecture B3 Parameters (Dynamic ATM Straddle with 30% SL)
@@ -974,7 +974,12 @@ class ETHDailyIronCondor:
                     if ask > 0.0 and ask <= max_wp:
                         return True, bid, ask
                 elif action == "SELL":
-                    min_prem = getattr(self, "min_premium", MIN_PREMIUM_THRESHOLD)
+                    # Session 1: enforce $5.00 min premium to harvest substantial decay
+                    # Session 2+: no $5.00 floor (accept any valid liquid bid >= $0.05) to remain at 1.5% OTM
+                    if getattr(self, "current_session", 1) == 1:
+                        min_prem = getattr(self, "min_premium", MIN_PREMIUM_THRESHOLD)
+                    else:
+                        min_prem = 0.05
                     if bid >= min_prem:
                         return True, bid, ask
                     elif bid > 0.0:
@@ -1030,14 +1035,17 @@ class ETHDailyIronCondor:
                 elif option_type == "CE" and r > short_strike_ref and r not in candidate_strikes:
                     candidate_strikes.append(r)
         else:
-            # Walk inwards towards ATM to pick up higher premium & tighter spreads (meeting MIN_PREMIUM_THRESHOLD)
+            # Walk inwards towards ATM:
+            # Session 1: up to 25 steps to meet MIN_PREMIUM_THRESHOLD ($5.0)
+            # Session 2+: only up to 6 steps if 1.5% OTM is illiquid, staying safely far OTM
+            max_inward_steps = 25 if getattr(self, "current_session", 1) == 1 else 6
             if option_type == "CE":
-                for step in range(1, 25):
+                for step in range(1, max_inward_steps):
                     cand = primary_strike - (step * strike_step)
                     if cand not in candidate_strikes:
                         candidate_strikes.append(cand)
             elif option_type == "PE":
-                for step in range(1, 25):
+                for step in range(1, max_inward_steps):
                     cand = primary_strike + (step * strike_step)
                     if cand not in candidate_strikes:
                         candidate_strikes.append(cand)
