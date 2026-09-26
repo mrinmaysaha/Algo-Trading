@@ -1944,8 +1944,13 @@ class BTCDailyIronCondor:
                 self.square_off_all("BASKET_SL_HIT")
                 return
 
-        # 2. Target Profit Check (Theta Decay Captured)
+        # 2. Target Profit Check (Theta Decay Captured or Dollar Target Achieved)
+        target_dollar = getattr(self, "target_profit", 0.0)
+        dollar_tp_hit = (target_dollar > 0 and total_unrealized_usd >= target_dollar)
+
         short_legs = [p for p in self.positions.values() if p["status"] == "OPEN" and p["action"] == "SELL"]
+        short_decay_hit = False
+        decay_pct = 0.0
         if short_legs:
             initial_short_prem = sum(p["entry_price"] for p in short_legs)
             current_short_prem = 0.0
@@ -1953,18 +1958,23 @@ class BTCDailyIronCondor:
             for pos in short_legs:
                 sym = [s for s, p in self.positions.items() if p == pos][0]
                 qd = self._get_quote_cached(sym)
-                ask_px = qd.get("ask") if qd.get("ask") is not None else qd.get("ltp")
-                if ask_px is not None and ask_px >= 0.0:
-                    current_short_prem += ask_px
+                # Use LTP first to avoid resting wide asks blocking TP, fall back to ask
+                px = qd.get("ltp") if (qd.get("ltp") and qd.get("ltp") > 0) else qd.get("ask")
+                if px is not None and px >= 0.0:
+                    current_short_prem += px
                 else:
                     quotes_ok = False
 
             decay_threshold = initial_short_prem * (1.0 - self.target_decay_pct)
             if quotes_ok and initial_short_prem > 0 and current_short_prem <= decay_threshold:
+                short_decay_hit = True
                 decay_pct = ((initial_short_prem - current_short_prem) / initial_short_prem) * 100.0
-                logger.info(f"🎯 [TARGET PROFIT REACHED] Short premium decayed by {decay_pct:.1f}% (Current: ${current_short_prem:.2f} <= Target: ${decay_threshold:.2f}). Squaring off all legs to lock in profit!")
-                self.square_off_all("TARGET_PROFIT_DECAY")
-                return
+
+        if short_decay_hit or dollar_tp_hit:
+            reason_detail = f"Short decay {decay_pct:.1f}% >= {self.target_decay_pct*100:.0f}%" if short_decay_hit else f"Dollar profit ${total_unrealized_usd:.2f} >= Target ${target_dollar:.2f}"
+            logger.info(f"🎯 [TARGET PROFIT REACHED] {reason_detail}. Squaring off all legs to lock in profit!")
+            self.square_off_all("TARGET_PROFIT_DECAY")
+            return
 
         # 3. Check Stop Loss on Short Legs with Verified Unwind (Solution 1: bypassed when Basket SL active)
         for sym, pos in list(self.positions.items()):
