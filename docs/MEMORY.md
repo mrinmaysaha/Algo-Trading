@@ -364,6 +364,21 @@
        - `[PNL TRACKER]` with USD and INR unrealized PnL, Target (70%) profit, and Basket SL threshold.
        - `[LEG PROTECTION]` displaying each short leg's entry price, real-time LTP, and active SL trigger level.
 
+### O. Pure 1.0x Basket SL Alignment with Overnight Iron Condor (2026-09-26)
+- **Problem Diagnosis**:
+  - Setting `DISABLE_LEG_SL = False` enabled both per-leg SL (1.8x ask breach) and Basket SL (-1.0x credit).
+  - During an intraday Bitcoin rally at 14:03 IST, the Short Call spiked to $266.00 (breaching 1.8x SL of $262.80), triggering an individual Call side exit.
+  - However, the overall 4-leg Iron Condor basket was actually in profit (+₹87.10 INR / +$0.99 USD) because the Put side had concurrently decayed by 84.6%, perfectly hedging the move.
+  - Individual leg SLs unbalance hedged condors prematurely, whereas the user's intent—matching [Overnight_Crypto_Delta_Options.py](file:///c:/Users/mrinm/Algo_tading/openalgo/strategies_global/scripts/Overnight_Crypto_Delta_Options.py)—is to evaluate the entire 4-leg book unrealized PnL together under pure 1.0x Basket SL.
+- **Architectural Solution**:
+  - Restored `DISABLE_LEG_SL = True` across both `BTC_Daily_Iron_Condor_Delta.py` and `ETH_Daily_Iron_Condor_Delta.py` (matching `OVERNIGHT_DISABLE_LEG_SL = True`).
+  - Risk is managed as a unified portfolio:
+    1. **Target Profit**: 70% decay or dollar target on the entire basket.
+    2. **Basket Stop Loss**: -1.0x Net Credit collected on the entire basket.
+    3. **Max Daily Loss**: ₹4,500 emergency portfolio circuit breaker.
+  - Individual leg spikes are absorbed by opposite-leg decay without premature leg-by-leg exits.
+
+
 
 
 
