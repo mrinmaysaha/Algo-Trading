@@ -391,7 +391,7 @@ SL_MULTIPLIER = compute_dynamic_sl_mult(OTM_PCT)        # Dynamic SL based on OT
 TARGET_DECAY_PCT = float(os.getenv("ETH_IC_TARGET_PCT", "0.70")) # 70% decay target (User Rule)
 ENABLE_BASKET_SL = os.getenv("ETH_ENABLE_BASKET_SL", "true").lower() in ("true", "1", "yes")
 BASKET_SL_MULT = float(os.getenv("ETH_BASKET_SL_MULT", "1.0"))
-DISABLE_LEG_SL = os.getenv("ETH_DISABLE_LEG_SL", "false").lower() in ("true", "1", "yes")
+DISABLE_LEG_SL = os.getenv("ETH_DISABLE_LEG_SL", "true").lower() in ("true", "1", "yes")
 MIN_PREMIUM_THRESHOLD = float(os.getenv("ETH_IC_MIN_PREMIUM", "5.0")) # $5.0 minimum premium for shorts in Session 1
 MAX_SPREAD_PCT = float(os.getenv("ETH_IC_MAX_SPREAD", "0.05"))   # 5% max bid-ask spread
 
