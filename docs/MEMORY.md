@@ -323,3 +323,23 @@
 - **Rule & Production Standard**:
   - Never run 0DTE ETH Iron Condors at >= 1.2% - 1.5% OTM intraday; theta is already completely crushed. For intraday ETH 0DTE theta harvesting, strikes must be within **0.4% - 0.7% OTM** (premiums $1.50 - $3.50) or use **Architecture B3 ATM Straddle** (mode `straddle`, strike 2690 @ $14.50 combined premium with 30% per-leg SL).
 
+### M. 0DTE Minimum Selling Premium Hunter, Wing Anchoring & ATM Iron Butterfly Invariants (2026-09-26)
+- **Problem Diagnosis**:
+  - In daytime 0DTE trading, selecting static 1.5% OTM strikes after 10:00 AM yields negligible premiums ($0.20 on ETH, $3.00 on BTC), making normal bid-ask spread cross the 1.0x basket SL immediately while harvesting negligible decay.
+  - Sizing calculations fetched dynamic exchange rates from public APIs (returning inflated ₹95.92/USD) instead of the environment's pinned rate (₹88.00/USD), causing lot sizes to shrink despite account capital growing.
+- **Architectural Solutions Deployed**:
+  1. **Minimum Selling Premium Hunter**:
+     - Both `BTC_Daily_Iron_Condor_Delta.py` and `ETH_Daily_Iron_Condor_Delta.py` enforce minimum short leg premium thresholds: **>= $5.00 bid for ETH** and **>= $100.00 bid for BTC** (total credit >= $10 ETH, >= $200 BTC).
+     - If initial OTM strikes have bids below threshold, `_find_liquid_strike()` walks inward towards ATM/ITM up to 25 strikes (ETH) / 35 strikes (BTC) until viable premium is located.
+  2. **Strict Wing Anchoring**:
+     - Long protective wings are strictly anchored to the resolved short strikes (`actual_s_ce_strike + spread_width` and `actual_s_pe_strike - spread_width`), ensuring fixed spread risk ($30 on ETH, $800 on BTC) even when short strikes walk inward.
+  3. **ATM Iron Butterfly Hierarchy Invariant (`<` vs `<=`)**:
+     - When inward premium hunting lands both Call and Put on the ATM strike (e.g. 2690 CE and 2690 PE on ETH, 84000 CE and 84000 PE on BTC), the strict inverted guard `if strike_s_ce <= strike_s_pe:` previously aborted valid trades.
+     - Changed guard to `if strike_s_ce < strike_s_pe:`. Equal strikes (`strike_s_ce == strike_s_pe`) represent an **ATM Iron Butterfly (Hedged Straddle)** fully capped by outer wings, which perfectly captures the user's target $7–$8 decay without unhedged risk.
+  4. **USD/INR Rate Priority**:
+     - `fetch_usd_inr_rate()` checks `os.getenv("USD_INR_RATE")` (88.0) first. Lots scaled up with account growth to **132 lots ETH** (up from 125) and **49 lots BTC** (up from 46).
+  5. **Verified Live Execution (Delta Exchange)**:
+     - ETH 4-leg entry established: Short 132x 2690CE ($6.60), Short 132x 2690PE ($6.90), Long 132x 2720CE ($0.50), Long 132x 2660PE ($0.49). Net credit: **$16.26 USD (~₹1,430.51 INR)**.
+     - BTC 4-leg entry established: Short 49x 84000CE ($146.00), Short 49x 84000PE ($155.00), Long 49x 84800CE ($23.00), Long 49x 83200PE ($14.00). Net credit: **$12.69 USD (~₹1,116.40 INR)**.
+
+
