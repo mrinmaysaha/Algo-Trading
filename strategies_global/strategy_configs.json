@@ -60,11 +60,11 @@
     "file_path": "strategies/scripts/BTC_Daily_Iron_Condor_Delta.py",
     "file_name": "BTC_Daily_Iron_Condor_Delta.py",
     "exchange": "CRYPTO",
-    "is_running": false,
+    "is_running": true,
     "is_scheduled": true,
     "created_at": "2026-09-17T18:15:00.000000+05:30",
     "user_id": "Mrinmay120",
-    "schedule_start": "06:45",
+    "schedule_start": "07:00",
     "schedule_stop": "17:35",
     "schedule_days": [
       "mon",
@@ -78,8 +78,8 @@
     "last_modified": "2026-09-20T18:02:08.909537+05:30",
     "order": 2,
     "group": "OPTIONS",
-    "last_started": "2026-09-25T10:41:27.669283+05:30",
-    "pid": null,
+    "last_started": "2026-09-26T09:56:30.853582+05:30",
+    "pid": 26300,
     "last_stopped": "2026-09-25T17:35:05.323019+05:30"
   },
   "ETH_Daily_Iron_Condor": {
@@ -87,11 +87,11 @@
     "file_path": "strategies/scripts/ETH_Daily_Iron_Condor_Delta.py",
     "file_name": "ETH_Daily_Iron_Condor_Delta.py",
     "exchange": "CRYPTO",
-    "is_running": false,
+    "is_running": true,
     "is_scheduled": true,
     "created_at": "2026-09-17T18:45:00.000000+05:30",
     "user_id": "Mrinmay120",
-    "schedule_start": "06:45",
+    "schedule_start": "07:00",
     "schedule_stop": "17:35",
     "schedule_days": [
       "mon",
@@ -105,8 +105,8 @@
     "last_modified": "2026-09-17T18:45:00.000000+05:30",
     "order": 3,
     "group": "OPTIONS",
-    "last_started": "2026-09-25T10:41:27.913544+05:30",
-    "pid": null,
+    "last_started": "2026-09-26T09:56:30.879925+05:30",
+    "pid": 26301,
     "last_stopped": "2026-09-25T17:35:02.724062+05:30"
   },
   "Overnight_Crypto_Delta_Options": {
@@ -114,7 +114,7 @@
     "file_path": "strategies/scripts/Overnight_Crypto_Delta_Options.py",
     "file_name": "Overnight_Crypto_Delta_Options.py",
     "exchange": "CRYPTO",
-    "is_running": true,
+    "is_running": false,
     "is_scheduled": true,
     "created_at": "2026-09-18T23:30:00.000000+05:30",
     "user_id": "Mrinmay120",
@@ -132,8 +132,8 @@
     "last_modified": "2026-09-20T19:29:39.474321+05:30",
     "order": 4,
     "group": "OPTIONS",
-    "pid": 5572,
-    "last_started": "2026-09-26T05:24:46.596090+05:30",
-    "last_stopped": "2026-09-26T05:24:44.778000+05:30"
+    "pid": null,
+    "last_started": "2026-09-26T05:35:30.838150+05:30",
+    "last_stopped": "2026-09-26T06:30:01.588913+05:30"
   }
 }

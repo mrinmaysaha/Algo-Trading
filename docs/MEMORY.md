@@ -310,3 +310,16 @@
   2. **Wing L2 Depth Fallback**: If an orderbook depth query returns empty quotes for a `*_WING` leg, it falls back to `DepthQuote(bid=0.0, ask=0.0, depth_ok=False)` instead of invalidating the tick with `usable = False`.
   3. **Verification**: Restarting the supervisor immediately triggered the 60% Take-Profit for ETH (+$7.18 USD realized profit against $6.05 target), successfully squaring off all 4 ETH legs on Delta Exchange. BTC condor remained open and actively managed (+40% profit towards 60% target, or 06:00 IST morning TWAP ladder unwind).
 
+
+### L. 0DTE Crypto Delta Options Strike Distance & Intraday Theta Decay Invariants (2026-09-26)
+- **Problem Diagnosis**:
+  - User requested moving 0DTE Daily Iron Condors from 2.0% OTM closer to 1.5% OTM to harvest higher theta decay.
+  - Previous morning session (07:00 IST entry) had sold ETH 2710 CE ($2.00) and 2670 PE ($2.30), decaying ~37% by 09:45 IST.
+  - The initial morning positions were squared off cleanly via `square_off_all()`, locking in **+Rs 169.24 (~$1.76 USD)** net realized cash gain after all taker fees and statutory taxes.
+- **Empirical Strike & Option Chain Findings**:
+  1. **BTC ($84,000 spot)**: 1.5% OTM options maintain healthy liquidity and viable premium ($6.00 - $8.00 per contract). Successfully re-entered Session 2 Iron Condor at 1.5% OTM (`BTC26SEP2685000CE` / `BTC26SEP2682800PE` shorts, `85800CE` / `82000PE` wings), collecting ~$0.36 USD credit with 1.8x dynamic SL.
+  2. **ETH ($2,688 spot) 0DTE Compression**: On 0DTE options with only ~7 hours to 17:30 IST settlement, 1.5% OTM strikes (`2730CE` / `2650PE`) trade at just **$0.21 - $0.25** with a 9-cent bid-ask spread. For 122 contracts, the net credit collected is only **$0.14 USD** (14 cents).
+  3. **The 1.0x Basket SL vs Spread Trap**: When net credit is only $0.14, normal 2-3 cent market bid-ask crossing friction ($0.30 - $0.40 MTM) immediately breaches the 1.0x basket stop loss ($-0.14).
+- **Rule & Production Standard**:
+  - Never run 0DTE ETH Iron Condors at >= 1.2% - 1.5% OTM intraday; theta is already completely crushed. For intraday ETH 0DTE theta harvesting, strikes must be within **0.4% - 0.7% OTM** (premiums $1.50 - $3.50) or use **Architecture B3 ATM Straddle** (mode `straddle`, strike 2690 @ $14.50 combined premium with 30% per-leg SL).
+

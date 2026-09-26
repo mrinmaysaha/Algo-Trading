@@ -352,8 +352,8 @@ CAPITAL_BASE_INR = float(os.getenv("CAPITAL_BASE_INR", os.getenv("ETH_IC_CAPITAL
 MARGIN_UTILIZATION_CAP = float(os.getenv("ETH_IC_MARGIN_CAP", "0.65")) # 65% margin cap (35% free buffer)
 USD_INR_RATE = float(os.getenv("USD_INR_RATE", "88.0"))
 MAX_DAILY_LOSS_INR = float(os.getenv("MAX_DAILY_LOSS_INR", "4500.0")) # Rs 4,500 circuit breaker
-# Architecture A2 Parameters (Dynamic OTM Hedged Iron Condor: 2.0% -> 1.5% -> 1.0%)
-OTM_PCT = float(os.getenv("ETH_IC_OTM_PCT", "0.020"))              # Starts at 2.0% OTM, steps down dynamically if illiquid
+# Architecture A2 Parameters (Dynamic OTM Hedged Iron Condor: 1.5% -> 1.1% -> 0.8%)
+OTM_PCT = float(os.getenv("ETH_IC_OTM_PCT", "0.015"))              # Starts at 1.5% OTM, steps down dynamically if illiquid
 SPREAD_WIDTH = float(os.getenv("ETH_IC_SPREAD_WIDTH", "30.0"))    # $30 wing spread width
 
 
@@ -383,7 +383,7 @@ TARGET_DECAY_PCT = float(os.getenv("ETH_IC_TARGET_PCT", "0.75")) # 75% decay tar
 ENABLE_BASKET_SL = os.getenv("ETH_ENABLE_BASKET_SL", "true").lower() in ("true", "1", "yes")
 BASKET_SL_MULT = float(os.getenv("ETH_BASKET_SL_MULT", "1.0"))
 DISABLE_LEG_SL = os.getenv("ETH_DISABLE_LEG_SL", "true").lower() in ("true", "1", "yes")
-MIN_PREMIUM_THRESHOLD = float(os.getenv("ETH_IC_MIN_PREMIUM", "2.0")) # $2.0 minimum premium for shorts
+MIN_PREMIUM_THRESHOLD = float(os.getenv("ETH_IC_MIN_PREMIUM", "0.20")) # $0.20 minimum premium for 1.5% OTM shorts
 MAX_SPREAD_PCT = float(os.getenv("ETH_IC_MAX_SPREAD", "0.05"))   # 5% max bid-ask spread
 
 # Architecture B3 Parameters (Dynamic ATM Straddle with 30% SL)
