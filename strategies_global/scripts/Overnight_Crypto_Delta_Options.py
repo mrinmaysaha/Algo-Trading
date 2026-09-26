@@ -2312,8 +2312,8 @@ class Engine:
             self._save_state()
 
     # -- economics --------------------------------------------------------------------
-    def _spread_profit(self, asset: str, side: str, quotes: Dict[str, DepthQuote]) -> Optional[Tuple[float, float, float]]:
-        """Per-spread economics (P1 fix). Returns (credit_net, cost_now_net, profit)."""
+    def _spread_profit(self, asset: str, side: str, quotes: Dict[str, DepthQuote]) -> Optional[Tuple[float, float, float, float]]:
+        """Per-spread economics (P1 fix). Returns (credit_net, cost_now_net, profit, gross_profit)."""
         a = self.state["assets"][asset]
         mult = self.cfg.assets[asset].contract_mult
         s_leg, w_leg = a["legs"][f"{side}_SHORT"], a["legs"][f"{side}_WING"]
@@ -2324,11 +2324,12 @@ class Engine:
         if not sq or not sq.ask:
             return None
         wing_bid = float(wq.bid) if (wq and wq.bid is not None and wq.bid > 0) else 0.0
-        credit = (s_leg["avg_price"] - w_leg["avg_price"]) * mult * q
-        credit -= self._fee_usd(s_leg["avg_price"], q, mult, 1) + self._fee_usd(w_leg["avg_price"], q, mult, 1)
-        cost = (sq.ask - wing_bid) * mult * q
-        cost += self._fee_usd(sq.ask, q, mult, 1) + (self._fee_usd(wing_bid, q, mult, 1) if wing_bid > 0 else 0.0)
-        return credit, cost, credit - cost
+        gross_credit = (s_leg["avg_price"] - w_leg["avg_price"]) * mult * q
+        gross_cost = (sq.ask - wing_bid) * mult * q
+        gross_profit = gross_credit - gross_cost
+        credit = gross_credit - (self._fee_usd(s_leg["avg_price"], q, mult, 1) + self._fee_usd(w_leg["avg_price"], q, mult, 1))
+        cost = gross_cost + (self._fee_usd(sq.ask, q, mult, 1) + (self._fee_usd(wing_bid, q, mult, 1) if wing_bid > 0 else 0.0))
+        return credit, cost, credit - cost, gross_profit
 
     def _open_unrealized(self, asset: str, quotes: Dict[str, DepthQuote]) -> float:
         a = self.state["assets"][asset]
@@ -2432,16 +2433,17 @@ class Engine:
                 pe = self._spread_profit(asset, "PE", quotes)
                 if ce and pe:
                     profit = ce[2] + pe[2]
+                    gross_profit = ce[3] + pe[3]
                     target = float(a.get("target_profit_value") or 0)
                     credit = float(a.get("initial_net_credit") or (ce[0] + pe[0]))
                     if target <= 0 and credit > 0:
                         target = credit * self.cfg.tp_pct
                     basket_sl_thresh = -1.0 * credit * self.cfg.basket_sl_mult
 
-                    if profit >= target and target > 0:
-                        logger.info(f"[{asset}] 🎯 TP BASKET profit=${profit:.2f} >= target=${target:.2f} ({self.cfg.tp_pct*100:.0f}% credit)")
-                        self._event("TP_HIT", asset, f"basket profit=${profit:.2f} target=${target:.2f}")
-                        self._alert("TP_HIT", f"{asset}: basket TP ${profit:.2f}")
+                    if (profit >= target or gross_profit >= target) and target > 0:
+                        logger.info(f"[{asset}] 🎯 TP BASKET profit=${profit:.2f} (gross=${gross_profit:.2f}) >= target=${target:.2f} ({self.cfg.tp_pct*100:.0f}% credit)")
+                        self._event("TP_HIT", asset, f"basket profit=${profit:.2f} gross=${gross_profit:.2f} target=${target:.2f}")
+                        self._alert("TP_HIT", f"{asset}: basket TP ${profit:.2f} (gross ${gross_profit:.2f})")
                         self._square_off_full(asset, "Basket_TP_Achieved")
                         continue
                     elif self.cfg.enable_basket_sl and profit <= basket_sl_thresh and credit > 0:
@@ -2458,11 +2460,11 @@ class Engine:
                 side = "CE" if ce_open else "PE"
                 sp = self._spread_profit(asset, side, quotes)
                 if sp:
-                    credit, cost, profit = sp
+                    credit, cost, profit, gross_profit = sp
                     target = credit * self.cfg.tp_pct
                     survivor_sl = -1.0 * credit * self.cfg.basket_sl_mult
-                    if credit > 0 and profit >= target:
-                        logger.info(f"[{asset}] 🎯 TP SURVIVOR {side}: profit=${profit:.2f} >= ${target:.2f}")
+                    if credit > 0 and (profit >= target or gross_profit >= target):
+                        logger.info(f"[{asset}] 🎯 TP SURVIVOR {side}: profit=${profit:.2f} (gross=${gross_profit:.2f}) >= ${target:.2f}")
                         self._event("TP_HIT", asset, f"survivor {side} profit=${profit:.2f}")
                         self._alert("TP_HIT", f"{asset}: survivor {side} TP ${profit:.2f}")
                         self._square_off_side(asset, side, f"Survivor_{side}_TP")
