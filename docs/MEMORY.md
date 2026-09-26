@@ -346,5 +346,24 @@
      - **Session 2+ (Re-entry / Later in day)**: The $5 / $100 floor is bypassed (`min_prem = 0.05` ETH / `1.0` BTC). Strikes start at 1.5% OTM and select immediately if liquid, preventing forced inward march to ATM/ITM late in the day where gamma spikes cause rapid SL hits. Inward hunt is capped at 6 steps only for illiquidity fallback.
      - **Dual SL Architecture**: Enabled both Leg SL (`DISABLE_LEG_SL = false` with 2-tick confirmation and spread <= 35% guard) AND Basket SL (-1.0x credit) simultaneously.
 
+### N. 0DTE Dynamic Sizing Transparency, 13:00 Re-entry Cutoff & Live Telemetry (2026-09-26)
+- **Problem Diagnosis**:
+  - Startup banners printed static CLI defaults (`Lots: 246 contracts` for ETH, `Lots: 92 contracts` for BTC), creating confusion over whether contract sizes were hard-capped.
+  - Heartbeat logs only output high-level status strings without displaying live LTP, individual leg Stop Loss levels, or real-time PnL progress.
+  - Session 2 re-entry window was previously open until 16:30 IST, risking entering new condors late in the afternoon right before 17:30 expiry.
+- **Architectural Solutions Deployed**:
+  1. **Dynamic Sizing Clarification**:
+     - Sizing is 100% dynamic: allocates 50% wallet cash per strategy and enforces a 65% usable margin cap (preserving 35% cash buffer) at pinned ₹88.0/USD.
+     - Today's live fills executed **132 contracts for ETH** and **49 contracts for BTC**. Startup banners updated to explicitly state dynamic sizing.
+  2. **13:00 IST Re-entry Cutoff (1:00 PM)**:
+     - Session 1 can hold until 17:15 IST (right before 17:30 settlement) if not closed earlier.
+     - If Session 1 hits 70% target profit (`TARGET_DECAY_PCT = 0.70`) or SL **before 13:00 IST**, it qualifies for Session 2 re-entry at 1.5% OTM.
+     - If Session 1 is still holding at 13:00 IST, it continues running, but **no second trade** is permitted upon subsequent exit.
+  3. **Real-Time Heartbeat Telemetry**:
+     - 60s heartbeats now log full visibility:
+       - `[PNL TRACKER]` with USD and INR unrealized PnL, Target (70%) profit, and Basket SL threshold.
+       - `[LEG PROTECTION]` displaying each short leg's entry price, real-time LTP, and active SL trigger level.
+
+
 
 
