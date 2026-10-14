@@ -568,6 +568,11 @@ def master_contract_download():
 
         delete_symtoken_table()
         copy_from_dataframe(token_df)
+        try:
+            from services.option_symbol_service import clear_strikes_cache
+            clear_strikes_cache()
+        except Exception:
+            pass
         return safe_emit(
             "master_contract_download",
             {

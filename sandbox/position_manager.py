@@ -1552,7 +1552,11 @@ def cleanup_expired_contracts():
                         settlement_price = get_expiry_settlement_price(position)
 
                         # Calculate realized P&L
-                        cv = self._get_contract_value(position.symbol, position.exchange)
+                        from utils.symbol_utils import get_contract_multiplier
+                        try:
+                            cv = Decimal(str(get_contract_multiplier(position.symbol, position.exchange)))
+                        except Exception:
+                            cv = Decimal("1.0")
                         if quantity > 0:
                             close_pnl = (settlement_price - avg_price) * Decimal(str(quantity)) * cv
                         else:

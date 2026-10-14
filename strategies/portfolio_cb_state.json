@@ -1,12 +1,13 @@
 {
-  "date": "2026-09-25",
+  "date": "2026-10-09",
   "nse": {
-    "session_pnl": -13147.656055173,
+    "session_pnl": 8852.494277679532,
     "halted": false,
     "halt_reason": "",
     "strategies": {
-      "Post10_Institutional_OB_VWAP_Production_V5": -2836.9999999999973,
-      "SMC_FVG_ZeroLag_Options": -10310.656055173004
+      "SMC_FVG_ZeroLag_Options": 1677.077265125998,
+      "Post10_Institutional_OB_VWAP_Production_V5": 11209.999999999996,
+      "Prime Indicator Scalper Options": -4034.582987446462
     }
   },
   "bse": {
@@ -16,17 +17,16 @@
     "strategies": {}
   },
   "mcx": {
-    "session_pnl": 1151626.5563896,
+    "session_pnl": 1114582.5,
     "halted": false,
     "halt_reason": "",
     "strategies": {
-      "MCX_Institutional_MIS_V3.0": 1151735.0,
-      "MCX_GOLDM_FVG_Options_Scalper": -108.44361040000001
+      "MCX_Institutional_MIS_V3.0": 1114582.5
     }
   },
   "active_positions": {
-    "NIFTY": {},
     "BANKNIFTY": {},
-    "SENSEX": {}
+    "SENSEX": {},
+    "NIFTY": {}
   }
 }

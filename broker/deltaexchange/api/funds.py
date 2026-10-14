@@ -88,17 +88,19 @@ def get_margin_data(auth_token):
     Authentication: HMAC-SHA256 signed headers (api-key + timestamp + signature)
 
     Delta Exchange wallet balance object fields used:
-        available_balance  – free balance, immediately tradeable
-        blocked_margin     – total margin locked by open positions + orders
+        available_balance_inr – free balance in INR, immediately tradeable (availablecash)
+        balance_inr           – total ledger balance in INR (totalbalance)
+        blocked_margin        – total margin locked by open positions + orders (USD)
 
     P&L is sourced from /v2/positions/margined (not wallet/balances):
         m2mrealized    ← sum of realized_pnl across all open positions
         m2munrealized  ← sum of unrealized_pnl across all open positions
 
     OpenAlgo field mapping:
-        availablecash  ← sum of balance_inr across all wallets (spot + FNO combined in INR)
+        availablecash  ← sum of available_balance_inr (actual free margin after blocked margin)
+        totalbalance   ← sum of balance_inr across all wallets (spot + FNO combined in INR)
         collateral     ← sum of cross_locked_collateral across all wallets
-        utiliseddebits ← blocked_margin
+        utiliseddebits ← total_balance_inr - total_available_inr (blocked margin in INR)
 
     Args:
         auth_token (str): api_key stored in OpenAlgo auth DB after login.
@@ -155,29 +157,54 @@ def get_margin_data(auth_token):
             return DEFAULT_MARGIN_RESPONSE
 
         total_balance_inr = 0.0
-        total_blocked = 0.0
+        total_available_inr = 0.0
         total_collateral = 0.0
+        total_balance_usd = 0.0
+        total_available_usd = 0.0
+        total_blocked_usd = 0.0
+
         for asset in balances:
             if not isinstance(asset, dict):
                 continue
-            total_balance_inr += _f(asset.get("balance_inr", 0))
-            total_blocked += _f(asset.get("blocked_margin", 0))
+            b_inr = _f(asset.get("balance_inr", 0))
+            a_inr = _f(asset.get("available_balance_inr", 0))
+            b_usd = _f(asset.get("balance", 0))
+            a_usd = _f(asset.get("available_balance", 0))
+            blk_usd = _f(asset.get("blocked_margin", 0))
+
+            total_balance_inr += b_inr
+            total_available_inr += a_inr
             total_collateral += _f(asset.get("cross_locked_collateral", 0))
+
+            total_balance_usd += b_usd
+            total_available_usd += a_usd
+            total_blocked_usd += blk_usd
+
+        # Fallback if available_balance_inr is not provided but available_balance (USD) is present
+        if total_available_inr == 0.0 and total_available_usd > 0.0:
+            fx_rate = (total_balance_inr / total_balance_usd) if total_balance_usd > 0 else 88.0
+            total_available_inr = total_available_usd * fx_rate
+
+        total_blocked_inr = max(0.0, total_balance_inr - total_available_inr)
 
         # P&L comes from positions, not wallet balances
         total_realized_pnl, total_unrealized_pnl = _get_positions_pnl(api_key, api_secret)
 
         result = {
-            "availablecash": f"{total_balance_inr:.2f}",
+            "availablecash": f"{total_available_inr:.2f}",
             "collateral": f"{total_collateral:.2f}",
             "m2mrealized": f"{total_realized_pnl:.2f}",
             "m2munrealized": f"{total_unrealized_pnl:.2f}",
-            "utiliseddebits": f"{total_blocked:.2f}",
+            "utiliseddebits": f"{total_blocked_inr:.2f}",
+            "totalbalance": f"{total_balance_inr:.2f}",
+            "availablecash_usd": f"{total_available_usd:.2f}",
+            "totalbalance_usd": f"{total_balance_usd:.2f}",
+            "utiliseddebits_usd": f"{total_blocked_usd:.2f}",
         }
 
         logger.debug(
-            f"[DeltaExchange] Wallet: available={result['availablecash']} "
-            f"blocked={result['utiliseddebits']} "
+            f"[DeltaExchange] Wallet: available_inr={result['availablecash']} "
+            f"blocked_inr={result['utiliseddebits']} total_inr={result['totalbalance']} "
             f"realized={result['m2mrealized']} unrealized={result['m2munrealized']}"
         )
         return result

@@ -259,9 +259,13 @@ def get_positions(auth):
         if result.get("success"):
             positions.extend(result.get("result", []))
         else:
-            logger.warning(f"[DeltaExchange] get_positions/margined unexpected: {result}")
+            err = result.get("error", {})
+            msg = err.get("message") or err.get("code") or "Error fetching positions from Delta Exchange"
+            logger.error(f"[DeltaExchange] get_positions/margined failed: {msg}")
+            return {"status": "error", "message": msg}
     except Exception as e:
         logger.error(f"[DeltaExchange] Exception in get_positions/margined: {e}")
+        return {"status": "error", "message": str(e)}
 
     # 2. Spot holdings from wallet balances
     try:

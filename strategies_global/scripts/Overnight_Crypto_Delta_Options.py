@@ -106,7 +106,7 @@ def _seconds_until(target: dtime, now: dtime) -> int:
     return int((target_dt - now_dt).total_seconds())
 
 
-SESSION_BOUNDARY = dtime(8, 0)  # pre-08:00 belongs to yesterday's overnight session
+SESSION_BOUNDARY = dtime(15, 0)  # pre-15:00 belongs to current 2-cycle trading session (Cycle 1 Overnight + Cycle 2 Daytime)
 
 
 def session_date_str(now: Optional[datetime] = None) -> str:
@@ -183,6 +183,11 @@ def redact(s: str, keep: int = 4) -> str:
     return s[:keep] + "…" + "*" * 8
 
 
+# Delta Exchange India Empirical Option Fee Model & Yield Gates
+DELTA_OPTION_FEE_PCT = float(os.getenv("DELTA_OPTION_FEE_PCT", "0.0413"))  # Exactly 4.13% of premium cashflow per leg
+MIN_NET_YIELD_RATIO = float(os.getenv("MIN_NET_YIELD_RATIO", "0.50"))  # Net credit must be >= 50% of gross after 8.26% round-trip fees
+
+
 # ------------------------------------------------------------------------------
 # ERRORS / ENUMS
 # ------------------------------------------------------------------------------
@@ -202,6 +207,7 @@ class EntryOutcome(Enum):
 
 
 class LegStatus(str, Enum):
+    IDLE = "IDLE"
     PENDING = "PENDING"
     PARTIAL = "PARTIAL"
     FILLED = "FILLED"
@@ -227,6 +233,9 @@ class AssetConfig:
     max_wing_spread_pct: float
     max_wing_spread_dollar: float
     min_depth_contracts: int
+    min_short_premium: float = 0.0
+    max_wing_ratio: float = 0.35
+    daytime_otm_pct: float = 0.015
 
 
 @dataclass
@@ -249,17 +258,31 @@ class EngineConfig:
     taker_fee_bps: float
     per_order_fee_usd: float
     exit_slip_bps: float
-    # schedule (ladder shifted to 06:30-07:00 for extended theta capture)
+    # schedule Cycle 1 (Overnight)
     entry_start: dtime = field(default_factory=lambda: dtime(22, 0))
     entry_end: dtime = field(default_factory=lambda: dtime(4, 30))
-    ladder_start: dtime = field(default_factory=lambda: dtime(6, 0))
-    aggressive_time: dtime = field(default_factory=lambda: dtime(6, 25))
-    cutoff: dtime = field(default_factory=lambda: dtime(6, 30))
+    ladder_start: dtime = field(default_factory=lambda: dtime(8, 45))
+    aggressive_time: dtime = field(default_factory=lambda: dtime(8, 55))
+    cutoff: dtime = field(default_factory=lambda: dtime(9, 0))
     settle: dtime = field(default_factory=lambda: dtime(17, 30))
+    # schedule Cycle 2 (Daytime 0-DTE Rapid Terminal Decay)
+    c2_entry_start: dtime = field(default_factory=lambda: dtime(9, 0))
+    c2_entry_end: dtime = field(default_factory=lambda: dtime(10, 30))
+    c2_ladder_start: dtime = field(default_factory=lambda: dtime(16, 15))
+    c2_aggressive_time: dtime = field(default_factory=lambda: dtime(16, 25))
+    c2_cutoff: dtime = field(default_factory=lambda: dtime(16, 30))
+    c2_tp_pct: float = 0.65
+    c2_basket_sl_mult: float = 1.5
+    c2_use_0dte: bool = True
+    # schedule Cycle 3 (Afternoon Re-Entry if Cycle 2 exits early before 12:00 PM)
+    c3_otm_pct: float = 0.018
+    c3_tp_pct: float = 0.50
+    c3_basket_sl_mult: float = 1.5
+    early_tp_cutoff: dtime = field(default_factory=lambda: dtime(12, 0))
     # execution
     monitor_interval: int = 10
-    fill_timeout: float = 8.0
-    exit_collar_timeout: float = 8.0
+    fill_timeout: float = 25.0
+    exit_collar_timeout: float = 20.0
     exit_buffer_bps: float = 50.0
     entry_buffer_bps: float = 15.0
     min_lots: int = 10
@@ -274,9 +297,11 @@ class EngineConfig:
     daytime_retry_s: int = 900
     error_budget: int = 15
     # portfolio
-    basket_sl_mult: float = 1.0
+    basket_sl_mult: float = 1.2
     enable_basket_sl: bool = True
     disable_leg_sl: bool = True
+    enable_wings: bool = False
+    max_loss_pct: float = 0.20
     max_nightly_loss_inr: float = 4500.0
     max_sl_per_night: int = 4
     stale_flat_after_ticks: int = 60
@@ -328,19 +353,27 @@ class EngineConfig:
 
 
 def default_asset_configs() -> Dict[str, AssetConfig]:
-    btc_otm, _ = _env_float("BTC_OVERNIGHT_OTM_PCT", 0.020)
+    btc_otm, _ = _env_float("BTC_OVERNIGHT_OTM_PCT", 0.015)
+    btc_dt_otm, _ = _env_float("BTC_DAYTIME_OTM_PCT", 0.015)
     btc_w, _ = _env_int("BTC_OVERNIGHT_WING_STRIKES", 8)
-    btc_lots, _ = _env_int("BTC_OVERNIGHT_LOTS", 92)
-    btc_wing_px, _ = _env_float("BTC_MAX_WING_PRICE", 65.0)
-    eth_otm, _ = _env_float("ETH_OVERNIGHT_OTM_PCT", 0.012)
-    eth_w, _ = _env_int("ETH_OVERNIGHT_WING_STRIKES", 3)
-    eth_lots, _ = _env_int("ETH_OVERNIGHT_LOTS", 246)
-    eth_wing_px, _ = _env_float("ETH_MAX_WING_PRICE", 10.0)
+    btc_lots, _ = _env_int("BTC_OVERNIGHT_LOTS", 133)
+    btc_wing_px, _ = _env_float("BTC_MAX_WING_PRICE", 50.0)
+    btc_min_prem, _ = _env_float("BTC_OVERNIGHT_MIN_PREMIUM", 0.0)
+    btc_wing_ratio, _ = _env_float("BTC_MAX_WING_RATIO", 0.35)
+
+    eth_otm, _ = _env_float("ETH_OVERNIGHT_OTM_PCT", 0.015)
+    eth_dt_otm, _ = _env_float("ETH_DAYTIME_OTM_PCT", 0.015)
+    eth_w, _ = _env_int("ETH_OVERNIGHT_WING_STRIKES", 2)
+    eth_lots, _ = _env_int("ETH_OVERNIGHT_LOTS", 165)
+    eth_wing_px, _ = _env_float("ETH_MAX_WING_PRICE", 2.50)
+    eth_min_prem, _ = _env_float("ETH_OVERNIGHT_MIN_PREMIUM", 0.0)
+    eth_wing_ratio, _ = _env_float("ETH_MAX_WING_RATIO", 0.35)
+
     return {
         "BTC": AssetConfig("BTC", "BTCUSDFUT", 100.0, btc_otm, btc_w, 0.001, btc_lots,
-                           btc_wing_px, 0.15, 3.00, 0.25, 4.50, 100),
-        "ETH": AssetConfig("ETH", "ETHUSDFUT", 10.0, eth_otm, eth_w, 0.01, eth_lots,
-                           eth_wing_px, 0.15, 0.60, 0.25, 0.80, 100),
+                           btc_wing_px, 0.15, 3.00, 0.25, 4.50, 100, btc_min_prem, btc_wing_ratio, btc_dt_otm),
+        "ETH": AssetConfig("ETH", "ETHUSDFUT", 20.0, eth_otm, eth_w, 0.01, eth_lots,
+                           eth_wing_px, 0.15, 0.60, 0.25, 1.20, 100, eth_min_prem, eth_wing_ratio, eth_dt_otm),
     }
 
 
@@ -408,18 +441,19 @@ def load_config(args: argparse.Namespace, need_secrets: bool = True) -> EngineCo
     msafe, _ = _env_float("MARGIN_SAFETY_MULT", 1.0)
     fx, fx_explicit = _env_float("USD_INR_RATE", 88.0)
     dyn = _env_bool("DYNAMIC_SIZING", True)
-    fee_bps, _ = _env_float("TAKER_FEE_BPS", 30.0)
+    fee_bps, _ = _env_float("TAKER_FEE_BPS", 413.0)  # 413 bps = 4.13% realized Delta option fee
     per_order, _ = _env_float("PER_ORDER_FEE_USD", 0.05)
     slip_bps, _ = _env_float("EXIT_SLIP_BPS", 10.0)
+    max_loss_pct, _ = _env_float("MAX_NIGHTLY_LOSS_PCT", _env_float("CIRCUIT_BREAKER_LOSS_PCT", 0.20)[0])
     max_loss, _ = _env_float("MAX_NIGHTLY_LOSS_INR", 4500.0)
     default_max_sl = 4 if len(symbols) > 1 else 2
     max_sl, _ = _env_int("MAX_SL_PER_NIGHT", default_max_sl)
     err_budget, _ = _env_int("ERROR_BUDGET", 15)
     sl_ticks, _ = _env_int("SL_CONFIRM_TICKS", 2)
     sl_window, _ = _env_float("SL_CONFIRM_WINDOW_S", 60.0)
-    ladder_start = _env_time("OVERNIGHT_LADDER_START", dtime(6, 0))
-    aggressive_time = _env_time("OVERNIGHT_AGGRESSIVE_TIME", dtime(6, 25))
-    cutoff = _env_time("OVERNIGHT_CUTOFF", dtime(6, 30))
+    ladder_start = _env_time("OVERNIGHT_LADDER_START", dtime(8, 45))
+    aggressive_time = _env_time("OVERNIGHT_AGGRESSIVE_TIME", dtime(8, 55))
+    cutoff = _env_time("OVERNIGHT_CUTOFF", dtime(9, 0))
 
     default_data_dir = Path(__file__).resolve().parent.parent / "data"
     data_dir = Path(os.getenv("DATA_DIR", str(default_data_dir))).resolve()
@@ -433,19 +467,40 @@ def load_config(args: argparse.Namespace, need_secrets: bool = True) -> EngineCo
     if need_secrets:
         host, key, host_exp, _ = resolve_host_and_key(profile, mode)
         logger.info(f"[CONFIG] host={host} (explicit={host_exp}) key={redact(key)} profile={profile} mode={mode}")
+    c2_tp, _ = _env_float("DAYTIME_TP_PCT", 0.65)
+    c2_sl, _ = _env_float("DAYTIME_BASKET_SL_MULT", 1.5)
+    c2_entry_start = _env_time("DAYTIME_ENTRY_START", dtime(9, 0))
+    c2_entry_end = _env_time("DAYTIME_ENTRY_END", dtime(10, 30))
+    c2_ladder_start = _env_time("DAYTIME_LADDER_START", dtime(16, 15))
+    c2_aggressive_time = _env_time("DAYTIME_AGGRESSIVE_TIME", dtime(16, 25))
+    c2_cutoff = _env_time("DAYTIME_CUTOFF", dtime(16, 30))
+    c2_use_0dte = _env_bool("DAYTIME_USE_0DTE", True)
+    c3_otm, _ = _env_float("CYCLE3_OTM_PCT", 0.018)
+    c3_tp, _ = _env_float("CYCLE3_TP_PCT", 0.50)
+    c3_sl, _ = _env_float("CYCLE3_BASKET_SL_MULT", 1.5)
+    early_cutoff = _env_time("CYCLE3_TRIGGER_CUTOFF", dtime(12, 0))
+    enable_wings = bool(args.enable_wings) if getattr(args, "enable_wings", None) is not None else _env_bool("OVERNIGHT_ENABLE_WINGS", False)
+
     cfg = EngineConfig(
         symbols=symbols, mode=mode, broker_profile=profile, host=host, api_key=key,
         force_entry=bool(args.force_entry),
         capital_base_inr=cap, margin_util_cap=mcap, margin_safety_mult=msafe,
         usd_inr=fx, usd_inr_explicit=fx_explicit, dynamic_sizing=dyn,
         sl_mult=float(args.sl_mult), tp_pct=float(args.tp_pct),
-        basket_sl_mult=float(os.getenv("OVERNIGHT_BASKET_SL_MULT", str(getattr(args, "basket_sl_mult", 1.0)))),
+        c2_tp_pct=c2_tp, c2_basket_sl_mult=c2_sl,
+        c2_entry_start=c2_entry_start, c2_entry_end=c2_entry_end,
+        c2_ladder_start=c2_ladder_start, c2_aggressive_time=c2_aggressive_time,
+        c2_cutoff=c2_cutoff, c2_use_0dte=c2_use_0dte,
+        c3_otm_pct=c3_otm, c3_tp_pct=c3_tp, c3_basket_sl_mult=c3_sl,
+        early_tp_cutoff=early_cutoff,
+        basket_sl_mult=float(os.getenv("OVERNIGHT_BASKET_SL_MULT", str(getattr(args, "basket_sl_mult", 1.2)))),
         enable_basket_sl=_env_bool("OVERNIGHT_ENABLE_BASKET_SL", True),
         disable_leg_sl=_env_bool("OVERNIGHT_DISABLE_LEG_SL", True),
+        enable_wings=enable_wings,
         sl_confirm_ticks=sl_ticks, sl_confirm_window_s=sl_window,
         ladder_start=ladder_start, aggressive_time=aggressive_time, cutoff=cutoff,
         taker_fee_bps=fee_bps, per_order_fee_usd=per_order, exit_slip_bps=slip_bps,
-        max_nightly_loss_inr=max_loss, max_sl_per_night=max_sl, error_budget=err_budget,
+        max_loss_pct=max_loss_pct, max_nightly_loss_inr=max_loss, max_sl_per_night=max_sl, error_budget=err_budget,
         data_dir=data_dir, lock_path=lock_path, kill_file=kill_file, halt_file=halt_file,
         assets={s: assets[s] for s in symbols},
     )
@@ -642,9 +697,14 @@ def default_leg(symbol: str = "", side: str = "") -> Dict[str, Any]:
     }
 
 
+default_leg_state = default_leg
+
+
 def default_asset_state() -> Dict[str, Any]:
     return {
         "active": False, "entry_done": False, "entry_skipped_reason": None,
+        "current_cycle": 1, "cycle_1_realized_usd": 0.0, "cycle_2_realized_usd": 0.0,
+        "cycle_3_realized_usd": 0.0,
         "expiry_date": None, "expiry_iso": None, "entry_time": None,
         "exit_time": None, "exit_reason": None,
         "lots_requested": 0, "initial_net_credit": 0.0, "target_profit_value": 0.0,
@@ -883,8 +943,8 @@ def parse_expiry_date(raw: str) -> Optional[date]:
     return None
 
 
-def pick_1dte_expiry(exp_list: List[str], now: datetime, settle: dtime) -> Tuple[Optional[str], Optional[date], int, str]:
-    """Returns (raw, parsed, dte, reason). DTE<=2 enforced; post-settle requires DTE>=1."""
+def pick_1dte_expiry(exp_list: List[str], now: datetime, settle: dtime, min_dte: int = 0) -> Tuple[Optional[str], Optional[date], int, str]:
+    """Returns (raw, parsed, dte, reason). DTE<=2 enforced; post-settle requires DTE>=1; min_dte enforced for Cycle 2."""
     today = now.date()
     cands: List[Tuple[str, date, int]] = []
     for raw in exp_list or []:
@@ -895,7 +955,8 @@ def pick_1dte_expiry(exp_list: List[str], now: datetime, settle: dtime) -> Tuple
     if not cands:
         return None, None, -999, "NO_PARSEABLE_EXPIRY"
     post_settle = now.time() >= settle
-    pool = [c for c in cands if (c[2] >= 1 if post_settle else c[2] >= 0)]
+    effective_min_dte = max(min_dte, 1 if post_settle else 0)
+    pool = [c for c in cands if c[2] >= effective_min_dte]
     if not pool:
         return None, None, -999, "NO_EXPIRY_AFTER_SETTLE_FILTER"
     pool.sort(key=lambda c: (c[2], c[1]))
@@ -1055,10 +1116,14 @@ class Engine:
         self.last_heartbeat = 0.0
         self.last_error_alert = 0.0
         self.last_expiry_reason = ""
+        # Frozen session-start capital snapshot (Rs 28,959 partitioned 50/50 without re-querying total ledger)
+        self.session_capital_inr: Optional[float] = None
+        self.session_fx: Optional[float] = None
         # paper book: symbol -> {qty(long+), avg}
         self.paper_book: Dict[str, Dict[str, float]] = {}
         self.state: Dict[str, Any] = {"version": STATE_VERSION, "strategy": STRATEGY_NAME,
                                       "session": self.session, "broker_profile": cfg.broker_profile,
+                                      "session_capital_inr": None, "session_fx": None,
                                       "assets": {}, "portfolio": {"sl_total": 0, "halted": False,
                                                                   "halt_reason": None}}
         for s in cfg.symbols:
@@ -1093,9 +1158,12 @@ class Engine:
     def _log_resolved_config(self) -> None:
         c = self.cfg
         logger.info(f"[{STRATEGY_NAME} v{__version__}] symbols={c.symbols} mode={c.mode} profile={c.broker_profile}")
-        logger.info(f"  schedule entry {c.entry_start.strftime('%H:%M')}-{c.entry_end.strftime('%H:%M')} "
+        logger.info(f"  schedule C1 entry {c.entry_start.strftime('%H:%M')}-{c.entry_end.strftime('%H:%M')} "
                     f"| ladder {c.ladder_start.strftime('%H:%M')} | aggressive {c.aggressive_time.strftime('%H:%M')} "
                     f"| sweep {c.cutoff.strftime('%H:%M')} | settle {c.settle.strftime('%H:%M')} IST")
+        logger.info(f"  schedule C2 entry {c.c2_entry_start.strftime('%H:%M')}-{c.c2_entry_end.strftime('%H:%M')} "
+                    f"| ladder {c.c2_ladder_start.strftime('%H:%M')} | aggressive {c.c2_aggressive_time.strftime('%H:%M')} "
+                    f"| sweep {c.c2_cutoff.strftime('%H:%M')} | mode={'0-DTE' if c.c2_use_0dte else '1-DTE'}")
         logger.info(f"  risk sl=x{c.sl_mult} tp={c.tp_pct*100:.0f}% max_loss=Rs {c.max_nightly_loss_inr:,.0f} "
                     f"max_sl={c.max_sl_per_night} fee={c.taker_fee_bps}bps+${c.per_order_fee_usd}")
         for s in c.symbols:
@@ -1126,6 +1194,18 @@ class Engine:
                 logger.info(f"[{sym}] Migrated v1 state -> v2 (fills flagged estimated)")
         pf = raw.get("portfolio") or {}
         self.state["portfolio"].update({k: pf.get(k, v) for k, v in self.state["portfolio"].items()})
+        if raw.get("session_capital_inr"):
+            try:
+                self.session_capital_inr = float(raw["session_capital_inr"])
+                self.state["session_capital_inr"] = self.session_capital_inr
+            except (ValueError, TypeError):
+                pass
+        if raw.get("session_fx"):
+            try:
+                self.session_fx = float(raw["session_fx"])
+                self.state["session_fx"] = self.session_fx
+            except (ValueError, TypeError):
+                pass
         logger.info(f"[STATE RESTORED] {self.state_path.name} (pinned session {self.session})")
         # Stale-cycle guard (P2: ISO + multi-format, unparseable => stale when flat)
         today = now_ist().date()
@@ -1171,6 +1251,7 @@ class Engine:
     # -- broker positions ------------------------------------------------------
     def _fetch_broker_positions(self) -> Dict[str, Dict[str, float]]:
         if self.paper:
+            self._last_broker_fetch_ok = True
             out: Dict[str, Dict[str, float]] = {}
             for sym, v in self.paper_book.items():
                 if abs(v["qty"]) > 0:
@@ -1180,8 +1261,16 @@ class Engine:
             res = self.client.positionbook()
             self._api_ok()
         except Exception as e:
+            self._last_broker_fetch_ok = False
+            self._last_broker_fetch_err = str(e)
             self._api_err("positionbook", e)
             return {}
+        if not isinstance(res, dict) or res.get("status") not in ("success", 200, None):
+            self._last_broker_fetch_ok = False
+            self._last_broker_fetch_err = f"API returned non-success: {res.get('message') or res.get('status')}"
+            return {}
+        self._last_broker_fetch_ok = True
+        self._last_broker_fetch_err = ""
         rows = res.get("data", []) if isinstance(res, dict) else []
         out2: Dict[str, Dict[str, float]] = {}
         if isinstance(rows, list):
@@ -1199,18 +1288,22 @@ class Engine:
         return {str(v.get("symbol")) for v in legs.values() if v.get("symbol")}
 
     def classify_positions(self, asset: str) -> Tuple[Dict[str, Dict[str, float]], Dict[str, Dict[str, float]]]:
-        """(owned_open, foreign_open). Foreign = daytime/other-strategy legs. (P0 fix)"""
+        """(owned_open, foreign_open). Foreign = daytime/other-strategy legs across account."""
         broker = self._fetch_broker_positions()
+        # Collect ALL owned symbols across ALL assets in this overnight session
+        all_owned_syms = set()
+        for a_sym in self.cfg.symbols:
+            all_owned_syms |= self._owned_symbols(a_sym)
+
         owned_syms = self._owned_symbols(asset)
-        # journal-owned: any symbol we journaled this session for this asset
         owned, foreign = {}, {}
         for sym, v in broker.items():
-            is_opt = sym.startswith(asset) and (sym.endswith("CE") or sym.endswith("PE"))
+            is_opt = ("CE" in sym or "PE" in sym)
             if not is_opt:
                 continue
             if sym in owned_syms:
                 owned[sym] = v
-            else:
+            elif sym not in all_owned_syms:
                 foreign[sym] = v
         return owned, foreign
 
@@ -1254,27 +1347,29 @@ class Engine:
                 if leg.get("side") == "SELL" and (not leg.get("sl_price")) and leg["avg_price"] > 0:
                     sl_mult = a.get("sl_mult") or compute_dynamic_sl_mult(cfg.otm_pct, self.cfg.sl_mult)
                     leg["sl_price"] = round(leg["avg_price"] * sl_mult, 2)
-            # Basket completeness gate (P0): incomplete => flatten + reset, NEVER ACTIVE-on-partial
+            # Basket adoption gate: adopt full condor or active spreads without destructive auto-flattening
             shorts = [legs[k] for k in ("CE_SHORT", "PE_SHORT")]
             wings = [legs[k] for k in ("CE_WING", "PE_WING")]
             n_short = sum(1 for l in shorts if l.get("active"))
             n_wing = sum(1 for l in wings if l.get("active"))
-            complete = n_short == 2 and n_wing == 2
             qtys = {l.get("filled_qty", 0) for l in legs.values() if l.get("active")}
-            balanced = len(qtys) <= 1
-            if complete and balanced:
+            has_any_spread = (legs["CE_SHORT"].get("active") and legs["CE_WING"].get("active")) or \
+                             (legs["PE_SHORT"].get("active") and legs["PE_WING"].get("active"))
+
+            if n_short > 0 or has_any_spread:
                 a["active"] = True
                 a["entry_done"] = True
-                logger.info(f"[{asset}] [AUDIT] Full balanced basket recovered ({qtys}). SLs armed; breach-checking…")
+                logger.info(f"[{asset}] [AUDIT] Open basket adopted for live monitoring (shorts={n_short}/2 wings={n_wing}/2 qtys={qtys}). No auto-flatten.")
                 self._event("AUDIT_RECOVERED", asset, f"basket={sorted(owned)} qty={qtys}")
-                # Immediate breach check on shorts
+                # Immediate breach check on active shorts
                 for key in ("CE_SHORT", "PE_SHORT"):
                     leg = legs[key]
+                    if not leg.get("active"):
+                        continue
                     q = self.get_l2_depth(leg["symbol"])
-                    ask = (q.ask if q and q.ask else None) or owned[leg["symbol"]].get("ltp")
+                    ask = (q.ask if q and q.ask else None) or owned.get(leg["symbol"], {}).get("ltp")
                     sl = float(leg.get("sl_price") or 0)
                     if ask and sl > 0 and ask >= sl:
-                        # needs confirmation? At boot with single print, require 2nd print 3s later
                         time.sleep(3)
                         q2 = self.get_l2_depth(leg["symbol"])
                         ask2 = q2.ask if q2 and q2.ask else ask
@@ -1287,12 +1382,8 @@ class Engine:
                     elif ask:
                         logger.info(f"[{asset}] [AUDIT] {leg['symbol']} ask {ask} < SL {sl}: armed")
             else:
-                logger.warning(f"[{asset}] [AUDIT INCOMPLETE BASKET] shorts={n_short}/2 wings={n_wing}/2 qtys={qtys}: "
-                               f"flattening owned + resetting for a fresh entry")
-                self._event("AUDIT_INCOMPLETE", asset, f"shorts={n_short} wings={n_wing} qtys={sorted(qtys)}")
-                self._alert("AUDIT_INCOMPLETE", f"{asset}: incomplete basket on boot; flattening owned legs.", "error")
-                self._flatten_owned_symbols(asset, sorted(owned), "AUDIT_INCOMPLETE_FLATTEN")
-                self.state["assets"][asset] = default_asset_state()
+                logger.warning(f"[{asset}] [AUDIT] No active short legs found in owned positions {sorted(owned)}.")
+                self._event("AUDIT_NO_SHORTS", asset, f"owned={sorted(owned)}")
         self._save_state()
         logger.info("[STARTUP AUDIT COMPLETE]")
 
@@ -1322,7 +1413,7 @@ class Engine:
         except (TypeError, ValueError):
             return None
 
-    def get_1dte_expiry(self, asset: str) -> Tuple[Optional[str], Optional[date], int]:
+    def get_1dte_expiry(self, asset: str, min_dte: int = 0) -> Tuple[Optional[str], Optional[date], int]:
         try:
             res = self.client.expiry(asset)
             self._api_ok()
@@ -1332,13 +1423,13 @@ class Engine:
             return None, None, -999
         exp_list = res.get("data", []) if isinstance(res, dict) else []
         logger.info(f"[{asset}] Broker expiries: {exp_list}")
-        raw, d, dte, reason = pick_1dte_expiry([str(x) for x in (exp_list or [])], now_ist(), self.cfg.settle)
+        raw, d, dte, reason = pick_1dte_expiry([str(x) for x in (exp_list or [])], now_ist(), self.cfg.settle, min_dte=min_dte)
         self.last_expiry_reason = reason
         if raw is None:
             logger.error(f"[{asset}] Expiry rejected: {reason}")
             self._event("EXPIRY_REJECT", asset, reason)
             return None, None, dte
-        logger.info(f"[{asset}] 1DTE selected: {raw} (DTE={dte})")
+        logger.info(f"[{asset}] Selected expiry: {raw} (DTE={dte}, min_dte={min_dte})")
         return raw, d, dte
 
     def resolve_option_symbol(self, asset: str, strike: float, option_type: str, expiry: str) -> Optional[str]:
@@ -1416,21 +1507,22 @@ class Engine:
     # -- strike hunting ---------------------------------------------------------------
     def hunt_liquid_strike(self, asset: str, base_strike: float, option_type: str,
                             action: str, expiry: str, lots: int, is_wing: bool,
-                            walk_dir: int = 0, boundary: Optional[float] = None) -> Optional[HuntedStrike]:
+                            walk_dir: int = 0, boundary: Optional[float] = None,
+                            max_wing_price_override: Optional[float] = None) -> Optional[HuntedStrike]:
         cfg = self.cfg.assets[asset]
         step = cfg.strike_step
         cur = base_strike
-        max_steps = 4 if is_wing else 1
+        max_steps = 4 if is_wing else 20
         # Depth scaled to tonight's size (P1 fix)
         need_top = max(cfg.min_depth_contracts, math.ceil(0.5 * lots))
         need_cum = max(cfg.min_depth_contracts * 2, lots)
         for i in range(max_steps):
             if boundary is not None:
                 if walk_dir < 0 and cur < boundary:
-                    logger.warning(f"[{asset}] Wing walk hit boundary {boundary:g}; halt")
+                    logger.warning(f"[{asset}] Walk hit boundary {boundary:g}; halt")
                     break
                 if walk_dir > 0 and cur > boundary:
-                    logger.warning(f"[{asset}] Wing walk hit boundary {boundary:g}; halt")
+                    logger.warning(f"[{asset}] Walk hit boundary {boundary:g}; halt")
                     break
             sym = self.resolve_option_symbol(asset, cur, option_type, expiry)
             if sym:
@@ -1448,15 +1540,19 @@ class Engine:
                     spr_p = q.spread_pct()
                     if is_wing and action == "BUY":
                         if q.ask and q.ask > 0:
-                            spread_ok = ((spr_p is not None and spr_p <= cfg.max_wing_spread_pct) or
-                                         (spr_d is not None and spr_d <= cfg.max_wing_spread_dollar))
-                            depth_ok = q.ask_size >= need_top and q.cum_ask_3 >= need_cum
-                            price_ok = q.ask <= cfg.max_wing_price
+                            if q.bid is None or q.bid <= 0:
+                                spread_ok = True
+                            else:
+                                spread_ok = ((spr_p is not None and spr_p <= cfg.max_wing_spread_pct) or
+                                             (spr_d is not None and spr_d <= cfg.max_wing_spread_dollar))
+                            depth_ok = (q.ask_size >= need_top or q.cum_ask_3 >= need_cum)
+                            ceiling_px = max_wing_price_override if max_wing_price_override is not None else cfg.max_wing_price
+                            price_ok = q.ask <= ceiling_px
                             if spread_ok and depth_ok and price_ok:
                                 if i > 0:
-                                    logger.info(f"[{asset}] Wing stepped inward to {sym} @ {q.ask}")
+                                    logger.info(f"[{asset}] Wing stepped outward to {sym} @ {q.ask}")
                                 return HuntedStrike(sym, cur, q.bid or 0.0, q.ask, q.bid_size, q.ask_size)
-                            logger.warning(f"[{asset}] Wing {sym} gate fail: ask={q.ask} spr={spr_d}/{spr_p} "
+                            logger.warning(f"[{asset}] Wing {sym} gate fail: ask={q.ask} (ceiling={ceiling_px}) spr={spr_d}/{spr_p} "
                                            f"size={q.ask_size}/{q.cum_ask_3} need={need_top}/{need_cum}")
                         else:
                             logger.warning(f"[{asset}] Wing {sym}: no ask")
@@ -1464,19 +1560,24 @@ class Engine:
                         if q.bid and q.ask and q.bid > 0 and q.ask > 0:
                             spread_ok = ((spr_p is not None and spr_p <= cfg.max_spread_pct) or
                                          (spr_d is not None and spr_d <= cfg.max_short_spread_dollar))
-                            depth_ok = q.bid_size >= need_top and q.cum_bid_3 >= need_cum
-                            if spread_ok and depth_ok:
+                            depth_ok = (q.bid_size >= need_top or q.cum_bid_3 >= need_cum)
+                            min_prem = getattr(cfg, "min_short_premium", 0.0)
+                            prem_ok = (q.bid >= min_prem) if min_prem > 0 else True
+                            if spread_ok and depth_ok and prem_ok:
+                                if i > 0:
+                                    logger.info(f"[{asset}] Short stepped inward {i} steps to {sym} (bid ${q.bid:.2f} >= min threshold ${min_prem:.2f})")
                                 return HuntedStrike(sym, cur, q.bid, q.ask, q.bid_size, q.ask_size)
-                            logger.warning(f"[{asset}] Short {sym} gate fail: spr={spr_p} size={q.bid_size}/{q.cum_bid_3}")
-                            return None
+                            if not prem_ok:
+                                logger.info(f"[{asset}] Short {sym} bid ${q.bid:.2f} < min threshold ${min_prem:.2f}. Walking closer to ATM...")
+                            else:
+                                logger.warning(f"[{asset}] Short {sym} gate fail: spr={spr_p} size={q.bid_size}/{q.cum_bid_3}")
                         else:
                             logger.warning(f"[{asset}] Short {sym}: no live bid/ask")
-                            return None
-            if walk_dir != 0 and is_wing:
+            if walk_dir != 0:
                 nxt = cur + step * walk_dir
                 if boundary is not None:
                     if (walk_dir < 0 and nxt < boundary) or (walk_dir > 0 and nxt > boundary):
-                        logger.warning(f"[{asset}] Next wing step {nxt:g} violates boundary {boundary:g}; halt")
+                        logger.warning(f"[{asset}] Next step {nxt:g} violates boundary {boundary:g}; halt")
                         break
                 cur = nxt
             else:
@@ -1484,19 +1585,19 @@ class Engine:
         return None
 
     # -- funds / sizing / margin -----------------------------------------------------------
-    def funds_snapshot(self) -> Tuple[Optional[float], Optional[float]]:
-        """Returns (cash_inr, fx_or_None). Validated; live failures => (None, None)."""
+    def funds_snapshot(self) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+        """Returns (available_cash_inr, total_balance_inr, fx_or_None). Validated; live failures => (None, None, None)."""
         try:
             res = self.client.funds()
             self._api_ok()
         except Exception as e:
             self._api_err("funds", e)
-            return None, None
+            return None, None, None
         d = res.get("data", {}) if isinstance(res, dict) else {}
         if not isinstance(d, dict):
-            return None, None
+            return None, None, None
         cash = None
-        for k in ("availablecash", "available_cash", "availableCash", "cash", "balance",
+        for k in ("availablecash", "available_cash", "availableCash", "cash",
                   "available_margin", "availablemargin", "free_cash", "freecash"):
             v = d.get(k)
             try:
@@ -1505,23 +1606,52 @@ class Engine:
                     break
             except (TypeError, ValueError):
                 continue
-        fx = None
-        for k in ("availablecash_usd", "available_cash_usd", "cash_usd", "balance_usd"):
+        total_bal = None
+        for k in ("totalbalance", "total_balance", "balance_inr", "balance"):
             v = d.get(k)
             try:
-                if v is not None and float(v) > 0 and cash and cash > 0:
-                    fx = cash / float(v)
+                if v is not None and float(v) >= 0:
+                    total_bal = float(v)
                     break
             except (TypeError, ValueError):
                 continue
+        if total_bal is None and cash is not None:
+            total_bal = cash
+
+        fx = None
+        total_usd = None
+        for k in ("totalbalance_usd", "balance_usd", "cash_usd"):
+            v = d.get(k)
+            try:
+                if v is not None and float(v) > 0:
+                    total_usd = float(v)
+                    break
+            except (TypeError, ValueError):
+                continue
+        if total_bal and total_usd and total_bal > 0 and total_usd > 0:
+            fx = total_bal / total_usd
+        elif cash and cash > 0:
+            for k in ("availablecash_usd", "available_cash_usd"):
+                v = d.get(k)
+                try:
+                    if v is not None and float(v) > 0:
+                        fx = cash / float(v)
+                        break
+                except (TypeError, ValueError):
+                    continue
+
         if cash is None:
             logger.warning(f"[FUNDS] Unrecognized funds schema keys: {sorted(d.keys())}")
-        return cash, fx
+        return cash, total_bal, fx
 
     def estimate_margin_per_lot_inr(self, asset: str, fx: float) -> float:
-        c = self.cfg.assets[asset]
-        width = c.strike_step * c.wing_width_strikes
-        return width * c.contract_mult * fx * self.cfg.margin_safety_mult
+        # Delta Exchange Cross-Margin: Initial Margin per contract for short legs
+        # Empirical Delta requirement:
+        # ETH: Short CE (~$0.345) + Short PE (~$0.305) = ~$0.65 USD/lot (~Rs 57.20/lot @ 88)
+        # BTC: Short CE (~$0.56) + Short PE (~$0.55) = ~$1.11 USD/lot (~Rs 97.68/lot @ 88)
+        default_margin_usd = 1.11 if asset == "BTC" else 0.65
+        margin_usd = float(os.getenv(f"{asset}_MARGIN_PER_LOT_USD", str(default_margin_usd)))
+        return margin_usd * fx * self.cfg.margin_safety_mult
 
     def _get_compounded_capital(self) -> float:
         """Returns base capital + cumulative realized profits (dynamic compounding)."""
@@ -1560,45 +1690,52 @@ class Engine:
         if not self.cfg.dynamic_sizing:
             return LotsDecision(c.default_lots, "DYNAMIC_OFF", fx=self.cfg.usd_inr)
         alloc_pct = float(os.getenv(f"{asset}_IC_ALLOCATION_PCT", 1.0 / max(1, len(self.cfg.symbols))))
-        if self.cfg.broker_profile == "sandbox":
-            compounded = self._get_compounded_capital()
-            per_asset = compounded * alloc_pct
-            logger.info(f"[{asset}] Sandbox profile: base capital Rs {compounded:,.0f} x {alloc_pct:.0%} = Rs {per_asset:,.0f} (compounded)")
-            fx = (self.cfg.usd_inr or 88.0)
-        elif self.paper:
-            cash, funds_fx = self.funds_snapshot()
-            fx = funds_fx or self.cfg.usd_inr or 88.0
-            if cash and cash > 5_000_000:
-                compounded = self._get_compounded_capital()
-                per_asset = compounded * alloc_pct
-                logger.info(f"[{asset}] [PAPER] 1 Cr sandbox balance detected; using base Rs {compounded:,.0f} x {alloc_pct:.0%} = Rs {per_asset:,.0f}")
-            elif cash:
-                per_asset = cash * alloc_pct
+
+        # Frozen Session-Start Capital Snapshot:
+        # Take a single frozen session-start capital snapshot (e.g. Rs 28,959) and strictly
+        # allocate 50% (Rs 14,479 to ETH and Rs 14,479 to BTC) without re-querying total ledger.
+        if self.session_capital_inr is None:
+            if self.cfg.broker_profile == "sandbox":
+                self.session_capital_inr = self._get_compounded_capital()
+                self.session_fx = self.cfg.usd_inr or 88.0
+            elif self.paper:
+                cash, total_bal, funds_fx = self.funds_snapshot()
+                self.session_fx = funds_fx or self.cfg.usd_inr or 88.0
+                if total_bal and total_bal > 5_000_000:
+                    self.session_capital_inr = self._get_compounded_capital()
+                elif total_bal and total_bal > 0:
+                    self.session_capital_inr = total_bal
+                else:
+                    self.session_capital_inr = self._get_compounded_capital()
             else:
-                compounded = self._get_compounded_capital()
-                per_asset = compounded * alloc_pct
-                logger.warning(f"[{asset}] [PAPER] funds unavailable; using base Rs {per_asset:,.0f} x {alloc_pct:.0%}")
-        else:
-            cash, funds_fx = self.funds_snapshot()
-            if not cash or cash <= 0:
-                return LotsDecision(0, "FUNDS_UNAVAILABLE", blocked=True)  # fail closed in live
-            # Auto-resolve FX rate: funds_fx -> cfg.usd_inr -> 88.0 fallback
-            fx = funds_fx or self.cfg.usd_inr or 88.0
-            if fx <= 0:
-                fx = 88.0
-            # Dual Sandbox & Live mode support with dynamic profit compounding:
-            if cash > 5_000_000:
-                compounded = self._get_compounded_capital()
-                per_asset = compounded * alloc_pct
-                logger.info(f"[{asset}] [SANDBOX FUNDS] 1 Cr sandbox balance detected. Using base Rs {compounded:,.0f} x {alloc_pct:.0%} = Rs {per_asset:,.0f} @ Rs {fx:.2f}/$")
-            else:
-                per_asset = cash * alloc_pct
-                logger.info(f"[{asset}] [LIVE FUNDS] allocated Rs {per_asset:,.2f} ({alloc_pct:.0%}) @ Rs {fx:.2f}/$")
+                cash, total_bal, funds_fx = self.funds_snapshot()
+                if not total_bal or total_bal <= 0:
+                    return LotsDecision(0, "FUNDS_UNAVAILABLE", blocked=True)  # fail closed in live
+                self.session_fx = funds_fx or self.cfg.usd_inr or 88.0
+                if total_bal > 5_000_000:
+                    self.session_capital_inr = self._get_compounded_capital()
+                else:
+                    self.session_capital_inr = total_bal
+            self.state["session_capital_inr"] = self.session_capital_inr
+            self.state["session_fx"] = self.session_fx
+            self._save_state()
+            logger.info(
+                f"❄️ [SESSION CAPITAL SNAPSHOT] Frozen session capital = Rs {self.session_capital_inr:,.2f} "
+                f"@ Rs {self.session_fx:.2f}/$ (allocated across {len(self.cfg.symbols)} underlyings)"
+            )
+
+        fx = self.session_fx or self.cfg.usd_inr or 88.0
+        if fx <= 0:
+            fx = 88.0
+        per_asset = self.session_capital_inr * alloc_pct
+        logger.info(f"[{asset}] Frozen Session Allocation ({alloc_pct:.0%}): Rs {per_asset:,.2f} of Rs {self.session_capital_inr:,.2f} @ Rs {fx:.2f}/$")
+
         margin_per = self.estimate_margin_per_lot_inr(asset, fx)
         usable = per_asset * self.cfg.margin_util_cap
         raw = int(usable // margin_per) if margin_per > 0 else c.default_lots
         lots = max(self.cfg.min_lots, min(raw, self.cfg.max_lots))
-        # Funds gate: estimated required x1.1 must fit free allocation (explicit, labeled ESTIMATED)
+
+        # Funds gate: estimated required x1.1 must fit allocated capital
         est_required = margin_per * lots
         if est_required * 1.1 > per_asset:
             fit = int(per_asset / (margin_per * 1.1)) if margin_per > 0 else 0
@@ -1606,14 +1743,34 @@ class Engine:
                 return LotsDecision(0, f"MARGIN_FIT_{fit}_BELOW_MIN", usable, margin_per, fx, True)
             logger.warning(f"[{asset}] Lots {lots}->{fit} to fit MARGIN_ESTIMATED x1.1 gate")
             lots = fit
+
+        # Live Free Margin Headroom Guard:
+        # Before placing orders, verify that the broker's live available free margin can accommodate
+        # this order. If free margin is constrained, clamp lots to prevent insufficient_margin rejection.
+        if not self.paper and self.cfg.broker_profile != "sandbox":
+            live_free_cash, _, _ = self.funds_snapshot()
+            if live_free_cash is not None:
+                est_req = margin_per * lots
+                if est_req > live_free_cash * 0.95:
+                    max_affordable = int((live_free_cash * 0.95) // margin_per) if margin_per > 0 else 0
+                    if max_affordable < self.cfg.min_lots:
+                        return LotsDecision(0, f"INSUFFICIENT_FREE_MARGIN_AVAILABLE_{live_free_cash:.0f}", usable, margin_per, fx, True)
+                    logger.warning(
+                        f"[{asset}] Clamping lots {lots}->{max_affordable} to fit live free broker margin "
+                        f"(Req: Rs {est_req:,.2f} > Free: Rs {live_free_cash:,.2f} * 95%)"
+                    )
+                    lots = max_affordable
+
         logger.info(f"[{asset}] Sizing: lots={lots} usable=Rs {usable:,.0f} margin/lot=Rs {margin_per:.2f} "
-                    f"(MARGIN_ESTIMATED x{self.cfg.margin_safety_mult}, 35% buffer)")
+                    f"(Delta Short IM x{self.cfg.margin_safety_mult}, 35% buffer)")
         return LotsDecision(lots, "OK", usable, margin_per, fx, False)
 
     # -- fees ----------------------------------------------------------------------
     def _fee_usd(self, premium_per_unit: float, qty: int, mult: float, n_orders: int) -> float:
-        notional = abs(premium_per_unit) * mult * abs(qty)
-        return notional * (self.cfg.taker_fee_bps / 10000.0) + self.cfg.per_order_fee_usd * n_orders
+        # Delta Exchange Realized Option Fee Schedule: 4.13% of premium cashflow per leg
+        cashflow = abs(premium_per_unit) * mult * abs(qty)
+        rate = (self.cfg.taker_fee_bps / 10000.0) if self.cfg.taker_fee_bps > 0 else DELTA_OPTION_FEE_PCT
+        return cashflow * rate + self.cfg.per_order_fee_usd * n_orders
 
     def idem_key(self, asset: str, leg: str, reason: str) -> str:
         return f"{self.session}:{asset}:{leg}:{reason}"
@@ -1776,6 +1933,41 @@ class Engine:
             return f"HALTED:{self.state['portfolio'].get('halt_reason')}"
         if self.cfg.halt_file.exists():
             return "HALT_FILE"
+
+        # Check if Daytime strategies (BTC Daily / ETH Daily) have active/unclosed positions
+        # LIVE DATA TRUTH: Check if any unclosed daytime symbols are actually open on the broker
+        base_dir = self.cfg.data_dir
+        today_str = now_ist().strftime("%Y%m%d")
+        broker_positions = self._fetch_broker_positions()
+        now_time = now_ist().time()
+        is_post_daytime_expiry = (now_time >= dtime(17, 30))
+
+        for strat_name, file_prefix in [("BTC Daily Condor", "btc_daily_iron_condor"), ("ETH Daily Condor", "eth_daily_iron_condor")]:
+            daily_file = base_dir / f"{file_prefix}_{today_str}.json"
+            if daily_file.exists():
+                try:
+                    with open(daily_file, "r", encoding="utf-8") as f:
+                        d_data = json.load(f)
+                    unclosed_syms = [
+                        sym for sym, p in d_data.get("positions", {}).items()
+                        if p.get("status") in ("OPEN", "STUCK")
+                    ]
+                    if d_data.get("trade_active") or unclosed_syms:
+                        # Cross-check against LIVE broker positions:
+                        truly_open = [s for s in unclosed_syms if s in broker_positions and abs(float(broker_positions[s].get("qty", 0))) > 0]
+                        if truly_open:
+                            return f"DAYTIME_STRATEGY_UNCLOSED:{strat_name} has live open positions on broker: {truly_open}"
+                        
+                        # If post-settlement (after 17:30 IST) or broker has 0 open size for these symbols,
+                        # the broker is 100% flat (contracts expired/settled by exchange).
+                        if is_post_daytime_expiry or not truly_open:
+                            logger.info(
+                                f"[{strat_name}] Stale daytime file flags ({unclosed_syms or 'trade_active'}), "
+                                f"but LIVE broker is FLAT (post-expiry={is_post_daytime_expiry}). Live data overrides disk."
+                            )
+                except Exception as e:
+                    logger.warning(f"Could not check daytime state file {daily_file}: {e}")
+
         return None
 
     def enter_iron_condor(self, asset: str) -> Tuple[EntryOutcome, str]:
@@ -1790,26 +1982,45 @@ class Engine:
         if blocked:
             return EntryOutcome.FATAL, blocked
 
-        # Guard 0: owned-vs-foreign classification (P0 fix)
+        if a.get("entry_done") and not self.cfg.force_entry:
+            return EntryOutcome.SKIPPED, "ENTRY_ALREADY_DONE"
+        if a.get("fatal_for_night") and not self.cfg.force_entry:
+            return EntryOutcome.FATAL, a.get("fatal_for_night")
+
+        # Guard 0: Verify broker positionbook is reachable (FAIL-CLOSED)
+        if not getattr(self, "_last_broker_fetch_ok", True):
+            logger.warning(f"[{asset}] Broker positionbook check failed. Failing closed, entry blocked.")
+            return EntryOutcome.RETRYABLE, "BROKER_POSITIONBOOK_UNAVAILABLE"
+
+        # Guard 0b: Intra-strategy check - if prior trade in this asset is still open or unverified, BLOCK ENTRY
+        if a.get("active") or any(self._leg_open_qty(asset, k) > 0 for k in LEG_KEYS):
+            logger.critical(f"[{asset}] [MUTEX GATE] Prior positions still open in internal state! Fresh entry strictly BLOCKED.")
+            return EntryOutcome.FATAL, "PRIOR_TRADE_STILL_ACTIVE_IN_ENGINE"
+
+        # Guard 0c: Inter-strategy check - owned-vs-foreign classification
         owned, foreign = self.classify_positions(asset)
         if owned:
             logger.warning(f"[{asset}] Owned legs already on broker {sorted(owned)}: adopting via audit, no fresh entry")
             self.audit_and_recover_on_startup()
             return EntryOutcome.FATAL, "OWNED_OPEN_ADOPTED"
         if foreign:
-            a["entry_skipped_reason"] = "DAYTIME_OPEN"
+            a["entry_skipped_reason"] = "EXISTING_OPTIONS_OPEN_ON_BROKER"
             a["next_entry_retry_ts"] = now_ts + self.cfg.daytime_retry_s
             self._save_state()
-            msg = f"Foreign legs open {sorted(foreign)}; SKIP (not ACTIVE), retry in 15m"
-            logger.warning(f"[{asset}] {msg}")
+            msg = f"Existing options open on broker {sorted(foreign)}; SKIP fresh entry until completely flat, retry in 15m"
+            logger.warning(f"[{asset}] [MUTEX GATE] {msg}")
             self._event("ENTRY_SKIP", asset, msg)
-            self._alert("ENTRY_SKIP_DAYTIME", f"{asset}: {msg}", "info", cooldown=900)
-            return EntryOutcome.SKIPPED, "DAYTIME_OPEN"
+            self._alert("ENTRY_SKIP_EXISTING_POSITIONS", f"{asset}: {msg}", "info", cooldown=900)
+            return EntryOutcome.SKIPPED, "EXISTING_OPTIONS_OPEN_ON_BROKER"
 
         spot = self.get_spot_price(asset)
         if not spot:
             return self._retry(asset, "SPOT_UNAVAILABLE")
-        expiry, exp_date, dte = self.get_1dte_expiry(asset)
+        cycle = int(a.get("current_cycle", 1))
+        # Ensure fresh pristine leg state for this entry attempt (prevents ghost exited_qty from prior cycle)
+        self._reset_legs(a)
+        min_dte = 0 if (cycle == 2 and self.cfg.c2_use_0dte) else (1 if cycle in (2, 3) else 0)
+        expiry, exp_date, dte = self.get_1dte_expiry(asset, min_dte=min_dte)
         if not expiry or exp_date is None:
             if self.last_expiry_reason in ("DTE_TOO_FAR",) or str(self.last_expiry_reason).startswith("DTE_TOO_FAR"):
                 try:
@@ -1823,20 +2034,33 @@ class Engine:
                 return self._retry(asset, self.last_expiry_reason)
             return self._retry(asset, f"EXPIRY_{self.last_expiry_reason}")
 
-        logger.info(f"\n{'='*79}\n[{asset}] OVERNIGHT ENTRY spot={spot:.2f} expiry={expiry} DTE={dte}\n{'='*79}")
+        if cycle == 3:
+            cycle_title = "CYCLE 3 (AFTERNOON RE-ENTRY)"
+        elif cycle == 2:
+            cycle_title = f"CYCLE 2 (DAYTIME {'0-DTE' if self.cfg.c2_use_0dte else '1-DTE'})"
+        else:
+            cycle_title = "CYCLE 1 (OVERNIGHT)"
+        logger.info(f"\n{'='*79}\n[{asset}] {cycle_title} ENTRY spot={spot:.2f} expiry={expiry} DTE={dte}\n{'='*79}")
         step = cfg.strike_step
         width = step * cfg.wing_width_strikes
 
-        # Adaptive OTM Step-Down Ladder: try primary OTM, then 0.8x and 0.6x down to 0.008 floor
-        ladder_factors = [1.0, 0.8, 0.6]
-        min_otm_floor = 0.008
-        otm_candidates = []
-        for factor in ladder_factors:
-            cand = round(cfg.otm_pct * factor, 4)
-            if cand >= min_otm_floor and cand not in otm_candidates:
-                otm_candidates.append(cand)
-        if not otm_candidates:
-            otm_candidates = [cfg.otm_pct]
+        # Dynamic Strike Target:
+        # Cycle 1: 1.5% OTM (BTC and ETH)
+        # Cycle 2: 1.5% OTM (BTC and ETH)
+        # Cycle 3: 1.8% OTM (Afternoon Re-entry)
+        if cycle == 3:
+            base_otm = self.cfg.c3_otm_pct
+        elif cycle == 2:
+            base_otm = getattr(cfg, "daytime_otm_pct", 0.015)
+        else:
+            base_otm = cfg.otm_pct
+
+        otm_candidates = [
+            round(base_otm, 4),
+            round(max(0.008, base_otm - 0.002), 4),
+            round(max(0.008, base_otm - 0.004), 4)
+        ]
+        min_otm_floor = round(max(0.008, base_otm - 0.004), 4)
 
         sizing = self.compute_dynamic_lots(asset)
         if sizing.blocked or sizing.lots < self.cfg.min_lots:
@@ -1848,32 +2072,62 @@ class Engine:
         cw, pw, cs, ps = None, None, None, None
         used_otm = cfg.otm_pct
 
+        # Strict safety perimeter: shorts must NEVER walk inward closer than min_otm_floor (rounded AWAY from spot)
+        ce_short_floor = math.ceil(spot * (1 + min_otm_floor) / step) * step
+        pe_short_floor = math.floor(spot * (1 - min_otm_floor) / step) * step
+
         for idx, cand_otm in enumerate(otm_candidates):
             ce_s = round(spot * (1 + cand_otm) / step) * step
             pe_s = round(spot * (1 - cand_otm) / step) * step
-            ce_w, pe_w = ce_s + width, pe_s - width
 
-            min_ce_wing, max_pe_wing = ce_s + step, pe_s - step
-            cand_cw = self.hunt_liquid_strike(asset, ce_w, "CE", "BUY", expiry, lots, True, -1, min_ce_wing)
-            cand_pw = self.hunt_liquid_strike(asset, pe_w, "PE", "BUY", expiry, lots, True, +1, max_pe_wing)
-            if not cand_cw or not cand_pw:
-                logger.warning(f"[{asset}] [ADAPTIVE LADDER] Wings unavailable/illiquid at {cand_otm*100:.2f}% OTM (step {idx+1}/{len(otm_candidates)})")
+            # Step 1: Hunt liquid shorts within 1.2% -> 0.8% OTM corridor (hard ceiling at min_otm_floor)
+            cand_cs = self.hunt_liquid_strike(asset, ce_s, "CE", "SELL", expiry, lots, False, walk_dir=-1, boundary=ce_short_floor)
+            cand_ps = self.hunt_liquid_strike(asset, pe_s, "PE", "SELL", expiry, lots, False, walk_dir=+1, boundary=pe_short_floor)
+            if not cand_cs or not cand_ps:
+                logger.warning(f"[{asset}] [ADAPTIVE LADDER] Shorts unavailable at {cand_otm*100:.2f}% OTM (step {idx+1}/{len(otm_candidates)})")
                 continue
 
-            cand_cs = self.hunt_liquid_strike(asset, ce_s, "CE", "SELL", expiry, lots, False)
-            cand_ps = self.hunt_liquid_strike(asset, pe_s, "PE", "SELL", expiry, lots, False)
-            if not cand_cs or not cand_ps:
-                logger.warning(f"[{asset}] [ADAPTIVE LADDER] Shorts unavailable/illiquid at {cand_otm*100:.2f}% OTM (step {idx+1}/{len(otm_candidates)})")
+            # Strike Symmetry Gate: Ensure Call and Put are within grid-aware tolerance (prevents lopsided condors)
+            call_otm = (cand_cs.strike - spot) / spot
+            put_otm = (spot - cand_ps.strike) / spot
+            symm_limit = max(0.0030, (step / spot) * 0.60)
+            if abs(call_otm - put_otm) > symm_limit:
+                logger.warning(f"[{asset}] [SYMMETRY REJECT] Call OTM={call_otm*100:.2f}% vs Put OTM={put_otm*100:.2f}% exceeds {symm_limit*100:.2f}% symmetry limit")
+                continue
+
+            # Step 2: Anchor wings firmly to the actual resolved short strikes (Safeguard 1: Outward Walk, Safeguard 2: Price Ratio)
+            ce_w = cand_cs.strike + width
+            pe_w = cand_ps.strike - width
+            # Outward walk safeguards: walk OUTWARD (further OTM), up to max 3 steps beyond target width to avoid illiquid desert
+            max_ce_wing = cand_cs.strike + width + 3 * step
+            min_pe_wing = cand_ps.strike - width - 3 * step
+
+            # Wing-to-short price ratio gate: wing cost capped at max 35% of short bid, or max_wing_price
+            ce_wing_max_px = min(cfg.max_wing_price, max(cand_cs.bid * cfg.max_wing_ratio, 0.50))
+            pe_wing_max_px = min(cfg.max_wing_price, max(cand_ps.bid * cfg.max_wing_ratio, 0.50))
+
+            if not self.cfg.enable_wings:
+                # Pure Naked Short Strangle: Short strikes resolved and confirmed liquid
+                cs, ps = cand_cs, cand_ps
+                used_otm = cand_otm
+                sl_mult = compute_dynamic_sl_mult(used_otm, self.cfg.sl_mult)
+                logger.info(f"[{asset}] 🎯 [NAKED STRANGLE] Selected 2 liquid short strikes at {used_otm*100:.2f}% OTM: Shorts CE={cs.strike:g}(${cs.bid:.2f}) PE={ps.strike:g}(${ps.bid:.2f}) (Dynamic SL: {sl_mult:.1f}x)!")
+                break
+
+            cand_cw = self.hunt_liquid_strike(asset, ce_w, "CE", "BUY", expiry, lots, True, walk_dir=+1, boundary=max_ce_wing, max_wing_price_override=ce_wing_max_px)
+            cand_pw = self.hunt_liquid_strike(asset, pe_w, "PE", "BUY", expiry, lots, True, walk_dir=-1, boundary=min_pe_wing, max_wing_price_override=pe_wing_max_px)
+            if not cand_cw or not cand_pw:
+                logger.warning(f"[{asset}] [ADAPTIVE LADDER] Wings unavailable/over-ratio at {cand_otm*100:.2f}% OTM (step {idx+1}/{len(otm_candidates)})")
                 continue
 
             # Complete balanced basket resolved!
             cw, pw, cs, ps = cand_cw, cand_pw, cand_cs, cand_ps
             used_otm = cand_otm
             sl_mult = compute_dynamic_sl_mult(used_otm, self.cfg.sl_mult)
-            logger.info(f"[{asset}] 🎯 [ADAPTIVE OTM LADDER] Confirmed 4 liquid strikes at {used_otm*100:.2f}% OTM (Dynamic SL: {sl_mult:.1f}x)!")
+            logger.info(f"[{asset}] 🎯 [ADAPTIVE OTM LADDER] Confirmed 4 liquid strikes at {used_otm*100:.2f}% OTM: Shorts CE={cs.strike:g}(${cs.bid:.2f}) PE={ps.strike:g}(${ps.bid:.2f}) | Wings CE={cw.strike:g}(${cw.ask:.2f}) PE={pw.strike:g}(${pw.ask:.2f}) (Dynamic SL: {sl_mult:.1f}x)!")
             break
 
-        if not cw or not pw:
+        if self.cfg.enable_wings and (not cw or not pw):
             self._event("ENTRY_ABORT", asset, "LIQUIDITY_WINGS")
             return self._retry(asset, "LIQUIDITY_WINGS")
         if not cs or not ps:
@@ -1881,71 +2135,149 @@ class Engine:
             return self._retry(asset, "LIQUIDITY_SHORTS")
 
         # Topology + credit proofs
-        if cw.symbol == cs.symbol or pw.symbol == ps.symbol:
-            self._event("ENTRY_ABORT", asset, "STRIKE_COLLISION")
-            return self._retry(asset, "STRIKE_COLLISION")
-        if not (cw.strike > cs.strike and pw.strike < ps.strike):
-            self._event("ENTRY_ABORT", asset, "STRIKE_INVERSION")
-            return self._retry(asset, "STRIKE_INVERSION")
-        net_est = (cs.bid + ps.bid) - (cw.ask + pw.ask)
-        if net_est <= 0:
-            self._event("ENTRY_ABORT", asset, f"NEGATIVE_CREDIT_{net_est:.2f}")
+        if self.cfg.enable_wings and cw and pw:
+            if cw.symbol == cs.symbol or pw.symbol == ps.symbol:
+                self._event("ENTRY_ABORT", asset, "STRIKE_COLLISION")
+                return self._retry(asset, "STRIKE_COLLISION")
+            if not (cw.strike > cs.strike and pw.strike < ps.strike):
+                self._event("ENTRY_ABORT", asset, "STRIKE_INVERSION")
+                return self._retry(asset, "STRIKE_INVERSION")
+        # Phase 0: All-Leg Liquidity, Bid/Ask & Net Yield Gate (Zero-Order Guarantee)
+        invalid_prices = (cs.bid <= 0 or ps.bid <= 0) or (self.cfg.enable_wings and cw and pw and (cw.ask <= 0 or pw.ask <= 0))
+        if invalid_prices:
+            logger.error(
+                f"[{asset}] ❌ [PRE-FLIGHT BID/ASK GATE] Invalid/zero price across active basket legs: "
+                f"CE Short bid=${cs.bid:.2f}, PE Short bid=${ps.bid:.2f}. "
+                "Refusing to place orders. Aborting entry."
+            )
+            self._event("ENTRY_ABORT", asset, "INVALID_BID_ASK")
+            return self._retry(asset, "INVALID_BID_ASK")
+
+        gross_credit_est = (cs.bid + ps.bid) - ((cw.ask + pw.ask) if self.cfg.enable_wings and cw and pw else 0.0)
+        if gross_credit_est <= 0:
+            logger.error(
+                f"[{asset}] ❌ [NET CREDIT GATE] Estimated gross credit ${gross_credit_est:.2f} <= $0. "
+                "Refusing to enter a debit trade. Aborting."
+            )
+            self._event("ENTRY_ABORT", asset, f"NEGATIVE_CREDIT_{gross_credit_est:.2f}")
             return self._retry(asset, "NEGATIVE_CREDIT", long=True)
-        logger.info(f"[{asset}] Strikes: W {cw.symbol}/{cw.strike:g} W {pw.symbol}/{pw.strike:g} | "
-                    f"S {cs.symbol}/{cs.strike:g} S {ps.symbol}/{ps.strike:g} | net_est={net_est:.2f}/u lots={lots}")
 
-        # ---- STEP 1: BUY wings (idempotent keys journaled BEFORE placement) ----
+        # Exact Delta round-trip fees (4.13% entry + 4.13% exit = 8.26% on active legs)
+        total_cashflow_per_unit = (cs.bid + ps.bid) + ((cw.ask + pw.ask) if self.cfg.enable_wings and cw and pw else 0.0)
+        rt_fees_est = total_cashflow_per_unit * DELTA_OPTION_FEE_PCT * 2.0
+        net_credit_after_fees = gross_credit_est - rt_fees_est
+        if net_credit_after_fees <= 0:
+            logger.error(
+                f"[{asset}] ❌ [FEE DILUTION GATE] Estimated net credit after 8.26% round-trip fees is negative "
+                f"(Gross: ${gross_credit_est:.2f}, RT Fees: ${rt_fees_est:.2f}). Aborting with 0 orders placed."
+            )
+            self._event("ENTRY_ABORT", asset, "FEE_DILUTION_NEGATIVE")
+            return self._retry(asset, "FEE_DILUTION_NEGATIVE")
+
+        fee_ratio = rt_fees_est / gross_credit_est if gross_credit_est > 0 else 1.0
+        if (net_credit_after_fees / gross_credit_est) < MIN_NET_YIELD_RATIO:
+            logger.warning(
+                f"[{asset}] ⚠️ [FEE YIELD WARNING] Fees consume {fee_ratio*100:.1f}% of gross credit "
+                f"(Net: ${net_credit_after_fees:.2f} / Gross: ${gross_credit_est:.2f} < {MIN_NET_YIELD_RATIO*100:.0f}% threshold). "
+                "Aborting with 0 orders placed to protect capital from fee burn."
+            )
+            self._event("ENTRY_ABORT", asset, "FEE_YIELD_TOO_LOW")
+            return self._retry(asset, "FEE_YIELD_TOO_LOW")
+
+        # Phase 0: Pre-Flight Free Margin Verification (Zero-Order Guarantee)
+        if not self.paper and self.cfg.broker_profile != "sandbox":
+            live_free_cash_inr, _, _ = self.funds_snapshot()
+            if live_free_cash_inr is not None:
+                default_margin_usd = 1.11 if asset == "BTC" else 0.65
+                margin_usd = float(os.getenv(f"{asset}_MARGIN_PER_LOT_USD", str(default_margin_usd)))
+                fx = self.session_fx or self.cfg.usd_inr or 88.0
+                req_margin_inr = lots * margin_usd * fx * 1.25  # 25% safety headroom
+                if live_free_cash_inr > 0 and live_free_cash_inr < req_margin_inr:
+                    logger.error(
+                        f"[{asset}] ❌ [PRE-FLIGHT MARGIN GATE] Live free cash (Rs {live_free_cash_inr:,.2f}) < "
+                        f"required margin with buffer (Rs {req_margin_inr:,.2f}) for {lots} lots. "
+                        "Aborting entry with 0 orders placed to prevent rollback."
+                    )
+                    self._event("ENTRY_ABORT", asset, "INSUFFICIENT_PREFLIGHT_MARGIN")
+                    return self._retry(asset, "INSUFFICIENT_PREFLIGHT_MARGIN")
+
+        logger.info(
+            f"[{asset}] ✅ [PRE-FLIGHT GATES PASSED] Gross: ${gross_credit_est:.2f} | Est RT Fees: ${rt_fees_est:.2f} "
+            f"| Net After Fees: ${net_credit_after_fees:.2f}/u ({lots} lots). Mode: {'Iron Condor' if self.cfg.enable_wings else 'Naked Strangle'}."
+        )
+        if self.cfg.enable_wings and cw and pw:
+            logger.info(f"[{asset}] Strikes: W {cw.symbol}/{cw.strike:g} W {pw.symbol}/{pw.strike:g} | "
+                        f"S {cs.symbol}/{cs.strike:g} S {ps.symbol}/{ps.strike:g} | net_est={net_credit_after_fees:.2f}/u lots={lots}")
+        else:
+            logger.info(f"[{asset}] Strikes: S {cs.symbol}/{cs.strike:g} S {ps.symbol}/{ps.strike:g} (No Wings) | net_est={net_credit_after_fees:.2f}/u lots={lots}")
+
         buf = self.cfg.entry_buffer_bps / 10000.0
-        wing_orders = [
-            ("CE_WING", cw.symbol, "BUY", round(cw.ask * (1 + buf), 2)),
-            ("PE_WING", pw.symbol, "BUY", round(pw.ask * (1 + buf), 2)),
-        ]
-        placed: List[Tuple[str, str, str, float]] = []  # leg, sym, oid, limit
-        for leg_key, sym, act, lim in wing_orders:
-            idem = self.idem_key(asset, leg_key, "entry")
-            if self._idem_already_filled(asset, leg_key, idem):
-                return self._retry(asset, "IDEMPOTENT_REPLAY")
-            a["legs"][leg_key].update({"symbol": sym, "side": act, "status": LegStatus.PENDING.value,
-                                       "requested_qty": lots, "idem_key": idem, "order_ids": []})
-            self._event("ENTRY_INTENT", asset, f"{leg_key} {act} {lots}x {sym} @{lim} key={idem}")
-            ok, oid = self.place_limit(sym, act, lots, lim, idem)
-            if not ok:
-                for _, _, oid2, _ in placed:
-                    self.cancel_order(oid2)
-                self._save_state()
-                return self._retry(asset, "WING_PLACE_FAIL")
-            a["legs"][leg_key]["order_ids"].append(oid)
-            placed.append((leg_key, sym, oid, lim))
-        self._save_state()  # journal wings BEFORE waiting (crash-safe)
-        wing_fills: Dict[str, FillResult] = {}
-        for leg_key, sym, oid, lim in placed:
-            fr = self.wait_for_fill(oid, lots, self.cfg.fill_timeout, lim)
-            if self.paper and fr.status == "FILLED":
-                fr = FillResult("FILLED", lots, self._paper_fill_price("BUY", lim / (1 + buf)))
-                self._book_apply(sym, "BUY", lots, fr.avg_price)
-            wing_fills[leg_key] = fr
-            leg = a["legs"][leg_key]
-            leg["filled_qty"] = fr.filled_qty
-            leg["avg_price"] = fr.avg_price if fr.avg_price > 0 else lim
-            leg["fill_estimated"] = fr.avg_price <= 0
-            leg["status"] = LegStatus.FILLED.value if fr.filled_qty >= lots else (
-                LegStatus.PARTIAL.value if fr.filled_qty > 0 else LegStatus.FAILED.value)
-        if not all(wing_fills[k].filled_qty >= lots for k in ("CE_WING", "PE_WING")):
-            logger.error(f"[{asset}] Wing fills incomplete: {[ (k, v.status, v.filled_qty) for k, v in wing_fills.items() ]}; "
-                         f"unwinding EXACT filled qty, zero shorts")
-            self._event("ENTRY_ABORT", asset, "WING_FILL_INCOMPLETE")
-            for leg_key in ("CE_WING", "PE_WING"):
-                leg = a["legs"][leg_key]
-                if leg["filled_qty"] > 0:
-                    self._exit_symbol_marketish(leg["symbol"], "SELL", leg["filled_qty"], "WING_UNWIND_ABORT")
-            self._reset_legs(a)
-            self._save_state()
-            return self._retry(asset, "WING_FILL_INCOMPLETE")
 
-        # ---- STEP 2: SELL shorts (only after wings 100% filled) ----
+        # ---- STEP 1: BUY wings (only if enable_wings is True) ----
+        if self.cfg.enable_wings and cw and pw:
+            ce_w_lim = min(round(cw.ask + max(cw.ask * buf, 0.02), 2), ce_wing_max_px)
+            pe_w_lim = min(round(pw.ask + max(pw.ask * buf, 0.02), 2), pe_wing_max_px)
+            wing_orders = [
+                ("CE_WING", cw.symbol, "BUY", ce_w_lim),
+                ("PE_WING", pw.symbol, "BUY", pe_w_lim),
+            ]
+            placed: List[Tuple[str, str, str, float]] = []  # leg, sym, oid, limit
+            for leg_key, sym, act, lim in wing_orders:
+                idem = self.idem_key(asset, leg_key, "entry")
+                if self._idem_already_filled(asset, leg_key, idem):
+                    return self._retry(asset, "IDEMPOTENT_REPLAY")
+                a["legs"][leg_key].update({"symbol": sym, "side": act, "status": LegStatus.PENDING.value,
+                                           "requested_qty": lots, "idem_key": idem, "order_ids": []})
+                self._event("ENTRY_INTENT", asset, f"{leg_key} {act} {lots}x {sym} @{lim} key={idem}")
+                ok, oid = self.place_limit(sym, act, lots, lim, idem)
+                if not ok:
+                    for _, _, oid2, _ in placed:
+                        self.cancel_order(oid2)
+                    self._save_state()
+                    return self._retry(asset, "WING_PLACE_FAIL")
+                a["legs"][leg_key]["order_ids"].append(oid)
+                placed.append((leg_key, sym, oid, lim))
+            self._save_state()  # journal wings BEFORE waiting (crash-safe)
+            wing_fills: Dict[str, FillResult] = {}
+            for leg_key, sym, oid, lim in placed:
+                fr = self.wait_for_fill(oid, lots, self.cfg.fill_timeout, lim)
+                if self.paper and fr.status == "FILLED":
+                    fr = FillResult("FILLED", lots, self._paper_fill_price("BUY", lim / (1 + buf)))
+                    self._book_apply(sym, "BUY", lots, fr.avg_price)
+                wing_fills[leg_key] = fr
+                leg = a["legs"][leg_key]
+                leg["filled_qty"] = fr.filled_qty
+                leg["exited_qty"] = 0
+                leg["exit_attempted"] = False
+                leg["active"] = bool(fr.filled_qty > 0)
+                leg["avg_price"] = fr.avg_price if fr.avg_price > 0 else lim
+                leg["fill_estimated"] = fr.avg_price <= 0
+                leg["status"] = LegStatus.FILLED.value if fr.filled_qty >= lots else (
+                    LegStatus.PARTIAL.value if fr.filled_qty > 0 else LegStatus.FAILED.value)
+            if not all(wing_fills[k].filled_qty >= lots for k in ("CE_WING", "PE_WING")):
+                logger.error(f"[{asset}] Wing fills incomplete: {[ (k, v.status, v.filled_qty) for k, v in wing_fills.items() ]}; "
+                             f"unwinding EXACT filled qty, zero shorts")
+                self._event("ENTRY_ABORT", asset, "WING_FILL_INCOMPLETE")
+                for leg_key in ("CE_WING", "PE_WING"):
+                    leg = a["legs"][leg_key]
+                    if leg["filled_qty"] > 0:
+                        self._exit_symbol_marketish(leg["symbol"], "SELL", leg["filled_qty"], "WING_UNWIND_ABORT")
+                self._reset_legs(a)
+                attempts = int(a.get("entry_attempts", 0))
+                if attempts >= self.cfg.error_budget:
+                    return self._fatal(asset, "WING_FILL_INCOMPLETE_HALT")
+                return self._retry(asset, "WING_FILL_INCOMPLETE", long=True)
+        else:
+            # Naked Strangle: Ensure wing legs are explicitly marked inactive
+            for k in ("CE_WING", "PE_WING"):
+                a["legs"][k].update({"symbol": None, "status": LegStatus.IDLE.value, "filled_qty": 0, "active": False})
+
+        # ---- STEP 2: SELL shorts ----
+        ce_s_lim = max(round(cs.bid - max(cs.bid * buf, 0.02), 2), 0.10)
+        pe_s_lim = max(round(ps.bid - max(ps.bid * buf, 0.02), 2), 0.10)
         short_orders = [
-            ("CE_SHORT", cs.symbol, "SELL", round(cs.bid * (1 - buf), 2)),
-            ("PE_SHORT", ps.symbol, "SELL", round(ps.bid * (1 - buf), 2)),
+            ("CE_SHORT", cs.symbol, "SELL", ce_s_lim),
+            ("PE_SHORT", ps.symbol, "SELL", pe_s_lim),
         ]
         placed2: List[Tuple[str, str, str, float]] = []
         for leg_key, sym, act, lim in short_orders:
@@ -1957,6 +2289,13 @@ class Engine:
             if not ok:
                 for _, _, oid2, _ in placed2:
                     self.cancel_order(oid2)
+                # Verify fill status of any placed short orders so filled shorts are never orphaned
+                for l_key, s_sym, o_id, l_lim in placed2:
+                    fr = self.wait_for_fill(o_id, lots, 2.0, l_lim)
+                    if fr.filled_qty > 0:
+                        a["legs"][l_key]["filled_qty"] = fr.filled_qty
+                        a["legs"][l_key]["avg_price"] = fr.avg_price if fr.avg_price > 0 else l_lim
+                        a["legs"][l_key]["status"] = LegStatus.FILLED.value if fr.filled_qty >= lots else LegStatus.PARTIAL.value
                 self._unwind_all_exact(asset, "SHORT_PLACE_FAIL")
                 self._reset_legs(a)
                 self._save_state()
@@ -1973,12 +2312,65 @@ class Engine:
             short_fills[leg_key] = fr
             leg = a["legs"][leg_key]
             leg["filled_qty"] = fr.filled_qty
+            leg["exited_qty"] = 0
+            leg["exit_attempted"] = False
+            leg["active"] = bool(fr.filled_qty > 0)
             leg["avg_price"] = fr.avg_price if fr.avg_price > 0 else lim
             leg["fill_estimated"] = fr.avg_price <= 0
             leg["status"] = LegStatus.FILLED.value if fr.filled_qty >= lots else (
                 LegStatus.PARTIAL.value if fr.filled_qty > 0 else LegStatus.FAILED.value)
+        # In-flight active short repricing: if a short leg timed out or had a partial fill,
+        # re-price the unfilled balance at the fresh market bid rather than immediately destroying
+        # the entire basket and incurring double brokerage + spread churn.
         if not all(short_fills[k].filled_qty >= lots for k in ("CE_SHORT", "PE_SHORT")):
-            logger.error(f"[{asset}] Short fills incomplete; emergency basket unwind (shorts first, exact qty)")
+            logger.warning(f"[{asset}] Initial short fills incomplete; attempting active repricing before basket unwind...")
+            ce_w_px = a["legs"]["CE_WING"]["avg_price"]
+            pe_w_px = a["legs"]["PE_WING"]["avg_price"]
+            mult = cfg.contract_mult
+
+            for chase_idx in (1, 2):
+                incomplete_legs = [k for k in ("CE_SHORT", "PE_SHORT") if a["legs"][k]["filled_qty"] < lots]
+                if not incomplete_legs:
+                    break
+                for leg_key in incomplete_legs:
+                    leg = a["legs"][leg_key]
+                    rem = lots - leg["filled_qty"]
+                    sym = leg["symbol"]
+                    q = self._fetch_depth(sym)
+                    if not q or not q.bid or q.bid <= 0:
+                        logger.warning(f"[{asset}] Chase #{chase_idx}: No valid bid for {sym}; cannot re-price")
+                        continue
+
+                    # Safeguard: ensure updated bid maintains positive net credit > rt_fees_est
+                    other_k = "PE_SHORT" if leg_key == "CE_SHORT" else "CE_SHORT"
+                    other_px = a["legs"][other_k]["avg_price"]
+                    cand_credit = ((q.bid + other_px) - (ce_w_px + pe_w_px)) * mult * lots
+                    if cand_credit < rt_fees_est * 1.05:
+                        logger.warning(
+                            f"[{asset}] Chase #{chase_idx}: Repricing {sym} to {q.bid} yields ${cand_credit:.2f} <= fees (${rt_fees_est:.2f}); aborting chase"
+                        )
+                        break
+
+                    new_lim = round(q.bid * (1 - buf), 2)
+                    idem = self.idem_key(asset, leg_key, f"chase_{chase_idx}")
+                    logger.info(f"[{asset}] ⚡ [CHASE #{chase_idx}] Repricing {leg_key} {rem}x {sym} @ {new_lim} (bid={q.bid})")
+                    ok, new_oid = self.place_limit(sym, "SELL", rem, new_lim, idem)
+                    if ok:
+                        leg["order_ids"].append(new_oid)
+                        fr = self.wait_for_fill(new_oid, rem, 12.0, new_lim)
+                        if fr.filled_qty > 0:
+                            prior_qty = leg["filled_qty"]
+                            prior_cost = prior_qty * leg["avg_price"]
+                            new_cost = fr.filled_qty * (fr.avg_price if fr.avg_price > 0 else new_lim)
+                            total_filled = prior_qty + fr.filled_qty
+                            leg["filled_qty"] = total_filled
+                            leg["avg_price"] = round((prior_cost + new_cost) / total_filled, 4)
+                            leg["status"] = LegStatus.FILLED.value if total_filled >= lots else LegStatus.PARTIAL.value
+                            short_fills[leg_key] = fr
+                            self._save_state()
+
+        if not all(a["legs"][k]["filled_qty"] >= lots for k in ("CE_SHORT", "PE_SHORT")):
+            logger.error(f"[{asset}] Short fills incomplete after active chasing; emergency basket unwind (shorts first, exact qty)")
             self._event("ENTRY_ABORT", asset, "SHORT_FILL_INCOMPLETE")
             self._unwind_all_exact(asset, "SHORT_FILL_INCOMPLETE")
             self._reset_legs(a)
@@ -1986,7 +2378,8 @@ class Engine:
             return self._retry(asset, "SHORT_FILL_INCOMPLETE")
 
         # ---- Basket invariant + persist from ACTUAL fills (P0/P1 fixes) ----
-        qtys = {a["legs"][k]["filled_qty"] for k in LEG_KEYS}
+        active_keys = LEG_KEYS if self.cfg.enable_wings else ("CE_SHORT", "PE_SHORT")
+        qtys = {a["legs"][k]["filled_qty"] for k in active_keys}
         if len(qtys) != 1 or qtys == {0}:
             logger.error(f"[{asset}] BASKET INVARIANT VIOLATED qtys={qtys}; unwinding all")
             self._unwind_all_exact(asset, "INVARIANT_VIOLATION")
@@ -1994,15 +2387,17 @@ class Engine:
             self._save_state()
             return self._retry(asset, "INVARIANT_VIOLATION")
         mult = cfg.contract_mult
-        ce_w_px = a["legs"]["CE_WING"]["avg_price"]
-        pe_w_px = a["legs"]["PE_WING"]["avg_price"]
+        ce_w_px = a["legs"]["CE_WING"]["avg_price"] if self.cfg.enable_wings else 0.0
+        pe_w_px = a["legs"]["PE_WING"]["avg_price"] if self.cfg.enable_wings else 0.0
         ce_s_px = a["legs"]["CE_SHORT"]["avg_price"]
         pe_s_px = a["legs"]["PE_SHORT"]["avg_price"]
         gross = ((ce_s_px + pe_s_px) - (ce_w_px + pe_w_px)) * mult * lots
-        fees_in = sum(self._fee_usd(px, lots, mult, 1) for px in (ce_w_px, pe_w_px, ce_s_px, pe_s_px))
-        # exit fee estimate at entry prices (conservative)
-        fees_out = sum(self._fee_usd(px, lots, mult, 1) for px in (ce_w_px, pe_w_px, ce_s_px, pe_s_px))
-        net_credit = gross - fees_in
+        active_pxs = (ce_w_px, pe_w_px, ce_s_px, pe_s_px) if self.cfg.enable_wings else (ce_s_px, pe_s_px)
+        fees_in = sum(self._fee_usd(px, lots, mult, 1) for px in active_pxs)
+        # exit fee estimate at entry prices (conservative reserve)
+        fees_out = sum(self._fee_usd(px, lots, mult, 1) for px in active_pxs)
+        total_roundtrip_fees = fees_in + fees_out
+        net_credit = max(0.0, gross - total_roundtrip_fees) if gross > total_roundtrip_fees else gross
         if net_credit <= 0:
             logger.error(f"[{asset}] Net-of-fee credit {net_credit:.2f} <= 0; unwinding (would lock a certain loss)")
             self._unwind_all_exact(asset, "NEGATIVE_NET_CREDIT")
@@ -2014,18 +2409,28 @@ class Engine:
         a["sl_mult"] = sl_mult
         a["legs"]["CE_SHORT"]["sl_price"] = round(ce_s_px * sl_mult, 2)
         a["legs"]["PE_SHORT"]["sl_price"] = round(pe_s_px * sl_mult, 2)
-        for k in LEG_KEYS:
-            a["legs"][k]["active"] = True
+        if cycle == 3:
+            active_tp_pct = self.cfg.c3_tp_pct
+        elif cycle == 2:
+            c1_loss = (float(a.get("cycle_1_realized_usd", 0.0)) < 0)
+            active_tp_pct = 0.70 if c1_loss else self.cfg.c2_tp_pct
+            if c1_loss:
+                logger.info(f"[{asset}] 🎯 Cycle 1 had a loss (${a.get('cycle_1_realized_usd', 0.0):.2f}); boosting Cycle 2 TP to 70% to recover loss!")
+        else:
+            active_tp_pct = self.cfg.tp_pct
         a.update({"active": True, "entry_done": True, "entry_skipped_reason": None,
+                  "current_cycle": cycle,
                   "expiry_date": expiry, "expiry_iso": exp_date.isoformat(),
                   "entry_time": now_iso(), "lots_requested": lots,
                   "initial_net_credit": round(net_credit, 2),
-                  "target_profit_value": round(net_credit * self.cfg.tp_pct, 2),
+                  "target_profit_value": round(net_credit * active_tp_pct, 2),
                   "fees_entry_usd": round(fees_in, 2), "fees_exit_est_usd": round(fees_out, 2),
                   "entry_attempts": 0, "next_entry_retry_ts": 0.0})
         self._save_state()
-        msg = (f"ACTIVE {lots}x | credit=${net_credit:.2f} TP=${net_credit*self.cfg.tp_pct:.2f} "
-               f"SLs (x{sl_mult:.1f}) CE={a['legs']['CE_SHORT']['sl_price']} PE={a['legs']['PE_SHORT']['sl_price']}")
+        active_sl_mult = self.cfg.c3_basket_sl_mult if cycle == 3 else (self.cfg.c2_basket_sl_mult if cycle == 2 else self.cfg.basket_sl_mult)
+        basket_sl_usd = round(net_credit * active_sl_mult, 2)
+        msg = (f"ACTIVE Cycle {cycle} {lots}x | credit=${net_credit:.2f} TP=${net_credit*active_tp_pct:.2f} ({active_tp_pct*100:.0f}%) "
+               f"Basket SL=-${basket_sl_usd:.2f} (-{active_sl_mult:.1f}x credit) [Leg SL: {'Disabled (Basket Active)' if self.cfg.disable_leg_sl else f'x{sl_mult:.1f}'}]")
         logger.info(f"[{asset}] {msg}")
         self._event("ENTRY_OK", asset, msg)
         self._alert("ENTRY_OK", f"{asset}: {msg}")
@@ -2046,6 +2451,7 @@ class Engine:
     def _fatal(self, asset: str, reason: str) -> Tuple[EntryOutcome, str]:
         a = self.state["assets"][asset]
         a["fatal_for_night"] = reason
+        a["entry_done"] = True
         self._save_state()
         logger.error(f"[{asset}] Entry FATAL for tonight: {reason}")
         self._event("ENTRY_FATAL", asset, reason)
@@ -2062,16 +2468,50 @@ class Engine:
     def _unwind_all_exact(self, asset: str, reason: str) -> None:
         """Emergency unwind: filled shorts first (exact qty), then wings."""
         a = self.state["assets"][asset]
+        broker_positions = self._fetch_broker_positions() if not self.paper else {}
         for k in ("CE_SHORT", "PE_SHORT"):
             leg = a["legs"][k]
-            if leg.get("filled_qty", 0) > 0:
-                self._exit_symbol_marketish(leg["symbol"], "BUY", leg["filled_qty"], reason)
-                leg["exited_qty"] = leg["filled_qty"]
+            sym = leg.get("symbol")
+            live_qty = 0
+            if sym and sym in broker_positions:
+                pos_qty = float(broker_positions[sym].get("quantity", 0.0))
+                if pos_qty < 0:
+                    live_qty = abs(int(pos_qty))
+            unwind_qty = max(leg.get("filled_qty", 0), live_qty)
+            if unwind_qty > 0 and sym:
+                logger.warning(f"[{asset}] Emergency unwinding short leg {k} {sym} qty={unwind_qty} (reason={reason})")
+                self._exit_symbol_marketish(sym, "BUY", unwind_qty, reason)
+                leg["exited_qty"] = unwind_qty
         for k in ("CE_WING", "PE_WING"):
             leg = a["legs"][k]
-            if leg.get("filled_qty", 0) > 0:
-                self._exit_symbol_marketish(leg["symbol"], "SELL", leg["filled_qty"], reason)
-                leg["exited_qty"] = leg["filled_qty"]
+            sym = leg.get("symbol")
+            live_qty = 0
+            if sym and sym in broker_positions:
+                pos_qty = float(broker_positions[sym].get("quantity", 0.0))
+                if pos_qty > 0:
+                    live_qty = abs(int(pos_qty))
+            unwind_qty = max(leg.get("filled_qty", 0), live_qty)
+            if unwind_qty > 0 and sym:
+                logger.warning(f"[{asset}] Emergency unwinding wing leg {k} {sym} qty={unwind_qty} (reason={reason})")
+                self._exit_symbol_marketish(sym, "SELL", unwind_qty, reason)
+                leg["exited_qty"] = unwind_qty
+
+    def _emergency_broker_sweep(self, asset: str, reason: str) -> None:
+        """Emergency Sweep: Force-closes only strategy-owned open options for asset (never foreign/manual trades)."""
+        broker_positions = self._fetch_broker_positions() if not self.paper else {}
+        owned_syms = self._owned_symbols(asset)
+        for sym, v in broker_positions.items():
+            if sym in owned_syms:
+                net = v.get("quantity", 0.0)
+                if abs(net) > 0:
+                    action = "SELL" if net > 0 else "BUY"
+                    qty = abs(int(net))
+                    logger.critical(f"🚨 [{asset}] [EMERGENCY SWEEP] Force-closing owned option on Delta: {action} {qty}x {sym} ({reason})")
+                    self._event("EMERGENCY_SWEEP", asset, f"{action} {qty}x {sym} ({reason})")
+                    ok, oid = self.place_market(sym, action, qty, f"{self.session}:EMERGENCY_SWEEP:{sym}")
+                    if ok:
+                        self.wait_for_fill(oid, qty, 8.0)
+
 
     # -- exits -------------------------------------------------------------------
     def _exit_symbol_marketish(self, symbol: str, action: str, qty: int, reason: str) -> Tuple[int, float]:
@@ -2087,11 +2527,12 @@ class Engine:
             self._book_apply(symbol, action, qty, px)
             self._event("PAPER_EXIT", "*", f"{action} {qty}x {symbol} @{px} ({reason})")
             return 0, px
-        # live broker truth for sizing (never exceed live net)
-        live = self._fetch_broker_positions().get(symbol, {}).get("quantity", 0.0)
-        if abs(live) == 0:
-            return 0, 0.0
-        qty = min(qty, abs(int(live)))
+        # live broker truth for sizing: if broker confirms live position, collar size to live net
+        broker_pos = self._fetch_broker_positions()
+        if getattr(self, "_last_broker_fetch_ok", True) and symbol in broker_pos:
+            live = broker_pos[symbol].get("quantity", 0.0)
+            if abs(live) > 0:
+                qty = min(qty, abs(int(live)))
         buf = self.cfg.exit_buffer_bps / 10000.0
         idem = f"{self.session}:EXIT:{symbol}:{reason}"
         q = self.get_l2_depth(symbol)
@@ -2164,13 +2605,14 @@ class Engine:
         leg["exit_attempted"] = True
         # broker-live sizing guard in live mode
         if not self.paper:
-            live = self._fetch_broker_positions().get(leg["symbol"], {}).get("quantity", 0.0)
-            if abs(live) == 0:
-                # broker already flat => adopt as exit at last known (conservative: avg)
-                self._record_exit(asset, leg_key, open_q, leg.get("avg_price", 0.0))
-                self._event("EXIT_ADOPT_FLAT", asset, f"{leg['symbol']} broker-flat; adopted")
-                return True
-            open_q = min(open_q, abs(int(live)))
+            broker_pos = self._fetch_broker_positions()
+            if getattr(self, "_last_broker_fetch_ok", True) and leg["symbol"] in broker_pos:
+                live = broker_pos[leg["symbol"]].get("quantity", 0.0)
+                if abs(live) > 0:
+                    open_q = min(open_q, abs(int(live)))
+                elif abs(live) == 0 and int(leg.get("exited_qty", 0)) >= int(leg.get("filled_qty", 0)):
+                    leg["active"] = False
+                    return True
         # paper exit price reference
         exit_px = leg.get("avg_price", 0.0)
         if self.paper:
@@ -2182,11 +2624,40 @@ class Engine:
             q = self.get_l2_depth(leg["symbol"])
             if q:
                 exit_px = (q.ask or exit_px) if action == "BUY" else (q.bid or exit_px)
+
+        # Zero-Bid Worthless Long Wing Resilience:
+        # If closing a long wing (action == "SELL") and short legs are already flat,
+        # and market bid is 0.0 or marketish exit was rejected due to no bids:
+        # Mark leg CLOSED at $0.00 since risk is 0 (worthless expired OTM wing).
+        if "WING" in leg_key and action == "SELL":
+            shorts_flat = (
+                self._leg_open_qty(asset, "CE_SHORT") <= 0 and
+                self._leg_open_qty(asset, "PE_SHORT") <= 0
+            )
+            q = self.get_l2_depth(leg["symbol"])
+            if shorts_flat and (not q or q.bid is None or q.bid <= 0.0):
+                logger.info(f"[{asset}] Long wing {leg['symbol']} has 0 bids with shorts flat; marking CLOSED @ $0.00 (WORTHLESS_WING)")
+                self._record_exit(asset, leg_key, open_q, 0.0)
+                leg["active"] = False
+                self._save_state()
+                return True
+
         leftover, fill_px = self._exit_symbol_marketish(leg["symbol"], action, open_q, reason)
         done = open_q - leftover
         if done > 0:
             effective_px = fill_px if fill_px > 0 else exit_px
             self._record_exit(asset, leg_key, done, effective_px)
+        elif "WING" in leg_key and action == "SELL":
+            shorts_flat = (
+                self._leg_open_qty(asset, "CE_SHORT") <= 0 and
+                self._leg_open_qty(asset, "PE_SHORT") <= 0
+            )
+            if shorts_flat:
+                logger.warning(f"[{asset}] Market exit rejected for long wing {leg['symbol']} (no bids), but shorts are flat; treating as WORTHLESS_WING @ $0.00")
+                self._record_exit(asset, leg_key, open_q, 0.0)
+                leg["active"] = False
+                self._save_state()
+                return True
         self._save_state()
         return leftover == 0
 
@@ -2282,53 +2753,115 @@ class Engine:
     # -- reconcile ------------------------------------------------------------------
     def reconcile_positions_with_broker(self) -> None:
         broker = self._fetch_broker_positions()
+        if not getattr(self, "_last_broker_fetch_ok", True):
+            logger.warning(
+                f"⚠️ [RECONCILE] Broker positionbook fetch failed ({getattr(self, '_last_broker_fetch_err', 'unknown')}). "
+                f"Skipping reconciliation cycle to prevent false-flat adoption."
+            )
+            return
+
         changed = False
         for asset in self.cfg.symbols:
             a = self.state["assets"][asset]
-            for k in LEG_KEYS:
+            active_keys = ("CE_SHORT", "PE_SHORT") if not self.cfg.enable_wings else LEG_KEYS
+
+            # Entry Grace Period: Skip premature auto-flat/sweeping if asset was entered in the last 120 seconds
+            entry_ts = 0.0
+            if a.get("entry_time"):
+                try:
+                    entry_ts = datetime.fromisoformat(a["entry_time"]).timestamp()
+                except Exception:
+                    pass
+            is_recent_entry = bool(a.get("entry_time") and (time.time() - entry_ts < 120.0))
+
+            for k in active_keys:
                 leg = a["legs"][k]
                 if not leg.get("symbol"):
                     continue
                 live = abs(broker.get(leg["symbol"], {}).get("quantity", 0.0))
                 open_q = self._leg_open_qty(asset, k)
                 if open_q > 0 and live == 0:
-                    if leg.get("exit_attempted"):
-                        logger.info(f"[{asset}] Reconciled {leg['symbol']} FLAT (broker confirms)")
-                        self._record_exit(asset, k, open_q, leg.get("exit_avg") or leg.get("avg_price", 0.0))
+                    if leg.get("exit_attempted") and int(leg.get("exited_qty", 0)) >= int(leg.get("filled_qty", 0)):
+                        logger.info(f"[{asset}] Reconciled {leg['symbol']} FLAT (confirmed exit fill)")
+                        leg["_missing_confirmations"] = 0
+                        leg["active"] = False
+                        changed = True
                     else:
-                        logger.error(f"[{asset}] MANUAL/EXTERNAL close detected on {leg['symbol']}! Adopting flat.")
-                        self._event("MANUAL_CLOSE", asset, leg["symbol"])
-                        self._alert("MANUAL_CLOSE", f"{asset}: {leg['symbol']} closed outside engine; adopted flat.", "error")
-                        self._record_exit(asset, k, open_q, leg.get("avg_price", 0.0))
-                    changed = True
-            if a.get("active") and all(self._leg_open_qty(asset, k) <= 0 for k in LEG_KEYS):
+                        # Fail-Safe: Do NOT adopt flat if no exit was attempted! Positionbook might be degraded or missing data.
+                        # Mark desync and warn, but DO NOT stop managing or declare MANUAL_CLOSE.
+                        miss_cnt = int(leg.get("_missing_confirmations", 0)) + 1
+                        leg["_missing_confirmations"] = miss_cnt
+                        if miss_cnt % 6 == 0:
+                            logger.error(
+                                f"🚨 [{asset}] POSITIONBOOK DESYNC: Broker reports 0 qty for {leg['symbol']} but engine open_q={open_q}! "
+                                f"Preserving position in engine for protective exits/sweep. Check Delta UI manually."
+                            )
+                            self._event("DESYNC_DETECTED", asset, f"{leg['symbol']} broker 0 vs engine {open_q}")
+                            self._alert("DESYNC_DETECTED", f"{asset}: {leg['symbol']} missing from broker book without exit order! Keeping protected.", "critical", cooldown=300)
+                elif open_q > 0 and live > 0:
+                    leg["_missing_confirmations"] = 0
+
+            if not is_recent_entry and a.get("active") and all(self._leg_open_qty(asset, k) <= 0 for k in active_keys):
                 a["active"] = False
                 a["exit_time"] = a.get("exit_time") or now_iso()
                 a["exit_reason"] = a.get("exit_reason") or (a.get("pending_exit") or {}).get("reason") or "RECONCILED_FLAT"
                 a["pending_exit"] = None
                 changed = True
                 logger.info(f"[{asset}] All legs flat on broker; condor closed ({a['exit_reason']})")
+
+            # Residual Auto-Sweeper: If strategy considers this asset flat/inactive, but broker still has residual OWNED options, FORCE FLATTEN!
+            # CRITICAL SAFETY: Only sweep symbols belonging to this strategy's owned legs (never touch manual/foreign trades!)
+            owned_syms = self._owned_symbols(asset)
+            if not self.paper and not a.get("active") and not is_recent_entry and all(self._leg_open_qty(asset, k) <= 0 for k in active_keys):
+                for sym, v in broker.items():
+                    if sym in owned_syms:
+                        net = v.get("quantity", 0.0)
+                        if abs(net) > 0:
+                            action = "SELL" if net > 0 else "BUY"
+                            qty = abs(int(net))
+                            logger.critical(f"🚨 [{asset}] [RESIDUAL AUTO-SWEEP] Engine is flat/inactive but broker has {net}x owned {sym}! Flattening via MARKET: {action} {qty}x")
+                            self._event("RESIDUAL_SWEEP", asset, f"{action} {qty}x {sym}")
+                            ok, oid = self.place_market(sym, action, qty, f"{self.session}:RESIDUAL_SWEEP:{sym}")
+                            if ok:
+                                self.wait_for_fill(oid, qty, 8.0)
+
         if changed:
             self._save_state()
 
     # -- economics --------------------------------------------------------------------
     def _spread_profit(self, asset: str, side: str, quotes: Dict[str, DepthQuote]) -> Optional[Tuple[float, float, float, float]]:
-        """Per-spread economics (P1 fix). Returns (credit_net, cost_now_net, profit, gross_profit)."""
+        """Per-spread / per-leg economics (P1 fix). Returns (credit_net, cost_now_net, profit, gross_profit)."""
         a = self.state["assets"][asset]
         mult = self.cfg.assets[asset].contract_mult
-        s_leg, w_leg = a["legs"][f"{side}_SHORT"], a["legs"][f"{side}_WING"]
-        q = min(self._leg_open_qty(asset, f"{side}_SHORT"), self._leg_open_qty(asset, f"{side}_WING"))
-        if q <= 0:
+        s_leg = a["legs"][f"{side}_SHORT"]
+        w_leg = a["legs"][f"{side}_WING"]
+        short_q = self._leg_open_qty(asset, f"{side}_SHORT")
+        wing_q = self._leg_open_qty(asset, f"{side}_WING")
+        has_wing = bool(self.cfg.enable_wings and wing_q > 0)
+
+        if short_q <= 0:
             return None
-        sq, wq = quotes.get(f"{side}_SHORT"), quotes.get(f"{side}_WING")
+        q = min(short_q, wing_q) if has_wing else short_q
+
+        sq = quotes.get(f"{side}_SHORT")
         if not sq or not sq.ask:
             return None
-        wing_bid = float(wq.bid) if (wq and wq.bid is not None and wq.bid > 0) else 0.0
-        gross_credit = (s_leg["avg_price"] - w_leg["avg_price"]) * mult * q
-        gross_cost = (sq.ask - wing_bid) * mult * q
-        gross_profit = gross_credit - gross_cost
-        credit = gross_credit - (self._fee_usd(s_leg["avg_price"], q, mult, 1) + self._fee_usd(w_leg["avg_price"], q, mult, 1))
-        cost = gross_cost + (self._fee_usd(sq.ask, q, mult, 1) + (self._fee_usd(wing_bid, q, mult, 1) if wing_bid > 0 else 0.0))
+
+        if has_wing:
+            wq = quotes.get(f"{side}_WING")
+            wing_bid = float(wq.bid) if (wq and wq.bid is not None and wq.bid > 0) else 0.0
+            gross_credit = (s_leg["avg_price"] - w_leg["avg_price"]) * mult * q
+            gross_cost = (sq.ask - wing_bid) * mult * q
+            gross_profit = gross_credit - gross_cost
+            credit = gross_credit - (self._fee_usd(s_leg["avg_price"], q, mult, 1) + self._fee_usd(w_leg["avg_price"], q, mult, 1))
+            cost = gross_cost + (self._fee_usd(sq.ask, q, mult, 1) + (self._fee_usd(wing_bid, q, mult, 1) if wing_bid > 0 else 0.0))
+        else:
+            gross_credit = s_leg["avg_price"] * mult * q
+            gross_cost = sq.ask * mult * q
+            gross_profit = gross_credit - gross_cost
+            credit = gross_credit - self._fee_usd(s_leg["avg_price"], q, mult, 1)
+            cost = gross_cost + self._fee_usd(sq.ask, q, mult, 1)
+
         return credit, cost, credit - cost, gross_profit
 
     def _open_unrealized(self, asset: str, quotes: Dict[str, DepthQuote]) -> float:
@@ -2350,33 +2883,66 @@ class Engine:
         return u
 
     # -- monitor ------------------------------------------------------------------------
-    def _in_entry_window(self, t: dtime) -> bool:
-        return (t >= self.cfg.entry_start) or (t <= self.cfg.entry_end)
+    def _in_entry_window(self, t: dtime, cycle: int = 1) -> bool:
+        if cycle == 1:
+            return (t >= self.cfg.entry_start) or (t <= self.cfg.entry_end)
+        elif cycle == 2:
+            return self.cfg.c2_entry_start <= t <= self.cfg.c2_entry_end
+        elif cycle == 3:
+            return t < self.cfg.early_tp_cutoff
+        return False
 
     def monitor_positions(self) -> None:
         now = now_ist()
         t = now.time()
-        phase_sweep = self.cfg.cutoff <= t < self.cfg.entry_start
-        phase_ladder = self.cfg.ladder_start <= t < self.cfg.cutoff
 
         for asset in self.cfg.symbols:
             a = self.state["assets"][asset]
+            cycle = int(a.get("current_cycle", 1))
+
+            if cycle == 1:
+                cutoff = self.cfg.cutoff
+                ladder_start = self.cfg.ladder_start
+                tp_pct = self.cfg.tp_pct
+                # Cycle 1 cutoff sweep window: 06:30 until Cycle 2 entry begins (07:00)
+                phase_sweep = (cutoff <= t < self.cfg.c2_entry_start)
+                phase_ladder = (ladder_start <= t < cutoff)
+            else:
+                cutoff = self.cfg.c2_cutoff
+                ladder_start = self.cfg.c2_ladder_start
+                tp_pct = self.cfg.c3_tp_pct if cycle == 3 else self.cfg.c2_tp_pct
+                # Cycle 2/3 cutoff sweep window: 18:30 until Cycle 1 entry begins (21:45/22:00)
+                phase_sweep = (cutoff <= t < self.cfg.entry_start)
+                phase_ladder = (ladder_start <= t < cutoff)
+
+            # Redundant Hard Cutoff Sweep: Runs even if a["active"] was corrupted or desynced
+            if phase_sweep:
+                broker_pos = self._fetch_broker_positions()
+                owned_syms = self._owned_symbols(asset)
+                broker_has_open = any(
+                    sym in owned_syms and abs(v.get("quantity", 0)) > 0
+                    for sym, v in broker_pos.items()
+                )
+
+                internal_has_open = any(self._leg_open_qty(asset, k) > 0 for k in LEG_KEYS)
+                if a.get("active") or internal_has_open or broker_has_open:
+                    sweep_tag = f"C{cycle}_Sweep_{cutoff.strftime('%H%M')}_Cutoff"
+                    logger.warning(f"[{asset}] Cycle {cycle} {cutoff.strftime('%H:%M')} EMERGENCY SWEEP — flattening unconditionally ({sweep_tag})")
+                    self._square_off_full(asset, sweep_tag)
+                    if broker_has_open and not self.paper:
+                        self._emergency_broker_sweep(asset, sweep_tag)
+                    continue
+
             if not a.get("active"):
                 continue
             # pending exits first
             if a.get("pending_exit"):
                 self._retry_pending(asset)
                 # fall through to sweep check (sweep escalates reason)
-            # Rule 1: hard sweep (supreme)
-            if phase_sweep:
-                sweep_tag = f"Sweep_{self.cfg.cutoff.strftime('%H%M')}_Cutoff"
-                logger.warning(f"[{asset}] {self.cfg.cutoff.strftime('%H:%M')} SWEEP — flattening unconditionally ({sweep_tag})")
-                self._square_off_full(asset, sweep_tag)
-                continue
             # Rule 1b: TWAP ladder (P2 fix)
             if phase_ladder:
-                ladder_start_min = self.cfg.ladder_start.hour * 60 + self.cfg.ladder_start.minute
-                cutoff_min = self.cfg.cutoff.hour * 60 + self.cfg.cutoff.minute
+                ladder_start_min = ladder_start.hour * 60 + ladder_start.minute
+                cutoff_min = cutoff.hour * 60 + cutoff.minute
                 marks = list(range(ladder_start_min, cutoff_min, 5))
                 cur_mark = t.hour * 60 + t.minute
                 last = a.get("last_ladder_ts", 0)
@@ -2385,16 +2951,16 @@ class Engine:
                     a["last_ladder_ts"] = time.time()
                     a["unwind_phase"] = "LADDER"
                     self._save_state()
-                    ladder_tag = f"Ladder_{self.cfg.ladder_start.strftime('%H%M')}_{self.cfg.cutoff.strftime('%H%M')}"
-                    logger.info(f"[{asset}] LADDER unwind attempt (TWAP window {ladder_tag})")
-                    self._event("LADDER", asset, "collared unwind attempt")
+                    ladder_tag = f"C{cycle}_Ladder_{ladder_start.strftime('%H%M')}_{cutoff.strftime('%H%M')}"
+                    logger.info(f"[{asset}] Cycle {cycle} LADDER unwind attempt (TWAP window {ladder_tag})")
+                    self._event("LADDER", asset, f"Cycle {cycle} collared unwind attempt")
                     if self._square_off_full(asset, ladder_tag):
                         continue
                     else:
                         # keep managing; sweep at cutoff escalates
                         pass
-            # 06:25-06:30 morning intrinsic-heavy aggressive-out (P2 settlement fix)
-            if self.cfg.aggressive_time <= t < self.cfg.cutoff and not a.get("held_to_settle"):
+            # 06:25-06:30 morning intrinsic-heavy aggressive-out (Cycle 1 0-DTE settlement fix only)
+            if cycle == 1 and self.cfg.aggressive_time <= t < self.cfg.cutoff and not a.get("held_to_settle"):
                 self._settlement_pressure(asset)
                 if not self.state["assets"][asset].get("active"):
                     continue
@@ -2403,7 +2969,7 @@ class Engine:
             usable = True
             for k in LEG_KEYS:
                 leg = a["legs"][k]
-                if self._leg_open_qty(asset, k) <= 0:
+                if self._leg_open_qty(asset, k) <= 0 or not leg.get("symbol"):
                     continue
                 q = self.get_l2_depth(leg["symbol"])
                 if q is None or (q.bid is None and q.ask is None):
@@ -2422,10 +2988,10 @@ class Engine:
                     logger.error(f"[{asset}] {msg}")
                     self._event("STALE_FLATTEN", asset, msg)
                     self._alert("STALE_FLATTEN", f"{asset}: {msg}", "critical")
-                    self._square_off_full(asset, "Stale_Quotes_Protective")
+                    self._square_off_full(asset, f"C{cycle}_Stale_Quotes_Protective")
                 continue
             a["stale_ticks"] = 0
-            # Rule 2: Basket SL & TP via spread economics (Solution 1: Basket SL = -1.0x Credit, TP = 60%)
+            # Rule 2: Basket SL & TP via spread economics (Basket SL = -1.0x Credit, TP = 65% C1 / 70% C2)
             ce_open = self._leg_open_qty(asset, "CE_SHORT") > 0
             pe_open = self._leg_open_qty(asset, "PE_SHORT") > 0
             if ce_open and pe_open:
@@ -2437,22 +3003,23 @@ class Engine:
                     target = float(a.get("target_profit_value") or 0)
                     credit = float(a.get("initial_net_credit") or (ce[0] + pe[0]))
                     if target <= 0 and credit > 0:
-                        target = credit * self.cfg.tp_pct
-                    basket_sl_thresh = -1.0 * credit * self.cfg.basket_sl_mult
+                        target = credit * tp_pct
+                    curr_sl_mult = self.cfg.c3_basket_sl_mult if cycle == 3 else (self.cfg.c2_basket_sl_mult if cycle == 2 else self.cfg.basket_sl_mult)
+                    basket_sl_thresh = -1.0 * credit * curr_sl_mult
 
                     if (profit >= target or gross_profit >= target) and target > 0:
-                        logger.info(f"[{asset}] 🎯 TP BASKET profit=${profit:.2f} (gross=${gross_profit:.2f}) >= target=${target:.2f} ({self.cfg.tp_pct*100:.0f}% credit)")
-                        self._event("TP_HIT", asset, f"basket profit=${profit:.2f} gross=${gross_profit:.2f} target=${target:.2f}")
-                        self._alert("TP_HIT", f"{asset}: basket TP ${profit:.2f} (gross ${gross_profit:.2f})")
-                        self._square_off_full(asset, "Basket_TP_Achieved")
+                        logger.info(f"[{asset}] 🎯 TP BASKET (C{cycle}) profit=${profit:.2f} (gross=${gross_profit:.2f}) >= target=${target:.2f} ({tp_pct*100:.0f}% credit)")
+                        self._event("TP_HIT", asset, f"Cycle {cycle} basket profit=${profit:.2f} gross=${gross_profit:.2f} target=${target:.2f}")
+                        self._alert("TP_HIT", f"{asset}: Cycle {cycle} basket TP ${profit:.2f} (gross ${gross_profit:.2f})")
+                        self._square_off_full(asset, f"C{cycle}_Basket_TP_Achieved")
                         continue
                     elif self.cfg.enable_basket_sl and profit <= basket_sl_thresh and credit > 0:
-                        logger.warning(f"[{asset}] 🚨 BASKET SL HIT profit=${profit:.2f} <= -{self.cfg.basket_sl_mult:.1f}x credit (${basket_sl_thresh:.2f}); squaring off full condor")
-                        self._event("BASKET_SL_HIT", asset, f"basket profit=${profit:.2f} threshold=${basket_sl_thresh:.2f}")
-                        self._alert("BASKET_SL_HIT", f"{asset}: basket SL ${profit:.2f} hit", "warning")
+                        logger.warning(f"[{asset}] 🚨 BASKET SL HIT (C{cycle}) profit=${profit:.2f} <= -{curr_sl_mult:.1f}x credit (${basket_sl_thresh:.2f}); squaring off full condor")
+                        self._event("BASKET_SL_HIT", asset, f"Cycle {cycle} basket profit=${profit:.2f} threshold=${basket_sl_thresh:.2f}")
+                        self._alert("BASKET_SL_HIT", f"{asset}: Cycle {cycle} basket SL ${profit:.2f} hit", "warning")
                         a["sl_count"] = int(a.get("sl_count", 0)) + 1
                         self.state["portfolio"]["sl_total"] = int(self.state["portfolio"].get("sl_total", 0)) + 1
-                        self._square_off_full(asset, "Basket_SL_Hit")
+                        self._square_off_full(asset, f"C{cycle}_Basket_SL_Hit")
                         if self._portfolio_halt_check(asset):
                             return
                         continue
@@ -2461,19 +3028,19 @@ class Engine:
                 sp = self._spread_profit(asset, side, quotes)
                 if sp:
                     credit, cost, profit, gross_profit = sp
-                    target = credit * self.cfg.tp_pct
-                    survivor_sl = -1.0 * credit * self.cfg.basket_sl_mult
+                    target = credit * tp_pct
+                    survivor_sl = -1.0 * credit * curr_sl_mult
                     if credit > 0 and (profit >= target or gross_profit >= target):
-                        logger.info(f"[{asset}] 🎯 TP SURVIVOR {side}: profit=${profit:.2f} (gross=${gross_profit:.2f}) >= ${target:.2f}")
-                        self._event("TP_HIT", asset, f"survivor {side} profit=${profit:.2f}")
-                        self._alert("TP_HIT", f"{asset}: survivor {side} TP ${profit:.2f}")
-                        self._square_off_side(asset, side, f"Survivor_{side}_TP")
+                        logger.info(f"[{asset}] 🎯 TP SURVIVOR (C{cycle}) {side}: profit=${profit:.2f} (gross=${gross_profit:.2f}) >= ${target:.2f}")
+                        self._event("TP_HIT", asset, f"Cycle {cycle} survivor {side} profit=${profit:.2f}")
+                        self._alert("TP_HIT", f"{asset}: Cycle {cycle} survivor {side} TP ${profit:.2f}")
+                        self._square_off_side(asset, side, f"C{cycle}_Survivor_{side}_TP")
                         continue
                     elif self.cfg.enable_basket_sl and credit > 0 and profit <= survivor_sl:
-                        logger.warning(f"[{asset}] 🚨 SL SURVIVOR {side}: profit=${profit:.2f} <= ${survivor_sl:.2f}")
-                        self._event("SL_HIT", asset, f"survivor {side} profit=${profit:.2f}")
-                        self._alert("SL_HIT", f"{asset}: survivor {side} SL hit", "warning")
-                        self._square_off_side(asset, side, f"Survivor_{side}_SL")
+                        logger.warning(f"[{asset}] 🚨 SL SURVIVOR (C{cycle}) {side}: profit=${profit:.2f} <= ${survivor_sl:.2f}")
+                        self._event("SL_HIT", asset, f"Cycle {cycle} survivor {side} profit=${profit:.2f}")
+                        self._alert("SL_HIT", f"{asset}: Cycle {cycle} survivor {side} SL hit", "warning")
+                        self._square_off_side(asset, side, f"C{cycle}_Survivor_{side}_SL")
                         continue
 
             # Fallback legacy per-leg SL (only when leg SL is explicitly enabled)
@@ -2567,8 +3134,11 @@ class Engine:
                 if quotes:
                     total_usd += self._open_unrealized(asset, quotes)
         loss_inr = -total_usd * fx if total_usd < 0 else 0.0
-        if loss_inr >= self.cfg.max_nightly_loss_inr:
-            self._halt_all(f"MAX_LOSS_Rs{loss_inr:,.0f}")
+        active_capital = self._get_compounded_capital()
+        loss_pct = getattr(self.cfg, "max_loss_pct", 0.20)
+        dynamic_loss_limit = max(self.cfg.max_nightly_loss_inr, active_capital * loss_pct)
+        if loss_inr >= dynamic_loss_limit:
+            self._halt_all(f"MAX_LOSS_Rs{loss_inr:,.0f}_LIMIT_Rs{dynamic_loss_limit:,.0f} ({loss_pct*100:.0f}% of Rs {active_capital:,.0f})")
             return True
         return False
 
@@ -2617,6 +3187,94 @@ class Engine:
         return not self.stopping
 
     # -- main loop --------------------------------------------------------------------------
+    def _check_cycle_transition(self, t: dtime, logged_done: set) -> None:
+        """Transitions flat assets:
+        1. Cycle 1 -> Cycle 2 during morning window (09:00-10:30 IST).
+        2. Cycle 2 -> Cycle 3 (Early Win Re-Entry Gate) if Cycle 2 hit 50% TP before 12:00 PM.
+        """
+        for asset in self.cfg.symbols:
+            a = self.state["assets"][asset]
+            cycle = int(a.get("current_cycle", 1))
+
+            # --- Transition 1: Cycle 1 -> Cycle 2 (09:00-10:30 IST) ---
+            if cycle == 1 and (self.cfg.c2_entry_start <= t <= self.cfg.c2_entry_end) and not a.get("active"):
+                internal_open = any(self._leg_open_qty(asset, k) > 0 for k in LEG_KEYS)
+                if internal_open:
+                    logger.warning(f"[{asset}] Cannot transition to Cycle 2: internal legs still open")
+                    continue
+                exp_lbl = "0-DTE" if self.cfg.c2_use_0dte else "1-DTE"
+                logger.info(f"[{asset}] ☀️ TRANSITIONING TO CYCLE 2 (Daytime {exp_lbl})")
+                a["cycle_1_realized_usd"] = float(a.get("realized_pnl_usd", 0.0))
+                a["current_cycle"] = 2
+                a["entry_done"] = False
+                a["active"] = False
+                a["entry_time"] = None
+                a["exit_time"] = None
+                a["exit_reason"] = None
+                a["legs"] = {k: default_leg() for k in LEG_KEYS}
+                a["initial_net_credit"] = 0.0
+                a["target_profit_value"] = 0.0
+                a["unwind_phase"] = None
+                a["held_to_settle"] = False
+                a["settle_info"] = None
+                a["last_ladder_ts"] = 0.0
+                a["stale_ticks"] = 0
+                a["fatal_for_night"] = None
+                a["entry_attempts"] = 0
+                a["next_entry_retry_ts"] = 0.0
+                logged_done.discard(asset)
+                self._save_state()
+                self._event("CYCLE_TRANSITION", asset, "Switched to Cycle 2 (1-DTE Daytime)")
+
+            # --- Transition 2: Cycle 2 -> Cycle 3 (Early Win Re-Entry Gate before 12:00 PM) ---
+            elif cycle == 2 and not a.get("active") and a.get("entry_done") and (t < self.cfg.early_tp_cutoff):
+                exit_reason = str(a.get("exit_reason") or "")
+                # Gate: Spawn Cycle 3 ONLY if Cycle 2 exited via TP
+                if "TP" not in exit_reason:
+                    continue
+
+                internal_open = any(self._leg_open_qty(asset, k) > 0 for k in LEG_KEYS)
+                if internal_open:
+                    logger.warning(f"[{asset}] Cannot transition to Cycle 3: internal legs still open")
+                    continue
+
+                broker_pos = self._fetch_broker_positions() if not self.paper else {}
+                broker_has_open = any(
+                    sym.startswith(asset) and (sym.endswith("CE") or sym.endswith("PE")) and abs(v.get("quantity", 0)) > 0
+                    for sym, v in broker_pos.items()
+                )
+                if broker_has_open:
+                    logger.warning(f"[{asset}] Cannot transition to Cycle 3: broker positions still open")
+                    continue
+
+                logger.info(
+                    f"[{asset}] 🚀 EARLY WIN RE-ENTRY: Cycle 2 hit 50% TP ({exit_reason}) before 12:00 PM ({t.strftime('%H:%M')} IST)! "
+                    f"Spawning Cycle 3 at {self.cfg.c3_otm_pct*100:.1f}% OTM"
+                )
+                a["cycle_2_realized_usd"] = float(a.get("realized_pnl_usd", 0.0)) - float(a.get("cycle_1_realized_usd", 0.0))
+                a["current_cycle"] = 3
+                a["entry_done"] = False
+                a["active"] = False
+                a["entry_time"] = None
+                a["exit_time"] = None
+                a["exit_reason"] = None
+                a["legs"] = {k: default_leg() for k in LEG_KEYS}
+                a["initial_net_credit"] = 0.0
+                a["target_profit_value"] = 0.0
+                a["unwind_phase"] = None
+                a["held_to_settle"] = False
+                a["settle_info"] = None
+                a["last_ladder_ts"] = 0.0
+                a["stale_ticks"] = 0
+                a["fatal_for_night"] = None
+                a["entry_attempts"] = 0
+                a["next_entry_retry_ts"] = 0.0
+                logged_done.discard(asset)
+                self._save_state()
+                self._event("CYCLE_TRANSITION", asset, f"Switched to Cycle 3 ({self.cfg.c3_otm_pct*100:.1f}% OTM Afternoon Re-Entry)")
+                self._alert("CYCLE_TRANSITION", f"{asset}: Early TP in Cycle 2 before 12:00 PM. Spawning Cycle 3 at {self.cfg.c3_otm_pct*100:.1f}% OTM")
+
+
     def request_stop(self) -> None:
         logger.info("[SIGNAL] stop requested; draining current iteration…")
         self.stopping = True
@@ -2634,19 +3292,12 @@ class Engine:
             self.audit_and_recover_on_startup()
             # pre-window gate
             t = now_ist().time()
-            if (not self._in_entry_window(t)) and not self.cfg.force_entry:
-                any_active = any(self.state["assets"][s].get("active") for s in self.cfg.symbols)
-                if not any_active:
-                    logger.info(f"[WAIT] {t.strftime('%H:%M')} IST outside 22:00-04:30; waiting for 22:00…")
-                    while not self.stopping:
-                        t = now_ist().time()
-                        if self._in_entry_window(t):
-                            logger.info("[WAIT] Entry window open; starting cycle")
-                            break
-                        secs = _seconds_until(self.cfg.entry_start, t)
-                        logger.info(f"[WAIT] sleeping {min(secs, 300)}s (T-{secs//60}m to 22:00)")
-                        if not self._sleep_interruptible(min(secs, 300)):
-                            break
+            in_c1 = self._in_entry_window(t, 1)
+            in_c2 = self._in_entry_window(t, 2)
+            any_active = any(self.state["assets"][s].get("active") for s in self.cfg.symbols)
+            if not in_c1 and not in_c2 and not any_active and not self.cfg.force_entry:
+                logger.info(f"[WAIT] {t.strftime('%H:%M')} IST outside entry windows (C1 {self.cfg.entry_start.strftime('%H:%M')}-{self.cfg.entry_end.strftime('%H:%M')} / C2 {self.cfg.c2_entry_start.strftime('%H:%M')}-{self.cfg.c2_entry_end.strftime('%H:%M')}); engine active")
+
             logger.info("[LOOP] Active monitoring engaged (10s)")
             logged_done: set = set()
             while not self.stopping:
@@ -2664,6 +3315,8 @@ class Engine:
                         else:
                             logger.info(f"[ROLLOVER] {self.session} -> {cur_session}; pinning new session")
                             self.session = cur_session
+                            self.session_capital_inr = None
+                            self.session_fx = None
                             mode_suffix = "_paper" if self.paper else ""
                             self.state_path = self.cfg.data_dir / f"overnight_crypto_delta_{self.session}{mode_suffix}.json"
                             self.events_path = self.cfg.data_dir / f"overnight_crypto_delta_{self.session}{mode_suffix}.events.jsonl"
@@ -2678,15 +3331,20 @@ class Engine:
                     self._heartbeat()
                     self.reconcile_positions_with_broker()
                     t = now_ist().time()
-                    in_window = self._in_entry_window(t)
+                    self._check_cycle_transition(t, logged_done)
                     for asset in self.cfg.symbols:
                         a = self.state["assets"][asset]
+                        cycle = int(a.get("current_cycle", 1))
+                        in_window = self._in_entry_window(t, cycle)
                         if not a.get("entry_done") and not a.get("active") and (in_window or self.cfg.force_entry):
                             outcome, reason = self.enter_iron_condor(asset)
                             if outcome != EntryOutcome.ENTERED:
-                                logger.info(f"[{asset}] Entry {outcome.value} ({reason})")
+                                logger.info(f"[{asset}] Cycle {cycle} Entry {outcome.value} ({reason})")
+                            if outcome == EntryOutcome.FATAL:
+                                a["entry_done"] = True
+                                self._save_state()
                         if not a.get("active") and a.get("exit_time") and asset not in logged_done:
-                            logger.info(f"[{asset}] Cycle finished ({a.get('exit_reason')}); flat. "
+                            logger.info(f"[{asset}] Cycle {cycle} finished ({a.get('exit_reason')}); flat. "
                                         f"realized=${a.get('realized_pnl_usd', 0):.2f}")
                             logged_done.add(asset)
                     self.monitor_positions()
@@ -2732,13 +3390,13 @@ def run_self_tests() -> int:
     except Exception as e:
         add("strike_math", False, str(e))
 
-    # 2. dynamic lots on 10k @ 88 (no safety mult here: raw formula check)
+    # 2. dynamic lots on Rs 14,479 (50% of Rs 28,959) @ 88 with Delta real short margin
     try:
-        btc_margin = 800 * 0.001 * 88  # 70.4
-        lots = int((10000 * 0.65) // btc_margin)
-        eth_margin = 30 * 0.01 * 88  # 26.4
-        lots_e = int((10000 * 0.65) // eth_margin)
-        add("lots_formula", lots == 92 and lots_e == 246, f"btc={lots} eth={lots_e}")
+        btc_margin = 1.11 * 88  # 97.68
+        lots = int((14479 * 0.65) // btc_margin)  # 96 lots
+        eth_margin = 0.65 * 88  # 57.20
+        lots_e = int((14479 * 0.65) // eth_margin)  # 164 lots
+        add("lots_formula", lots == 96 and lots_e == 164, f"btc={lots} eth={lots_e}")
     except Exception as e:
         add("lots_formula", False, str(e))
 
@@ -2852,10 +3510,10 @@ def run_self_tests() -> int:
     except Exception as e:
         add("fee_math", False, str(e))
 
-    # 12. session pinning across midnight
+    # 12. session pinning across 15:00 boundary
     try:
-        a = session_date_str(datetime(2026, 9, 20, 7, 59, tzinfo=IST_TZ))
-        b = session_date_str(datetime(2026, 9, 20, 8, 1, tzinfo=IST_TZ))
+        a = session_date_str(datetime(2026, 9, 20, 14, 59, tzinfo=IST_TZ))
+        b = session_date_str(datetime(2026, 9, 20, 15, 1, tzinfo=IST_TZ))
         add("session_pinning", a == "20260919" and b == "20260920", f"{a}/{b}")
     except Exception as e:
         add("session_pinning", False, str(e))
@@ -2892,6 +3550,86 @@ def run_self_tests() -> int:
         add("no_failopen_leftovers", not hits, f"hits={hits}")
     except Exception as e:
         add("no_failopen_leftovers", False, str(e))
+
+    # 16. cycle 2 expiry resolution (0-DTE vs 1-DTE)
+    try:
+        morning = datetime(2026, 9, 20, 9, 15, tzinfo=IST_TZ)
+        c1_exp, _, c1_dte, _ = pick_1dte_expiry(["20-SEP-26", "21-SEP-26", "22-SEP-26"], morning, dtime(17, 30), min_dte=0)
+        c2_0dte_exp, _, c2_0dte, _ = pick_1dte_expiry(["20-SEP-26", "21-SEP-26", "22-SEP-26"], morning, dtime(17, 30), min_dte=0)
+        c2_1dte_exp, _, c2_1dte, _ = pick_1dte_expiry(["20-SEP-26", "21-SEP-26", "22-SEP-26"], morning, dtime(17, 30), min_dte=1)
+        add("c2_expiry_picker", c1_exp == "20-SEP-26" and c2_0dte_exp == "20-SEP-26" and c2_0dte == 0 and c2_1dte_exp == "21-SEP-26" and c2_1dte == 1,
+            f"0dte={c2_0dte_exp}/{c2_0dte} 1dte={c2_1dte_exp}/{c2_1dte}")
+    except Exception as e:
+        add("c2_expiry_picker", False, str(e))
+
+    # 17. cycle 3 early win transition gate
+    try:
+        dummy_cfg = EngineConfig(
+            symbols=["BTC"], mode="paper", broker_profile="paper", host="http://localhost:5001",
+            api_key="test", force_entry=False, capital_base_inr=30000, margin_util_cap=0.5,
+            margin_safety_mult=1.5, usd_inr=88.0, usd_inr_explicit=True, dynamic_sizing=False,
+            sl_mult=2.0, tp_pct=0.75, taker_fee_bps=5.0, per_order_fee_usd=0.0, exit_slip_bps=10.0,
+            assets=default_asset_configs(),
+        )
+        eng = Engine(dummy_cfg)
+        eng.paper = True
+        # Case A: C2 TP before 12:00 PM -> spawns C3
+        eng.state["assets"]["BTC"]["current_cycle"] = 2
+        eng.state["assets"]["BTC"]["active"] = False
+        eng.state["assets"]["BTC"]["entry_done"] = True
+        eng.state["assets"]["BTC"]["exit_reason"] = "C2_Basket_TP_Achieved"
+        ld: set = set()
+        eng._check_cycle_transition(dtime(10, 30), ld)
+        c3_spawned = (eng.state["assets"]["BTC"]["current_cycle"] == 3 and not eng.state["assets"]["BTC"]["entry_done"])
+
+        # Case B: C2 SL before 12:00 PM -> suppressed
+        eng.state["assets"]["BTC"]["current_cycle"] = 2
+        eng.state["assets"]["BTC"]["active"] = False
+        eng.state["assets"]["BTC"]["entry_done"] = True
+        eng.state["assets"]["BTC"]["exit_reason"] = "C2_Basket_SL_Hit"
+        eng._check_cycle_transition(dtime(10, 30), ld)
+        sl_suppressed = (eng.state["assets"]["BTC"]["current_cycle"] == 2)
+
+        # Case C: C2 TP after 12:00 PM -> suppressed
+        eng.state["assets"]["BTC"]["current_cycle"] = 2
+        eng.state["assets"]["BTC"]["active"] = False
+        eng.state["assets"]["BTC"]["entry_done"] = True
+        eng.state["assets"]["BTC"]["exit_reason"] = "C2_Basket_TP_Achieved"
+        eng._check_cycle_transition(dtime(13, 0), ld)
+        late_suppressed = (eng.state["assets"]["BTC"]["current_cycle"] == 2)
+
+        add("c3_early_win_gate", c3_spawned and sl_suppressed and late_suppressed,
+            f"spawned={c3_spawned} sl_sup={sl_suppressed} late_sup={late_suppressed}")
+    except Exception as e:
+        add("c3_early_win_gate", False, str(e))
+
+    # 18. schedule and otm defaults verification
+    try:
+        d_cfg = EngineConfig(
+            symbols=["BTC"], mode="paper", broker_profile="paper", host="http://localhost:5001",
+            api_key="test", force_entry=False, capital_base_inr=30000, margin_util_cap=0.5,
+            margin_safety_mult=1.5, usd_inr=88.0, usd_inr_explicit=True, dynamic_sizing=False,
+            sl_mult=2.0, tp_pct=0.75, taker_fee_bps=5.0, per_order_fee_usd=0.0, exit_slip_bps=10.0,
+            assets=default_asset_configs(),
+        )
+        defaults_ok = (
+            d_cfg.ladder_start == dtime(8, 45) and
+            d_cfg.cutoff == dtime(9, 0) and
+            d_cfg.basket_sl_mult == 1.2 and
+            d_cfg.c2_entry_start == dtime(9, 0) and
+            d_cfg.c2_cutoff == dtime(16, 30) and
+            d_cfg.c2_basket_sl_mult == 1.5 and
+            d_cfg.c2_use_0dte is True and
+            d_cfg.assets["BTC"].daytime_otm_pct == 0.015 and
+            d_cfg.assets["BTC"].otm_pct == 0.015 and
+            d_cfg.assets["ETH"].daytime_otm_pct == 0.015 and
+            d_cfg.assets["ETH"].otm_pct == 0.015
+        )
+        add("schedule_defaults", defaults_ok,
+            f"ladder={d_cfg.ladder_start} cutoff={d_cfg.cutoff} sl_ovn={d_cfg.basket_sl_mult} sl_day={d_cfg.c2_basket_sl_mult} btc_otm={d_cfg.assets['BTC'].otm_pct}")
+    except Exception as e:
+        add("schedule_defaults", False, str(e))
+
 
     passed = sum(1 for t in tests if t.ok)
     print(f"\nSELF-TEST v{__version__}: {passed}/{len(tests)} passed")
@@ -2945,15 +3683,18 @@ def run_replay(path: str, sl: float) -> int:
 # ------------------------------------------------------------------------------
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=f"Overnight Crypto Delta Options v{__version__} (production)")
-    ap.add_argument("--symbol", default="BOTH", choices=["BTC", "ETH", "BOTH"])
+    default_sym = os.getenv("OVERNIGHT_SYMBOL", "BTC").strip().upper()
+    ap.add_argument("--symbol", default=default_sym, choices=["BTC", "ETH", "BOTH"])
     ap.add_argument("--mode", default="live", choices=["live", "paper", "dry_run"])
     ap.add_argument("--lots", default=None,
                     help="DEPRECATED: rejected on purpose; use --btc-lots / --eth-lots")
     ap.add_argument("--btc-lots", type=int, default=None)
     ap.add_argument("--eth-lots", type=int, default=None)
     ap.add_argument("--sl-mult", type=float, default=2.0)
-    ap.add_argument("--tp-pct", type=float, default=float(os.getenv("OVERNIGHT_TP_PCT", "0.60")))
-    ap.add_argument("--basket-sl-mult", type=float, default=float(os.getenv("OVERNIGHT_BASKET_SL_MULT", "1.0")))
+    ap.add_argument("--tp-pct", type=float, default=float(os.getenv("OVERNIGHT_TP_PCT", "0.75")))
+    ap.add_argument("--basket-sl-mult", type=float, default=float(os.getenv("OVERNIGHT_BASKET_SL_MULT", "1.2")))
+    ap.add_argument("--enable-wings", action="store_true", default=None,
+                    help="Enable long protective wings (Iron Condor). Default is False (Naked Strangle).")
     ap.add_argument("--force-entry", action="store_true")
     ap.add_argument("--self-test", action="store_true", help="Run offline self-tests and exit")
     ap.add_argument("--print-config", action="store_true", help="Print resolved config (key redacted) and exit")
@@ -2981,11 +3722,14 @@ def main() -> None:
         out = asdict(cfg)
         out["api_key"] = "<redacted: set via env>"
         out["host"] = cfg.host or "<required via env in live>"
-        for k in ("entry_start", "entry_end", "ladder_start", "aggressive_time", "cutoff", "settle"):
-            out[k] = str(out[k])
+        for k in ("entry_start", "entry_end", "ladder_start", "aggressive_time", "cutoff", "settle",
+                  "c2_entry_start", "c2_entry_end", "c2_ladder_start", "c2_cutoff"):
+            if k in out:
+                out[k] = str(out[k])
         for k in ("data_dir", "lock_path", "kill_file", "halt_file"):
-            out[k] = str(out[k])
-        print(json.dumps(out, indent=2))
+            if k in out:
+                out[k] = str(out[k])
+        print(json.dumps(out, indent=2, default=str))
         sys.exit(0)
     try:
         cfg = load_config(args, need_secrets=True)

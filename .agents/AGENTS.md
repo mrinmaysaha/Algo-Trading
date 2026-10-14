@@ -42,6 +42,7 @@ These rules apply to all AI assistants and tools working within this workspace t
 - **Cognitive Scaffolding & Self-Disproof Gate:** For all non-trivial problems, break the objective into sub-problems, formulate at least 1 counter-hypothesis ("Why might this intuition fail or cause regressions?"), and evaluate trade-offs before generating code.
 - **Invariant & Boundary Auditing:** Audit active schemas, tick sizes, order types, and contract multipliers directly from active code before proposing edits. Never assume or approximate.
 - **Empirical Grounding:** Validate algorithmic adjustments with isolated data-backed verification scripts and syntax checks before finalizing. Rule file: `.agents/rules/frontier-reasoning.md`.
+- **AUTO-TRIGGER (No /plan required):** The `sequentialthinking` MCP or inline numbered reasoning MUST fire automatically before any change to: capital/sizing logic, risk circuit breakers, entry/exit gates, state persistence, or broker API mapping. See trigger table in `.agents/rules/frontier-reasoning.md`.
 
 ## 8. Dual-Instance Routing Invariant (Port 5000 vs Port 5001)
 - **Port 5000 (`openalgo-angel`, WS 8765):** Exclusively for Indian domestic markets (NSE, BSE, MCX, NIFTY, BANKNIFTY, SENSEX, CRUDEOIL, GOLD). Strategies live in `strategies/scripts/` and `strategies/strategy_configs.json`.

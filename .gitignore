@@ -150,3 +150,19 @@ docs/audit/qa_audit/**/qa_sandbox_*.csv
 docs/audit/qa_audit/**/qa_live_*.csv
 # Excel writes a ~$-prefixed lock file next to any workbook left open.
 docs/audit/qa_audit/**/~$*
+
+# Backtesting runs and tearsheets
+backtesting/runs/*.html
+backtesting/runs/*.png
+
+# Historical data dumps
+data/historical/
+
+# Strategy daily runtime session state files
+strategies/data/*.json
+!strategies/data/README.md
+strategies_global/data/*.json
+!strategies_global/data/README.md
+!strategies_global/data/.gitkeep
+!strategies_global/data/overnight_crypto_delta_stats.json
+

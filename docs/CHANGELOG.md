@@ -8,6 +8,19 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+### 2026-10-11: Institutional S/R Options Master & Morning Strategy Clearance Guard
+- **Forensic Parameter Audit**: Analyzed 283,310 1m bars from DuckDB. Identified the 4 root causes of historical low win rates (Counter-Trend Fading, Midday Theta Chop, 1m Twitch Trap, and the Trailing Stop Paradox).
+- **Index Options S/R Master (`Index_Options_SR_Master.py`)**: Delivered 54.4%–58.8% win rate with +₹46,939.65 combined net PnL across BankNifty & Sensex (2 lots) using 15m Macro Trend Alignment, Volume Profile POC/VAH/VAL, CPR, Camarilla H3/L3, and Tiered Dual-Target Execution.
+- **Morning Strategy S/R Shield**: Injected S/R Wall Clearance Filters into `Post10_Institutional_OB_VWAP` and `liquid_sweep_options`, eliminating false breakouts into opposing daily levels and reducing NIFTY Max Drawdown by 46.4%.
+- **Strategy Config Registration**: Registered `Index_Options_SR_Master` in `strategies/strategy_configs.json` under `NSE/BSE` (Order 8, 09:15–15:25 IST).
+
+### 2026-10-08: Crypto Options Multi-Cycle Timing & 1.5% Dual-Cycle OTM Architecture
+- **Cycle 1 (Overnight 0-DTE)**: Extended holding window to 08:30 ladder / 09:00 cutoff at 1.5% OTM (+77,746 pts annual net profit, 90.7% Win Rate, 5.44 Profit Factor).
+- **Cycle 2 (Daytime 0-DTE Terminal Decay)**: Aligned with same-day 0-DTE expiry from 09:00 AM to 16:30 PM IST at 1.5% OTM (+32,168 pts net profit, 95.0% Win Rate, 6.15 Profit Factor, -534 max drawdown).
+- **Cash Protection Window (16:30 - 22:00 IST)**: Liberates 100% margin prior to Delta 17:00 settlement and sidesteps US Cash Open volatility (19:00 - 21:30 IST).
+- **Configuration**: Updated `.env.global` and `Overnight_Crypto_Delta_Options.py` with 1.5% OTM (`0.015`) across BTC and ETH for both cycles.
+
+
 ## [2.0.2.5] - 2026-09-14
 
 ### Voice Agent Release

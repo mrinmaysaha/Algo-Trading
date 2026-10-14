@@ -349,7 +349,7 @@ def run_portfolio_concurrency_simulation(strategy_trade_map: Dict[str, List[Dict
     iso_max_dd = (cum_iso.cummax() - cum_iso).max()
 
     # 2. Chronological Discrete Event Simulation
-    caps = {"NSE": 5000.0, "BSE": 5000.0, "MCX": 5000.0}
+    caps = {"NSE": 12000.0, "BSE": 12000.0, "MCX": 12000.0}
 
     executed_trades = []
     blocked_collision_trades = []
@@ -428,7 +428,7 @@ def run_portfolio_concurrency_simulation(strategy_trade_map: Dict[str, List[Dict
         sample_col = df_col[["sim_date", "strategy", "symbol", "block_reason"]]
         print(sample_col.head(6).to_string(index=False))
 
-    print("\n[2] DAILY CIRCUIT BREAKER AUDIT (Session Loss Limit: -Rs. 5,000 per Exchange):")
+    print("\n[2] DAILY CIRCUIT BREAKER AUDIT (Session Loss Limit: -Rs. 12,000 per Exchange):")
     print(f"  • Blocked by Circuit Breaker Trip  : {len(df_cb)} trades")
     print(f"  • Net PnL of Trades Blocked by CB  : Rs. {cb_blocked_net:+,.2f}")
     if cb_blocked_net < 0:
