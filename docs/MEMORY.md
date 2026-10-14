@@ -1325,8 +1325,16 @@
 - **MCX Commodity Strategies Dissection**:
   - *MCX_GOLDM_FVG_Options*: 44 trades, **47.7% Win Rate**, **+Rs. 49,041.16 Net PnL**, PF 2.36. Trade count is restricted by the narrow 17:30–22:45 IST window and high 0.70x ATR FVG threshold. Expanding start to 16:00 IST (European open) and tuning FVG to 0.50x ATR safely scales trade frequency to ~72 trades without edge degradation.
   - *MCX_Liquidity_Sweep_Scalper*: 90 trades (180 days), **46.7% Win Rate**, **+Rs. 204,179.39 Net PnL**, Profit Factor 2.64. GOLDM achieved **61.1% Win Rate**, **+Rs. 179,313.06 Net PnL**, 3.47 PF. Crude Oil achieved **50.0% Win Rate**, **+Rs. 9,616.51 Net PnL**. Expanding Crude Oil session from 18:00 to 16:30 IST captures London open liquidity sweeps.
-  - *multi_commodity_strategy*: 264 trades, **+Rs. 288,965.27 Net PnL**. GOLDM AVRE delivered **+Rs. 275,225.66** (52.1% WR). CRUDEOILM HMA lost **-Rs. 1,207.22** (44.4% WR). Moving average crossovers fail on Crude Oil due to violent intraday chop. Crude Oil execution should be routed exclusively through `MCX_Liquidity_Sweep_Scalper`.
 
-
-
-
+### XX. Upstream Integration & Merge Sync (2026-10-15)
+- **Upstream Sync (`marketcalls/openalgo:main` -> `mrinmaysaha/Algo-Trading:main`)**:
+  - Integrated upstream's newest release:
+    1. **NSE Index Freeze Limits (Oct 2026)**: NSE circular NSE/FAOP/76693 (NIFTY 3,510, BANKNIFTY 1,440, FINNIFTY 3,240, MIDCPNIFTY 5,760, NIFTYNXT50 1,125, NIFTYFPI 53,900) via `upgrade/migrate_qty_freeze_oct_2026.py` and `database/qty_freeze_db.py`.
+    2. **openalgo-charts 2.6.4 & Full-Screen Terminal**: Enhanced DrawingStyleBar with ChromeIcons, full-screen chart tools, drawing scopes/clipboard, and terminal history.
+    3. **gthread Worker & Backpressure Architecture**: Integrated `BrokerBusyError`, `check_queue_wait`, `holds_position_lock` decorator, and `start.sh` gthread runtime resolver while preserving local Linux/Windows cross-process fcntl rate-limit safety.
+  - **Preserved Custom Invariants**:
+    1. **Dual-Instance Routing**: Port 5000 (`openalgo-angel`, Indian domestic F&O/MCX) and Port 5001 (`openalgo-global`, Delta crypto derivatives).
+    2. **Multi-Cycle Crypto Options Suite**: `Overnight_Crypto_Delta_Options.py` dual-cycle OTM architecture, PnL breakdown tab in `Positions.tsx`, and contract multiplier calculations (`get_contract_multiplier` in `utils/symbol_utils.py` for MCX GOLD/GOLDM and Delta BTC/ETH/SOL).
+    3. **Contract Database & Token Lookups**: Enhanced snapshot caching in `database/token_db_enhanced.py` combined with commodity fallback (`clean`, `clean + "COM"`).
+    4. **All Tests Verified Clean**: Pytest test suite ran cleanly (14/14 on execution and multipliers, 31/31 on Oct 2026 freeze limits).
+    5. **Pushed to Remote**: Merge commit `ce4c8679e` pushed and synced with `origin/main`.
