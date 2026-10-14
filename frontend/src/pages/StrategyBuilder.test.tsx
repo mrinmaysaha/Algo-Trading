@@ -211,6 +211,17 @@ async function chooseExchange(exchange: string) {
   fireEvent.click(await screen.findByRole('option', { name: exchange }))
 }
 
+/**
+ * How long a wait gets before it is called a failure.
+ *
+ * The default is one second, which is enough on a developer's machine and is
+ * not enough on a loaded runner under coverage instrumentation: the Greeks tab
+ * appears once a strategy's legs have been priced, and `npm run test:coverage`
+ * on the slowest of the three Node versions in CI has taken longer than that.
+ * The symptom is a green suite that fails roughly one run in several, always on
+ * a different test, which reads as a regression in whatever pull request
+ * happened to be open.
+ */
 const ASYNC_READY_TIMEOUT = 5_000
 const SLOW_INTEGRATION_TEST_TIMEOUT = 15_000
 
@@ -551,7 +562,7 @@ describe('StrategyBuilder live request orchestration', () => {
     expect(screen.getAllByText('₹125.00').length).toBeGreaterThan(0)
     expect(screen.queryByText('₹225.00')).not.toBeInTheDocument()
 
-    await user.click(await screen.findByRole('tab', { name: 'Greeks' }))
+    await user.click(await screen.findByRole('tab', { name: 'Greeks' }, { timeout: ASYNC_READY_TIMEOUT }))
     const rows = await screen.findAllByRole('row')
     const row = rows.find((item) => item.textContent?.includes('24600CE'))
     expect(row).toBeDefined()
@@ -868,9 +879,15 @@ describe('StrategyBuilder live request orchestration', () => {
     await waitFor(() => expect(requests('/api/v1/optionchain')).toHaveLength(1))
 
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
-    act(() => document.dispatchEvent(new Event('visibilitychange')))
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
-    act(() => document.dispatchEvent(new Event('visibilitychange')))
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
 
     await waitFor(() => expect(requests('/api/v1/optionchain')).toHaveLength(2))
   })
@@ -909,7 +926,7 @@ describe('StrategyBuilder live request orchestration', () => {
 
     expect(screen.getAllByText('₹125.00').length).toBeGreaterThan(0)
 
-    await user.click(await screen.findByRole('tab', { name: 'Greeks' }))
+    await user.click(await screen.findByRole('tab', { name: 'Greeks' }, { timeout: ASYNC_READY_TIMEOUT }))
     const greekRows = await screen.findAllByRole('row')
     const positionRow = greekRows.find((row) => row.textContent?.includes('13AUG26 24600CE'))
     expect(positionRow).toBeDefined()
@@ -991,7 +1008,7 @@ describe('StrategyBuilder live request orchestration', () => {
     expect(screen.getAllByText('18AUG26').length).toBeGreaterThan(0)
     expect(screen.getAllByText('₹225.00').length).toBeGreaterThan(0)
 
-    await user.click(await screen.findByRole('tab', { name: 'Greeks' }))
+    await user.click(await screen.findByRole('tab', { name: 'Greeks' }, { timeout: ASYNC_READY_TIMEOUT }))
     const greekRows = await screen.findAllByRole('row')
     const farGreekRow = greekRows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
     expect(farGreekRow).toBeDefined()
@@ -1044,7 +1061,7 @@ describe('StrategyBuilder live request orchestration', () => {
         { withGreeks: true }
       )
 
-      await user.click(await screen.findByRole('tab', { name: 'Greeks' }))
+      await user.click(await screen.findByRole('tab', { name: 'Greeks' }, { timeout: ASYNC_READY_TIMEOUT }))
       let rows = await screen.findAllByRole('row')
       let farRow = rows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
       const nearRow = rows.find((row) => row.textContent?.includes('13AUG26 24600CE'))
@@ -1095,9 +1112,15 @@ describe('StrategyBuilder live request orchestration', () => {
       farIv = 53
       farDelta = 0.61
       Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
-      act(() => document.dispatchEvent(new Event('visibilitychange')))
+      await act(async () => {
+        document.dispatchEvent(new Event('visibilitychange'))
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
       Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
-      act(() => document.dispatchEvent(new Event('visibilitychange')))
+      await act(async () => {
+        document.dispatchEvent(new Event('visibilitychange'))
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
 
       await waitFor(() => expect(mocks.getOptionChain).toHaveBeenCalledTimes(4))
       rows = await screen.findAllByRole('row')
@@ -1145,7 +1168,7 @@ describe('StrategyBuilder live request orchestration', () => {
         expect(screen.getAllByRole('button', { name: 'Remove position' })).toHaveLength(2)
       )
 
-      await user.click(await screen.findByRole('tab', { name: 'Greeks' }))
+      await user.click(await screen.findByRole('tab', { name: 'Greeks' }, { timeout: ASYNC_READY_TIMEOUT }))
       let rows = await screen.findAllByRole('row')
       let farRow = rows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
       const initialGreeks = within(farRow as HTMLElement)
@@ -1302,7 +1325,7 @@ describe('StrategyBuilder live request orchestration', () => {
       fireEvent.click(await screen.findByRole('option', { name: 'PE' }))
       await user.click(within(dialog).getByRole('button', { name: 'Modify' }))
 
-      await user.click(await screen.findByRole('tab', { name: 'Greeks' }))
+      await user.click(await screen.findByRole('tab', { name: 'Greeks' }, { timeout: ASYNC_READY_TIMEOUT }))
       const rows = await screen.findAllByRole('row')
       const editedRow = rows.find((row) => row.textContent?.includes('18AUG26 24600PE'))
       expect(editedRow).toBeDefined()
@@ -1724,9 +1747,15 @@ describe('StrategyBuilder identity orchestration', () => {
     await waitFor(() => expect(requests('/api/v1/optionchain')).toHaveLength(1))
 
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
-    act(() => document.dispatchEvent(new Event('visibilitychange')))
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
-    act(() => document.dispatchEvent(new Event('visibilitychange')))
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
 
     await waitFor(() => expect(requests('/api/v1/optionchain')).toHaveLength(2))
     expect(

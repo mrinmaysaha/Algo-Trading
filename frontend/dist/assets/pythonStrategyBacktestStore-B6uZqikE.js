@@ -1,1 +1,0 @@
-import{t as e}from"./react-CEMqcyIp.js";var t=e(e=>({result:null,isLoading:!1,error:null,setResult:t=>e({result:t,error:null}),setLoading:t=>e({isLoading:t}),setError:t=>e({error:t}),clearResult:()=>e({result:null,error:null})}));export{t};

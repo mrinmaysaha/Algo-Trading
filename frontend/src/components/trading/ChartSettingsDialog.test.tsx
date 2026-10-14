@@ -101,6 +101,61 @@ const REQ_DEVIATED: ChartSettingsRequest = {
 }
 
 describe('ChartSettingsDialog', () => {
+  it('keeps an unsupported OI preference visible and disabled', async () => {
+    const onApply = renderDialog(vi.fn(), {
+      tabs: [
+        {
+          id: 'readout',
+          label: 'Readout',
+          inputs: [
+            {
+              key: 'statusLine.openInterest',
+              type: 'boolean',
+              label: 'Open interest',
+              unavailable: 'Open interest is unavailable for this instrument.',
+            },
+          ],
+        },
+      ],
+      values: { 'statusLine.openInterest': true },
+      defaults: { 'statusLine.openInterest': false },
+    })
+    const checkbox = screen.getByRole('checkbox', { name: 'Open interest' })
+    expect(checkbox).toBeChecked()
+    expect(checkbox).toBeDisabled()
+    expect(screen.getByText('Open interest')).toHaveAttribute(
+      'title',
+      'Open interest is unavailable for this instrument.'
+    )
+    await userEvent.click(checkbox)
+    expect(checkbox).toBeChecked()
+    expect(onApply).not.toHaveBeenCalled()
+  })
+
+  it('says there is nothing to configure when every control on a tab is hidden', () => {
+    renderDialog(vi.fn(), {
+      tabs: [
+        {
+          id: 'box',
+          label: 'Box',
+          inputs: [
+            {
+              key: 'pnf.boxSize',
+              type: 'number',
+              label: 'Box size',
+              default: 1,
+              visibleWhen: { key: 'pnf.boxMode', is: 'fixed' },
+            },
+          ],
+        },
+      ],
+      values: { 'pnf.boxMode': 'atr', 'pnf.boxSize': 1 },
+      defaults: { 'pnf.boxMode': 'atr', 'pnf.boxSize': 1 },
+    })
+    expect(screen.queryByText('Box size')).not.toBeInTheDocument()
+    expect(screen.getByText('Nothing to configure here.')).toBeInTheDocument()
+  })
+
   it('renders a tab per schema entry and opens on the first', () => {
     renderDialog()
     expect(screen.getByRole('button', { name: 'Price' })).toBeInTheDocument()

@@ -1,10 +1,11 @@
 import importlib
 import threading
 import time
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 from database.auth_db import get_auth_token_broker
 from database.token_db import get_token
+from services.broker_busy import BrokerBusyError, broker_busy_result
 from utils.constants import VALID_EXCHANGES
 from utils.logging import get_logger
 
@@ -179,6 +180,8 @@ def get_quotes_with_auth(
             _SERVICE_QUOTE_CACHE[cache_key] = (now, quotes)
 
         return True, {"status": "success", "data": quotes}, 200
+    except BrokerBusyError as e:
+        return broker_busy_result(e, f"Quote request for {exchange}:{symbol}")
     except Exception as e:
         error_msg = str(e)
         if "rate limit" in error_msg.lower() or "exceeding" in error_msg.lower():
@@ -369,6 +372,9 @@ def get_multiquotes_with_auth(
                     results.append(
                         {"symbol": item["symbol"], "exchange": item["exchange"], "data": quote}
                     )
+                except BrokerBusyError:
+                    # The symbols after this one would be refused the same way.
+                    raise
                 except Exception as e:
                     logger.exception(
                         f"Error fetching quote for {item['exchange']}:{item['symbol']}: {e}"
@@ -391,6 +397,8 @@ def get_multiquotes_with_auth(
         combined_results = results + (multiquotes if isinstance(multiquotes, list) else [])
 
         return True, {"status": "success", "results": combined_results}, 200
+    except BrokerBusyError as e:
+        return broker_busy_result(e, f"Multi-quote request for {len(valid_symbols)} symbols")
     except Exception as e:
         # Check if this is a permission error
         error_msg = str(e)

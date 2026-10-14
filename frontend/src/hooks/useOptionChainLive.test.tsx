@@ -446,9 +446,15 @@ describe('useOptionChainLive', () => {
     const firstOffset = result.current.clockOffsetMs
 
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
-    act(() => document.dispatchEvent(new Event('visibilitychange')))
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
-    act(() => document.dispatchEvent(new Event('visibilitychange')))
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
 
     await waitFor(() => expect(requestCount).toBe(2))
     await waitFor(() => expect(result.current.clockOffsetMs).not.toBe(firstOffset))

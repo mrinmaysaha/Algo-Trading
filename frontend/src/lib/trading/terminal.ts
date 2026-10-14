@@ -13,33 +13,59 @@
  * cancel, real-time order stream, REST fallback) is unchanged.
  */
 
-import type { ChartObjectSnapshot, LinkGroup } from 'openalgo-charts'
+import type {
+  ChartObjectSnapshot,
+  IndicatorBarSource,
+  IndicatorInputCondition,
+  IndicatorState,
+  LinkGroup,
+  SeriesMarker,
+  SeriesMarkers,
+  SeriesTransformSpec,
+} from 'openalgo-charts'
 import {
+  AlertController,
+  type AlertEventPayload,
+  type AlertPatch,
+  type AlertSource,
+  type AlertsDocument,
   type Bar,
   BuySellButtons,
   CandleBuilder,
   ChartObjects,
   type ChartTheme,
+  type ContextMenuEvent,
   compactVolume,
   createChart,
   DataLoadingController,
   type DataLoadingSnapshot,
+  exportChartDataCsv,
+  formatZonedTime,
+  getIndicator,
+  getSeriesTransform,
+  IndicatorInputError,
   type IPrimitive,
+  indicatorDefaults,
+  isKnownInterval,
   type LtpEvent,
   type MarketDepth,
   OpenAlgoDataFeed,
   OpenAlgoTradeFeed,
   OpenAlgoWsFeed,
   type PriceLine,
+  type PriceScaleId,
+  parseAlertsDocument,
   ReplayController,
   ReplayShade,
   type ReplayState,
   readChartSettings,
+  registeredIndicators,
   type SeriesApi,
   type SeriesStyle,
   type SeriesType,
   TextWatermark,
   tryResolveInterval,
+  utcSecondsToZonedDateString,
   withBarCache,
 } from 'openalgo-charts'
 import type {
@@ -48,14 +74,67 @@ import type {
   DrawingsDocument,
   DrawingText,
   DrawingTool,
+  FibLevel,
+  MagnetMode,
 } from 'openalgo-charts/draw'
 import {
-  runTransform,
-  parseExpression,
   evaluateExpression,
+  parseExpression,
   type SymbolExpression,
 } from 'openalgo-charts/transform'
+import type { AlertUi } from 'openalgo-charts/widget'
+import {
+  parseIndicatorStates,
+  parseWorkspacePayload,
+  type WorkspaceComparison,
+  type WorkspacePane,
+} from 'openalgo-charts/workspace'
+import { deliverAlert, deliveryOf, readySound } from './alertDelivery'
+import { reportFire } from './alertLog'
+import type { AlertFacts } from './alertMessage'
+import { fillAlertMessage } from './alertMessage'
+import { askToNotify } from './alertNotify'
+import { mergeAlertRuntime } from './alertRuntime'
+import { csvOptions, type DataExportOptions } from './chartDataExport'
+import { chartMotionOptions } from './chartMotion'
+import { CHART_READY, type ChartStateView, chartLoadFailed, chartNoData } from './chartState'
+import {
+  type ComparisonScale,
+  comparisonScaleOf,
+  isComparisonScale,
+  storedComparisonMode,
+} from './comparisonScale'
 import { ExpressionFeed, isChartExpression, resolveLeg } from './expressionFeed'
+import {
+  type IndicatorTemplateMode,
+  planIndicatorTemplate,
+  readStoredIndicators,
+  type StoredIndicatorRecord,
+} from './indicatorTemplates'
+import { openInterestCapability } from './openInterest'
+import {
+  isPriceAxisSetting,
+  PRICE_AXIS_DEFAULTS,
+  type PriceAxisCommand,
+  PriceAxisController,
+  type PriceAxisMenu,
+  pinOnceMeasured,
+  priceAxisPatch,
+  priceAxisSettingsView,
+  priceAxisShortcuts,
+} from './priceAxis'
+import { parseRangeChoice, type RangeChoice, serializeRangeChoice } from './rangeChoice'
+import { replayTiming } from './replayTiming'
+import { applySessionHours } from './sessionHours'
+import { TerminalComparisons } from './terminalComparisons'
+import type { PreparedReplayMember } from './workspaceReplay'
+import {
+  createWorkspacePanePreferences,
+  parseTerminalWorkspacePane,
+  validateWorkspacePaneSupport,
+} from './workspaceState'
+
+export { dedupeIndicators } from './indicatorTemplates'
 
 // Re-exported so the React layer imports its chart types from this facade
 // rather than reaching into the library directly, as it already does for
@@ -93,6 +172,12 @@ export interface DrawStats {
    */
   hasSelection: boolean
   magnet: boolean
+  /** The snap mode behind `magnet`: off, weak (near a value) or strong (always). */
+  magnetMode: MagnetMode
+  /** What Remove all would take: every drawing the trader may delete. */
+  removable: number
+  /** What Select all would pick: shown, unlocked and selectable on this interval. */
+  selectable: number
   /**
    * Whether the armed tool survives a placement. Off, the tier disarms after
    * one drawing and the rail returns to the cursor, which is the tier's
@@ -111,17 +196,74 @@ export interface DrawStats {
 import type { AgentChartCommand } from '@/lib/agent/stream'
 import type { AppMode, ThemeMode } from '@/stores/themeStore'
 import {
+  type AlertChart,
+  type AlertDrawings,
+  type AlertTick,
+  alertTitleFor,
+  draftFor,
+  draftProblem,
+  hasAutoTitle,
+  snapPrice,
+  toAlertInput,
+} from './alertsModel'
+import {
   applyChartCommands,
   applyIndicatorCommands,
   type ChartContext,
   describeDrawings,
   isAgentDrawingId,
 } from './chartContract'
+import { type HistoryDirection, TerminalHistory } from './chartHistory'
 import { CurrentDrawingSource, profileObjectProvider } from './chartObjectsAdapter'
-import { buildChartTheme, mutedTradeColors, resolveCssColor, volumeColor } from './chartTheme'
-import { CHART_TYPES } from './chartTypes'
+import {
+  foldedStudyIds,
+  panesToFold,
+  readFoldedStudyIds,
+  type StudyMenu,
+  studyMenuAt,
+} from './chartPaneActions'
+import {
+  applyChartDialogMetrics,
+  buildChartTheme,
+  mutedTradeColors,
+  quietVolumeStyle,
+  resolveCssColor,
+  volumeColor,
+} from './chartTheme'
+import { CHART_TYPES, volumeUnderElements } from './chartTypes'
+import { COMPARISON_PALETTE } from './comparisonColors'
+import {
+  type DrawLevels,
+  type DrawSelectionDetails,
+  type DrawTier,
+  describeSelection,
+  drawingCounts,
+  drawingToolName,
+  ERASER_TOOL,
+  levelsOf,
+  levelsPatches,
+  selectableIds,
+  settingsPatches,
+  toolCursorValue,
+} from './drawingActions'
+import {
+  clipboardMessage,
+  drawingClipboardPort,
+  drawingsLabel,
+  drawingsOnClipboard,
+  noteDrawingsCopied,
+} from './drawingClipboard'
+import { pageHasTextSelection } from './drawingKeys'
+import {
+  adoptUnscopedDrawings,
+  drawingsKey,
+  openingDrawings,
+  savedInstrument,
+  UNSCOPED_DRAWINGS,
+} from './drawingScope'
 import { DRAW_TOOL_METADATA } from './drawingToolMetadata'
 import { fmtPrice, money, priceDp, snapTick, tickSize } from './format'
+import { factsFor } from './instrumentFacts'
 import {
   type IntervalData,
   type IntervalGroup,
@@ -137,8 +279,10 @@ import {
   legendToneStyle,
   lotInfoText,
 } from './legend'
+import { fileForScriptId, isScriptInstance } from './openscriptFiles'
+import { loadOpenScriptStudies, SCRIPT_ALERT_EVENT } from './openscriptStudies'
 import { profileIntervalSupported, selectProfileInterval } from './profileIntervals'
-import { ProfileLayer } from './profileLayer'
+import { ProfileLayer, type ProfileMenuAction } from './profileLayer'
 import {
   isProfileKind,
   type ProfileKind,
@@ -147,6 +291,14 @@ import {
   readProfileSettings,
 } from './profileSettings'
 import { profileSettingsView } from './profileSettingsView'
+import {
+  VOLUME_DEFAULTS,
+  volumeAverage,
+  volumeAveragePoint,
+  volumePoint,
+  volumeSettingsView,
+  volumeValues,
+} from './volumeSettings'
 
 export type OrderSide = 'BUY' | 'SELL'
 export type OrderType = 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
@@ -187,6 +339,8 @@ export interface SymbolView {
   tick: number
   freezeQty: number
   quoteOnly: boolean
+  /** Instrument capability; an absent live observation does not change it. */
+  hasOpenInterest?: boolean
   /**
    * A chart of an expression (`NIFTY/RELIANCE`, `2*CE25000 - CE25200`) rather
    * than an instrument. There is nothing to place an order in and nothing to
@@ -255,8 +409,14 @@ export interface ConfirmedOrder {
 }
 
 export interface TerminalCallbacks {
+  onComparisonsChange?(state: TerminalComparisonState): void
+  /** Chart configuration changed; live price updates do not fire this callback. */
+  onWorkspaceChange?(): void
   onReady(info: { intervalGroups: IntervalGroup[]; interval: string; chartType: string }): void
   onIntervalChange?(interval: string): void
+  /** The chart type changed from inside the terminal, such as an undo or redo. */
+  onChartTypeChange?(chartType: string): void
+  onContextMenu?(menu: TerminalContextMenu): void
   onToast(msg: string, kind: ToastKind): void
   onWsState(state: string): void
   onSymbolLoaded(view: SymbolView): void
@@ -272,6 +432,43 @@ export interface TerminalCallbacks {
    * canvas-only and ships no DOM, so the form is ours to render.
    */
   onIndicatorSettings?(req: IndicatorSettingsRequest): void
+  /**
+   * The braces button on an OpenScript study's legend row was clicked: show
+   * this file's source.
+   *
+   * Only fires for a study the trader wrote. A built-in has no file behind it,
+   * and the chart draws no button for one.
+   */
+  onOpenScriptSource?(file: string): void
+  /**
+   * Alerts were asked for. The host renders the dialog and drives the handle.
+   *
+   * Null means the chart this dialog belonged to has gone, which is the
+   * terminal telling an open dialog to close rather than keep writing into a
+   * controller nothing is evaluating any more.
+   */
+  onAlerts?(handle: AlertsHandle | null): void
+  /**
+   * An alert fired. Carries what fired rather than a handle, because this is a
+   * record of a moment: the alert behind it may be edited, or gone, by the time
+   * anybody reads the entry back.
+   */
+  /**
+   * This chart has an alert controller now, or has lost the one it had.
+   *
+   * Separate from `onAlerts`, which means "open the editor" and carries a
+   * handle built for that moment. A list is on screen the whole time and needs
+   * the controller from the moment there is one, so it gets its own signal and
+   * the narrower view that goes with it.
+   */
+  onAlertsReady?(view: AlertsView | null): void
+  onAlertFired?(fire: AlertFire): void
+  /**
+   * The set of alerts changed: one was created, edited, removed, expired, or
+   * dragged to a new price. The controller is mutable and `list()` hands back a
+   * copy, so nothing else tells a list built from it that it is now stale.
+   */
+  onAlertsChanged?(): void
   /** The current chart generation's shared object inventory. */
   onObjectsChange?(objects: ChartObjects | null): void
   /** Opens this pane's existing chart settings dialog. */
@@ -279,10 +476,21 @@ export interface TerminalCallbacks {
   /** A drawing was selected (or deselected), for the style popover. */
   onDrawSelect?(sel: DrawSelection | null): void
   /**
+   * Remove all drawings was asked for. The host confirms first, over this
+   * pane, and then calls `removeDrawings(true)`: one press must never take
+   * every level off a chart.
+   */
+  onDrawRemoveAll?(req: { count: number; symbol: string }): void
+  /**
    * The replay playhead moved, or replay was entered or left. Null means the
    * chart is live again, which is the transport bar's cue to hide itself.
    */
   onReplayChange?(state: ReplayState | null): void
+  /**
+   * A load started, finished, came back empty or failed. The pane draws it
+   * over the chart, with Try again calling `retryLoad`.
+   */
+  onChartState?(state: ChartStateView): void
   /** The volume histogram was switched from the legend readout. */
   onVolumeChange?(on: boolean): void
   /**
@@ -297,6 +505,27 @@ export interface TerminalCallbacks {
    * nothing is placed until it confirms.
    */
   onOrderTicket?(req: OrderTicketRequest): void
+}
+
+export interface TerminalComparisonItem {
+  id: string
+  symbol: string
+  exchange: string
+  label: string
+  color: string
+  status: 'loading' | 'ready' | 'error'
+  error?: string
+  /** False while the trader has hidden the line; it stays on the chart. */
+  visible: boolean
+  /** The latest close, while one is drawn. */
+  close?: number
+  /** Percent change of that close from the bar before. */
+  change?: number
+}
+
+export interface TerminalComparisonState {
+  mode: ComparisonScale
+  items: readonly TerminalComparisonItem[]
 }
 
 export interface BrandingLink {
@@ -355,9 +584,81 @@ function drawingTextContrast(background: string): string {
 const DRAWING_TEXT_PX = 12
 
 /** Everything needed to generate an indicator settings form. */
+/**
+ * Everything the alert dialog acts on, in one handle.
+ *
+ * The engine ships an alert controller and, separately, an alert UI. The
+ * controller is the part worth having and this page renders its own dialog, the
+ * way it already renders its own indicator settings: the engine is canvas-only
+ * and its dialog is a settings table, which is the wrong shape for an alert.
+ *
+ * Handed over as a snapshot taken when the dialog opens. A rebuild replaces the
+ * chart and its controller, so a dialog holding an old one would write alerts
+ * into a chart nobody is looking at; `onAlertsClosed` is how the terminal tells
+ * it to stop.
+ */
+export interface AlertsHandle {
+  /** The engine's controller: add, update, remove, list, availability. */
+  alerts: AlertController
+  /** The chart, for enumerating studies, bars and the timezone. */
+  chart: AlertChart
+  /** The drawing tier, once it is attached. Null while it is still loading. */
+  drawings: AlertDrawings | null
+  /** What this chart is showing, for naming an alert after it. */
+  symbol: string
+  /** The instrument's tick, so every stored price sits on one. */
+  at: AlertTick
+  /** A source to open the editor on, from a legend or a right-click. */
+  source?: AlertSource
+  /** An existing alert to edit, from a row in the list. */
+  editAlertId?: string
+}
+
+/**
+ * What a list of alerts needs, and nothing else.
+ *
+ * Narrower than `AlertsHandle` on purpose. The editor needs the instrument's
+ * tick and the drawing tier as they are at the instant it opens, which is why
+ * that handle is built per opening; a list needs the controller and the chart's
+ * clock, and both last as long as the chart does.
+ */
+export interface AlertsView {
+  alerts: AlertController
+  chart: AlertChart
+}
+
+/** One alert firing, as the chart reported it. */
+export interface AlertFire {
+  /** Unique per firing. One alert fires many times and each is its own row. */
+  key: string
+  alertId: string
+  title: string
+  message: string
+  symbol: string
+  exchange: string
+  /** The value that met the condition, when the event carried one. */
+  price?: number
+  /** The source bar's UTC seconds, not the browser's wall clock. */
+  firedAt: number
+  /**
+   * The channels that accepted the message, on a row read back from the log.
+   *
+   * Absent on a firing as it happens, because the sends have not finished yet
+   * and the row is shown the moment the alert fires rather than a second later.
+   */
+  delivered?: readonly string[]
+}
+
 export interface IndicatorSettingsRequest {
   instanceId: string
   name: string
+  /**
+   * Which bars the study computes on, present only while the chart transforms
+   * its bars (Heikin Ashi, Renko, Point & Figure and the rest): the elements drawn
+   * (`'chart'`) or the raw bars under them (`'underlying'`). On a plain chart
+   * the two are the same bars, so the form offers no choice.
+   */
+  barSource?: IndicatorBarSource
   /** The descriptor's own value inputs — the "Inputs" tab. */
   inputs: IndicatorField[]
   /** Generated per-plot colour / width / dash inputs — the "Style" tab. */
@@ -371,10 +672,29 @@ export interface IndicatorField {
   label: string
   /** Plot title the style inputs belong to, so a form can group them per plot. */
   group?: string
+  /** A line of help a declaration carries, shown under its row. */
+  tooltip?: string
   options?: { label: string; value: unknown }[]
   min?: number
   max?: number
   step?: number
+  /** A disabled control keeps its saved value and explains the missing capability. */
+  unavailable?: string
+  /** Shown only while this holds over the form's values (a box size read only in fixed mode). */
+  visibleWhen?: IndicatorInputCondition
+  /** A price input paired with a time: a pick on the chart sets both from one click. */
+  timeKey?: string
+  /** Where a price is picked: a study pane or scale other than the price axis. */
+  pick?: boolean | { paneIndex?: number; priceScaleId?: PriceScaleId }
+}
+
+/** What one click on the chart answered while a study input was being picked. */
+export interface InputPick {
+  price?: number
+  /** UTC seconds of the bar clicked. */
+  time?: number
+  /** The same bar as a wall clock in the chart's timezone, as a `time` input stores it. */
+  clock?: string
 }
 
 /**
@@ -419,6 +739,8 @@ export interface ChartSettingsRequest {
    * switch off chrome the user never asked to lose.
    */
   defaults: Record<string, string | number | boolean>
+  /** The tab the dialog opens on; the first when absent. */
+  initialTab?: string
 }
 
 /**
@@ -433,15 +755,56 @@ function toField(f: { key: string; type: string; label?: string; group?: string 
     type: f.type,
     label: f.label ?? f.key,
     group: f.group,
+    // An OpenScript declaration's help text. Dropped here, the dialog's line
+    // of help under the row had nothing to show in the app.
+    tooltip: (f as { tooltip?: string }).tooltip,
     options: (f as { options?: { label: string; value: unknown }[] }).options,
     min: (f as { min?: number }).min,
     max: (f as { max?: number }).max,
     step: (f as { step?: number }).step,
+    visibleWhen: (f as { visibleWhen?: IndicatorInputCondition }).visibleWhen,
+    ...((f as { timeKey?: string }).timeKey
+      ? { timeKey: (f as { timeKey?: string }).timeKey }
+      : {}),
+    ...((f as { pick?: IndicatorField['pick'] }).pick !== undefined
+      ? { pick: (f as { pick?: IndicatorField['pick'] }).pick }
+      : {}),
   }
 }
 
+/**
+ * A chart setting the engine offers for a transformed chart's own options
+ * (`transform.boxSize`, `transform.reversal`, `transform.lines`).
+ *
+ * The dialog shows them, but they are not kept with the rest of the chart
+ * settings. Those are per pane and follow it from symbol to symbol, and a box
+ * is a price: a 30 rupee Renko brick chosen on NIFTY would draw nothing on a
+ * 100 rupee stock. A choice is kept per instrument and chart type instead (see
+ * `transformChoices`).
+ */
+function transformSetting(key: string): boolean {
+  return key.startsWith('transform.')
+}
+
+/** Instruments whose transform choices are kept, newest first out. */
+const TRANSFORM_CHOICES_KEPT = 64
+
+/** Each option of a transform spec, with the transform's own default where the spec is silent. */
+function transformValues(spec: SeriesTransformSpec): Record<string, string | number> {
+  const out: Record<string, string | number> = {}
+  for (const input of getSeriesTransform(spec.type).inputs) {
+    const value = spec.options?.[input.key] ?? input.default
+    if (typeof value === 'number' || typeof value === 'string') out[input.key] = value
+  }
+  return out
+}
+
+function withoutTransformSettings<T>(values: Readonly<Record<string, T>>): Record<string, T> {
+  return Object.fromEntries(Object.entries(values).filter(([key]) => !transformSetting(key)))
+}
+
 /** The selected drawing's editable style. */
-export interface DrawSelection {
+export interface DrawSelection extends DrawSelectionDetails {
   id: string
   tool: string
   /** Content is typed, so the style bar offers an edit button. */
@@ -472,14 +835,47 @@ export interface DrawTextStyle {
 
 export interface TerminalOptions {
   apiKey: string
+  /**
+   * Who is signed in. Optional, and empty is a working terminal.
+   *
+   * Only the messaging APIs need it: Telegram and WhatsApp address a user by
+   * name, and an alert asking for either without one is refused by the server
+   * rather than delivered to somebody else.
+   */
+  username?: string
   wsUrl: string
   container: HTMLElement
   legendEl: HTMLElement
   /** localStorage namespace so each grid pane restores independently (default 'oa-trading'). */
   storageKey?: string
+  /** Isolated preferences for prepared panes; null disables persistence. Defaults to browser storage. */
+  preferences?: Pick<Storage, 'getItem' | 'setItem'> | null
+  /** A named workspace starts in isolated preferences and rejects incomplete restoration. */
+  initialWorkspacePane?: WorkspacePane
   /** Reads the app's current theme so the canvas chrome tracks it. */
   getTheme: () => { mode: ThemeMode; appMode: AppMode }
   callbacks: TerminalCallbacks
+}
+
+export interface TerminalContextMenu {
+  x: number
+  y: number
+  items: CtxItem[]
+  profile: ProfileMenuAction | null
+  alert?: { label: string; source: AlertSource; disabled?: boolean; reason?: string }
+  /**
+   * The drawing rows, once the draw tier is in. `id` is the drawing that was
+   * right-clicked, or null for empty chart space; order and position lines
+   * are not drawings and never appear here.
+   */
+  drawing?: { id: string | null; removable: number; paste: boolean }
+  /** Set when the price scale was right-clicked: the menu is the scale's own. */
+  axis?: PriceAxisMenu
+  /**
+   * The study rows: its settings and removal, and for a study pane its moves
+   * and its fold. Absent where there is no study under the pointer.
+   */
+  study?: StudyMenu
 }
 
 // CRYPTO is the broker-agnostic exchange for crypto derivatives (utils/constants.py); a
@@ -518,38 +914,8 @@ export function resolveTick(exchange: string, tickSize: unknown): number {
   return Number(tickSize) || 0.05
 }
 
-/**
- * Drop indicators that repeat an earlier one exactly.
- *
- * Two overlapping symbol loads used to re-apply the tracked list against the
- * same chart, doubling every indicator; the doubled list was then persisted,
- * so it doubled again on each rebuild until a legend of thirty identical rows
- * covered the chart. The load ticket stops that happening; this is what lets
- * a layout already carrying duplicates heal instead of needing them removed
- * by hand.
- *
- * Settings are part of the identity on purpose. Two EMAs at 20 and 50 are a
- * normal thing to want, so only an exact repeat -- indistinguishable on the
- * chart, and therefore an accident -- is collapsed.
- */
-export function dedupeIndicators<T extends { indicatorId: string; settings: unknown }>(
-  records: T[]
-): T[] {
-  const seen = new Set<string>()
-  return records.filter((rec) => {
-    const key = `${rec.indicatorId}:${JSON.stringify(rec.settings)}`
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
-}
-
-export interface SavedIndicatorRecord {
-  indicatorId: string
-  settings: Record<string, unknown>
-  /** Missing in saves written before visibility persistence. */
-  visible?: boolean
-}
+/** Persist each study instance, including its visibility and pane placement. */
+export type SavedIndicatorRecord = StoredIndicatorRecord
 
 /** Avoid storage and React work for generic object events that changed no indicator. */
 export function sameIndicatorRecords(
@@ -565,7 +931,7 @@ export function sameIndicatorInstances(
 ): boolean {
   return JSON.stringify(left) === JSON.stringify(right)
 }
-const STRATEGY = 'chart-trading'
+export const STRATEGY = 'chart-trading'
 /**
  * Minimum gap between two armed fires, the scalping terminal's figure. A
  * double-click on the on-chart Buy, or a click that lands as the canvas
@@ -660,6 +1026,28 @@ function nextPaint(): Promise<void> {
 }
 
 export class TradingTerminal {
+  private alerts: AlertController | null = null
+  private alertUi: AlertUi | null = null
+  private offAlertFullscreen: (() => void) | null = null
+  private alertJson: AlertsDocument = { version: 1, alerts: [] }
+  private offAlerts: (() => void)[] = []
+  private offDeleteKey: (() => void) | null = null
+  private alertSaveFailed = false
+  private alertRuntimeScope: string | null = null
+  private restoringAlertRuntime = false
+  private chartToolsReady: Promise<void> = Promise.resolve()
+  /**
+   * The pane's undo timeline (chartHistory.ts). It outlives every chart
+   * rebuild: each rebuilt chart is followed again once its content is back.
+   */
+  private readonly undoHistory = new TerminalHistory({
+    onChange: () => {
+      if (!this.destroyed) this.cb.onDrawChange?.(this.drawStats())
+    },
+    onError: (message) => this.toast(message, 'err'),
+  })
+  private historyPending = false
+  private historyFailed = false
   private readonly apiKey: string
   private readonly wsUrl: string
   private readonly container: HTMLElement
@@ -667,11 +1055,27 @@ export class TradingTerminal {
   private readonly getTheme: () => { mode: ThemeMode; appMode: AppMode }
   private readonly cb: TerminalCallbacks
   private readonly sk: string
+  private readonly preferences: Pick<Storage, 'getItem' | 'setItem'> | null | undefined
+  private preferenceFailure = false
 
   private chart: ChartInstance | null = null
   private offBranding: (() => void) | null = null
   private price: SeriesApi | null = null
+  /** The backtest's marker layer, made once and refilled per run. */
+  private btMarkers: SeriesMarkers | null = null
+  /**
+   * The study the backtest marks belong to (a strategy's OpenScript id), whether
+   * it has been seen on this chart yet, and who to tell when the marks go. The
+   * Backtest action adds the study and starts the run together, and the study
+   * registers a moment later, so the marks are only taken down once the study
+   * has been on the chart and is then removed.
+   */
+  private btMarkersFor: string | null = null
+  private btMarkersSeen = false
+  private btMarkersCleared: (() => void) | null = null
   private volume: SeriesApi | null = null
+  private volumeMA: SeriesApi | null = null
+  private displayedVolume: Bar[] = []
 
   /* Drawing + indicator state. buildChart() throws the chart away on every
      interval / chart-type / theme change, so both round-trip through plain
@@ -689,9 +1093,19 @@ export class TradingTerminal {
    * Null once it has, or when the save was already a document.
    */
   private drawLegacy: readonly unknown[] | null = null
+  /**
+   * The storage entry `drawJson` belongs to: the instrument whose drawings
+   * they are (see drawingScope.ts). Null until the pane knows its symbol.
+   */
+  private drawOwner: string | null = null
+  /** The draw tier's helpers the drawing actions use, once the tier is fetched. */
+  private drawTier: DrawTier | null = null
   private drawTool: string | null = null
   private drawMagnet = false
+  private drawMagnetMode: MagnetMode = 'off'
   private drawStay = false
+  /** A tool held by a double-click on the rail: kept armed until Escape, never saved. */
+  private drawLatch = false
   /** True once a drawing control has been touched — gates the lazy tier fetch. */
   private drawEnabled = false
   private activeIndicators: SavedIndicatorRecord[] = []
@@ -746,6 +1160,7 @@ export class TradingTerminal {
   private tradeBtns: BuySellButtonsInstance | null = null
   /** The bar the OHLC readout is currently showing; replayed into the export. */
   private legendBar: Bar | null = null
+  private legendTime: number | null = null
   /**
    * Canvas primitives that are interaction affordances rather than chart
    * content. They are detached for the duration of a screenshot and re-attached
@@ -797,25 +1212,38 @@ export class TradingTerminal {
 
   private rawBars: Bar[] = []
   /**
-   * What the price series is actually showing: `rawBars`, or the output of the
-   * chart type's transform (Heikin Ashi, Renko, ...). Replay has to walk this
-   * rather than `rawBars`, because on a transformed chart the two differ in
-   * both values and length.
-   */
-  private shownBars: Bar[] = []
-  /**
    * The persisted chart-settings patch, kept as the flat dotted-key record the
    * engine reads and writes. Held here as well as in storage so an apply merges
    * onto what is already saved rather than replacing it.
    */
   private chartSettingsSaved: Record<string, string | number | boolean> = {}
+  /** The price scale's levels and side, re-pointed at every chart this builds. */
+  private readonly priceAxis = new PriceAxisController(() => !this.replayOwnsDisplay())
   /**
    * The chart as this terminal builds it, captured once per build. See
    * {@link snapshotChartDefaults}.
    */
   private chartDefaults: Record<string, string | number | boolean> = {}
+  /**
+   * The transform this chart was built with before any stored choice: the box
+   * sized from the instrument's price, and the transform's defaults. What a
+   * reset returns to, and what a choice is measured against.
+   */
+  private transformBase: SeriesTransformSpec | null = null
+  /**
+   * Transform options a trader set in chart settings, by instrument
+   * (`NFO:NIFTY29SEP26FUT`) and then chart type, holding only the options that
+   * differ from `transformBase`. Per instrument because a box is a price.
+   */
+  private transformChoices: Record<string, Record<string, Record<string, string | number>>> = {}
+  /** The refusal last said for each study, so a rebuild does not say it again. */
+  private readonly reportedRefusals = new Map<string, string>()
   private profileLayer: ProfileLayer | null = null
   private availableIntervals: string[] = ['1m', '5m', '15m', '1h', 'D']
+  /** The bottom bar's preset range for this pane, kept while its interval holds. */
+  private rangeChoice: RangeChoice | null = null
+  /** The load in flight, or the last one: what `showInterval` waits on. */
+  private loading: Promise<boolean> = Promise.resolve(true)
   /** The workspace link group this pane belongs to, if sync is on. */
   private link: LinkGroup | null = null
   /** Non-null only while the chart is showing a replayed prefix. */
@@ -823,6 +1251,7 @@ export class TradingTerminal {
   /** Non-null while the user is choosing the bar to replay from. */
   private replayPickIndex: number | null = null
   private replayPicking = false
+  private replayLoading = false
   /** One veil per pane: the future has to be hidden on all of them. */
   private replayShades: ReplayShade[] = []
   private replayMark: TextWatermark | null = null
@@ -830,8 +1259,29 @@ export class TradingTerminal {
   private replaySub: { interval: string; symbol: string; exchange: string; bars: Bar[] } | null =
     null
   private replayLoadTicket = 0
+  private replayHistoryAbort: AbortController | null = null
   /** The price axis's autoscale state before replay forced it on. */
   private replayAutoScale = true
+  private workspaceReplayLocked = false
+  private replayInvalidation: (() => void) | null = null
+  private workspaceReplayPick: {
+    onPick(time: number): void
+    onCancel(): void
+    onPreview?(time: number): void
+  } | null = null
+  private workspaceReplayMember: {
+    sessionId: number
+    chart: ChartInstance
+    price: SeriesApi
+    data: DataLoadingController | null
+    active: boolean
+    preparing: boolean
+    state: ReplayState | null
+    autoScale: boolean
+    positioned: boolean
+    isCurrent(): boolean
+    detachAbort(): void
+  } | null = null
   private shownCount = 0
   private liveBucket: number | null = null
   private lastLtp: number | null = null
@@ -840,6 +1290,14 @@ export class TradingTerminal {
   private readonly orderLines = new Map<string, OrderLineRec>()
 
   private interval = '5m'
+  /**
+   * Who is signed in, for the messaging APIs that address a user by name.
+   *
+   * Empty until the host says. Telegram and WhatsApp both refuse a send with no
+   * user, which is the right answer: a message with nobody to deliver it to is
+   * not something to guess at.
+   */
+  private username = ''
   private ctype = 'candlestick'
   private product = 'MIS'
   private qty = 1
@@ -859,23 +1317,268 @@ export class TradingTerminal {
   /** Serialises agent chart commands. See {@link applyChartCommands}. */
   private chartCommandQueue: Promise<void> = Promise.resolve()
   private destroyed = false
+  private initialWorkspacePane: WorkspacePane | null = null
+  private preparingWorkspace = false
+  private workspaceTransitionLocked = false
+  private comparisons: TerminalComparisons | null = null
+  private comparisonLoad: Promise<void> = Promise.resolve()
+  private comparisonPreferences: {
+    items: WorkspaceComparison[]
+    mode: 'price' | 'percent'
+    /** The finer choice of four, kept beside `mode` (see `comparisonScale.ts`). */
+    scale?: ComparisonScale
+  } = {
+    items: [],
+    mode: 'percent',
+  }
 
+  /**
+   * Whether this chart is watching a price for somebody.
+   *
+   * An armed alert is the one thing on a chart that has to keep working when
+   * nobody is looking at it. Everything else a hidden tab does is a saving:
+   * nothing repaints, so fetching bars nobody can see is wasted.
+   */
+  /**
+   * What the chart knew when an alert fired, for the message's placeholders.
+   *
+   * Read from the bar the engine names rather than from the newest one: an
+   * alert evaluated on a confirmed bar close is about that bar, and filling its
+   * message from whatever has arrived since would print numbers the condition
+   * was never measured against.
+   */
+  private alertFacts(event: { time?: number; index?: number; price?: number }): AlertFacts {
+    const bars = this.shownBars
+    // On a transformed chart an element's own volume is not traded volume (a
+    // Kagi line keeps its thickness there), so read what the volume bars show.
+    const at = this.withDrawnVolume(
+      (typeof event.index === 'number' && event.index >= 0 && event.index < bars.length
+        ? bars[event.index]
+        : [...bars].reverse().find((bar: Bar) => bar.time === event.time)) ?? null
+    )
+    return {
+      ticker: this.sym?.symbol ?? '',
+      exchange: this.sym?.exchange ?? '',
+      interval: this.interval,
+      open: at?.open ?? null,
+      high: at?.high ?? null,
+      low: at?.low ?? null,
+      close: at?.close ?? null,
+      volume: at?.volume ?? null,
+      price: typeof event.price === 'number' ? event.price : (at?.close ?? null),
+      time: typeof event.time === 'number' ? event.time : null,
+      digits: this.dp(),
+    }
+  }
+
+  /**
+   * Delete or Backspace over the chart: remove the one thing under the pointer.
+   *
+   * The order matters more than the feature does, because every one of these
+   * can be true at the same moment and deleting the wrong one is not
+   * recoverable by pressing the key again.
+   *
+   * 1. **A field or a dialog wins outright.** Backspace in a text box is a
+   *    character, and a terminal that ate it while somebody renamed a drawing
+   *    would be unusable. This is why the handler is on the container and
+   *    checks the target rather than sitting on the window.
+   * 2. **A placement in progress is cancelled**, not committed and not deleted.
+   *    Half a trend line is the thing the key is being pressed about.
+   * 3. **Selected drawings go next**, because a selection is something the
+   *    trader made deliberately and can see.
+   * 4. **Then the hovered drawing**, which is the same gesture without the
+   *    click.
+   * 5. **An alert last**, and only when nothing above claimed the key. An
+   *    alert's line sits across the whole pane, so it is under the pointer far
+   *    more often than a drawing is, and letting it win would delete alerts
+   *    while people meant to delete shapes.
+   */
+  private deleteAtPointer(): boolean {
+    // A drawing being placed is a gesture, not an object: end the gesture.
+    if (this.draw?.activeTool() && this.draw.cancel()) {
+      this.afterDrawChange()
+      return true
+    }
+    const selected = this.draw?.selection() ?? []
+    if (selected.length) {
+      this.draw?.removeMany(selected)
+      this.afterDrawChange()
+      return true
+    }
+    const overDrawing = this.draw?.hovered()
+    if (overDrawing) {
+      this.draw?.removeMany([overDrawing])
+      this.afterDrawChange()
+      return true
+    }
+    // `hovered()` is offered precisely so a host can bind a key to it: the
+    // controller binds none itself, because a chart without the widget shell
+    // has its own idea of what a keystroke means.
+    const overAlert = this.alerts?.hovered()
+    if (overAlert) {
+      this.alerts?.remove(overAlert)
+      // Nothing else to do: persistence is subscribed to `alert:removed`.
+      return true
+    }
+    return false
+  }
+
+  /**
+   * Wire Delete and Backspace over the plot.
+   *
+   * **Bound to the pointer, not to focus.** The gesture is to point at the
+   * thing and press Delete, and a canvas cannot take focus, so waiting for a
+   * focused element would mean the key only worked after a click that also
+   * selects or deselects whatever it lands on. So the listener is on the
+   * document and each terminal answers only while the pointer is inside its own
+   * container, which is what makes the right pane respond in a four-pane
+   * workspace.
+   */
+  private bindDeleteKey(): void {
+    let over = false
+    const enter = () => {
+      over = true
+    }
+    const leave = () => {
+      over = false
+    }
+    const onKey = (event: KeyboardEvent): void => {
+      if (!over) return
+      if (event.key !== 'Delete' && event.key !== 'Backspace') return
+      // A modifier means something else is being asked for, and on a Mac
+      // Cmd+Backspace is a text gesture rather than a chart one.
+      if (event.ctrlKey || event.metaKey || event.altKey) return
+      // Anything that takes typing owns its own Backspace, wherever the pointer
+      // happens to be resting: a trader renaming a drawing in a dialog that
+      // overlaps the chart must not delete the chart's contents by erasing a
+      // character.
+      //
+      // `closest` is called defensively. A keystroke with nothing focused is
+      // delivered to the document rather than to an element, and a handler that
+      // assumed an element would throw on the one press it most needs to
+      // handle: the one made without clicking anything first.
+      const target = event.target as Element | null
+      if (
+        target?.closest?.(
+          'input, textarea, select, [contenteditable="true"], [role="dialog"], [role="textbox"]'
+        )
+      ) {
+        return
+      }
+      if (this.deleteAtPointer()) {
+        // Only once something was actually removed: a Backspace that deleted
+        // nothing is still the browser's to interpret.
+        event.preventDefault()
+        event.stopPropagation()
+      }
+    }
+    this.container.addEventListener('pointerenter', enter)
+    this.container.addEventListener('pointerleave', leave)
+    document.addEventListener('keydown', onKey)
+    this.offDeleteKey = () => {
+      this.container.removeEventListener('pointerenter', enter)
+      this.container.removeEventListener('pointerleave', leave)
+      document.removeEventListener('keydown', onKey)
+    }
+  }
+
+  private alertsArmed(): boolean {
+    try {
+      return this.alerts?.list().some((alert) => alert.state === 'armed') ?? false
+    } catch {
+      // A destroyed controller is not an armed alert.
+      return false
+    }
+  }
+
+  /**
+   * A hidden tab stops fetching, unless an alert is waiting on the answer.
+   *
+   * Hiding used to stop the poll and the bar-close repair unconditionally. The
+   * stream keeps running either way, so an alert still evaluated on the ticks
+   * that arrived, but the two refreshes that correct a bar were gone: a closed
+   * bar was never re-fetched, and the default alert policy is exactly the one
+   * that waits for a bar to close. An alert set and then left in a background
+   * tab is the ordinary way to use an alert, and it was the case that worked
+   * least well.
+   *
+   * So the saving is kept for a chart with nothing armed on it, and a chart
+   * with an armed alert stays awake. Comparisons follow the tab either way:
+   * they are drawn, not watched, and nothing fires from them.
+   */
   private readonly onVisibilityChange = () => {
-    this.data?.setVisible(document.visibilityState !== 'hidden')
+    const visible = document.visibilityState !== 'hidden'
+    this.data?.setVisible(visible || this.alertsArmed())
+    this.comparisons?.setVisibleHost(visible)
   }
 
   constructor(opts: TerminalOptions) {
+    const initial = opts.initialWorkspacePane
+      ? parseTerminalWorkspacePane(opts.initialWorkspacePane)
+      : null
+    if (initial && !CHART_TYPES[initial.chartType])
+      throw new Error(`Unsupported workspace chart type: ${initial.chartType}`)
+    this.initialWorkspacePane = initial
+    this.preparingWorkspace = initial !== null
     this.apiKey = opts.apiKey
+    this.username = opts.username ?? ''
     this.wsUrl = opts.wsUrl
     this.container = opts.container
+    this.bindDeleteKey()
     this.legendEl = opts.legendEl
     this.wireLegendActions()
     this.getTheme = opts.getTheme
     this.cb = opts.callbacks
     this.sk = opts.storageKey || 'oa-trading'
+    this.preferences = initial ? createWorkspacePanePreferences(initial, this.sk) : opts.preferences
     this.interval = this.lsGet('interval') || '5m'
     this.ctype = this.lsGet('ctype') || 'candlestick'
+    this.rangeChoice = parseRangeChoice(this.lsGet('range'))
     this.restoreChartTools()
+    const comparisons = this.lsGet('comparisons')
+    if (comparisons) {
+      try {
+        const saved = JSON.parse(comparisons)
+        if (
+          !saved ||
+          !Array.isArray(saved.items) ||
+          !['price', 'percent'].includes(saved.mode) ||
+          !saved.items.every(
+            (item: { visible?: unknown } | null) => typeof item?.visible === 'boolean'
+          )
+        )
+          throw new Error('Invalid comparison preferences')
+        const pane = parseTerminalWorkspacePane({
+          id: 'comparison-preferences',
+          symbol: 'comparison-preferences',
+          exchange: '',
+          interval: '1d',
+          chartType: 'line',
+          chart: { version: 1 },
+          comparisons: saved.items,
+          comparisonMode: saved.mode,
+        })
+        const sources = new Set<string>()
+        for (const item of pane.comparisons) {
+          const source = JSON.stringify([item.symbol, item.exchange])
+          if (
+            ![item.id, item.symbol, item.exchange].every((value) => value.trim().length > 0) ||
+            sources.has(source)
+          )
+            throw new Error('Invalid comparison preferences')
+          sources.add(source)
+        }
+        this.comparisonPreferences = {
+          items: pane.comparisons,
+          mode: pane.comparisonMode,
+          scale: comparisonScaleOf(pane.comparisonMode, saved.scale),
+        }
+      } catch {
+        this.reportPreferenceFailure(
+          'Saved comparisons could not be read. Add them again to this chart.'
+        )
+      }
+    }
     if (!CHART_TYPES[this.ctype]) this.ctype = 'candlestick'
   }
 
@@ -887,12 +1590,43 @@ export class TradingTerminal {
    * their last symbol after upgrading. Writes always go to the namespaced key.
    */
   private lsGet(key: string): string | null {
-    const v = localStorage.getItem(`${this.sk}-${key}`)
-    if (v !== null) return v
-    return this.sk.endsWith('-p0') ? localStorage.getItem(`-${key}`) : null
+    try {
+      const storage = this.preferences === undefined ? globalThis.localStorage : this.preferences
+      if (!storage) return null
+      const value = storage.getItem(`${this.sk}-${key}`)
+      if (value !== null) return value
+      return this.sk.endsWith('-p0') ? storage.getItem(`-${key}`) : null
+    } catch {
+      this.reportPreferenceFailure('Chart preferences are unavailable. Using defaults.')
+      return null
+    }
   }
   private lsSet(key: string, val: string): void {
-    localStorage.setItem(`${this.sk}-${key}`, val)
+    const changed = key !== 'product' && this.lsGet(key) !== val
+    try {
+      const storage = this.preferences === undefined ? globalThis.localStorage : this.preferences
+      storage?.setItem(`${this.sk}-${key}`, val)
+    } catch {
+      this.reportPreferenceFailure(
+        'Chart preferences could not be saved. Changes remain in this view.'
+      )
+    }
+    if (
+      changed &&
+      !this.destroyed &&
+      !this.preparingWorkspace &&
+      !this.replay &&
+      !this.replayPicking &&
+      !this.replayLoading &&
+      !this.workspaceReplayLocked &&
+      !this.dataUnavailable()
+    )
+      this.cb.onWorkspaceChange?.()
+  }
+  private reportPreferenceFailure(message: string): void {
+    if (this.preferenceFailure) return
+    this.preferenceFailure = true
+    this.cb.onToast(message, 'err')
   }
 
   /* ── tick-size / formatting bound to the loaded instrument ────────────── */
@@ -964,32 +1698,81 @@ export class TradingTerminal {
     return Math.max(t, Number((Math.round((c * 0.0015) / t) * t).toFixed(this.dp())))
   }
 
+  /**
+   * Whether the chart applies a transform to the price series (Heikin Ashi,
+   * Renko, range bars, line break, Point & Figure, Kagi). Read from the chart
+   * rather than from `ctype`, which moves before the chart is rebuilt for it.
+   */
+  private transformed(): boolean {
+    return (
+      this.chart !== null && this.price !== null && this.chart.seriesTransform(this.price) !== null
+    )
+  }
+
+  /**
+   * What the price series is actually showing: `rawBars`, or the elements the
+   * chart formed from them for the chart type's transform. The replay picker,
+   * the legend's change and an alert's message read this rather than
+   * `rawBars`, because on a transformed chart the two differ in both values
+   * and length. The price series itself is always fed `rawBars`: the chart
+   * forms the elements, again on every tick.
+   */
+  private get shownBars(): readonly Bar[] {
+    return this.chart && this.transformed() ? this.chart.primaryBars() : this.rawBars
+  }
+
+  /**
+   * The bars on screen: the elements on a transformed chart, the revealed
+   * prefix during replay, the live bars otherwise. What the legend reads.
+   * A replay frame says it is one: the first frame arrives while the replay
+   * is still being constructed, before `replayActive` can know.
+   */
+  private drawnBars(replaying = this.replayActive()): readonly Bar[] {
+    if (this.chart && this.transformed()) return this.chart.primaryBars()
+    return replaying ? (this.price?.getData() ?? []) : this.rawBars
+  }
+
+  /**
+   * A drawn element with the volume the volume bars show under it.
+   *
+   * On a transformed chart an element's own `volume` is not traded volume: a
+   * Kagi line keeps its thickness there (1 or 0) and a brick carries none. The
+   * readout reads the volume summed under the element instead, as it is drawn.
+   */
+  private withDrawnVolume(bar: Bar | null): Bar | null {
+    if (!bar || !this.transformed()) return bar
+    const points = this.displayedVolume
+    let lo = 0
+    let hi = points.length - 1
+    while (lo <= hi) {
+      const mid = (lo + hi) >>> 1
+      if (points[mid].time === bar.time) return { ...bar, volume: points[mid].close }
+      if (points[mid].time < bar.time) lo = mid + 1
+      else hi = mid - 1
+    }
+    return { ...bar, volume: undefined }
+  }
+
+  /** Volume on the elements drawn: each element sums the raw bars it was formed from. */
+  private setTransformedVolume(raw: readonly Bar[]): void {
+    if (!this.chart) return
+    const drawn = this.chart.primaryBars()
+    this.setVolumeData(drawn, volumeUnderElements(drawn, raw))
+  }
+
   private setPriceData() {
     // History can finish during replay. Keep its live snapshot up to date,
     // but leave both displayed series and their timeline to the playhead.
-    if (this.replay) return
+    if (this.replayOwnsDisplay()) return
     if (!this.price || !this.volume || !this.rawBars.length) return
-    const cfg = CHART_TYPES[this.ctype] || CHART_TYPES.candlestick
-    if (cfg.transform) {
-      const t = runTransform(cfg.transform(this.boxOf()), this.rawBars)
-      this.price.setData(t)
-      this.volume.setData(this.bucketVolume(t))
-      this.shownBars = t
-    } else {
-      this.price.setData(this.rawBars)
-      this.volume.setData(
-        this.rawBars.map((b) => ({
-          time: b.time,
-          open: 0,
-          high: b.volume || 0,
-          low: 0,
-          close: b.volume || 0,
-        }))
-      )
-      this.shownBars = this.rawBars
-    }
+    // Always the raw bars. On a transformed chart type the chart forms the
+    // elements from them, so a tick, history paging and replay all speak bars.
+    this.price.setData(this.rawBars)
+    if (this.transformed()) this.setTransformedVolume(this.rawBars)
+    else this.setVolumeData(this.rawBars)
     this.shownCount = this.shownBars.length
     this.profileLayer?.refresh(true)
+    this.refreshLegend()
   }
 
   private dataKey(request: { symbol: string; exchange: string; interval: string }): string {
@@ -1039,7 +1822,7 @@ export class TradingTerminal {
     }
 
     this.rawBars = next
-    if (snapshot.paused || this.replay) return
+    if (snapshot.paused || this.replayOwnsDisplay()) return
 
     const key = this.dataKey(request)
     if (!this.chart || !this.price || !this.volume || this.chartDataKey !== key) {
@@ -1047,6 +1830,7 @@ export class TradingTerminal {
       this.buildChart()
     } else {
       this.setPriceData()
+      if (snapshot.reason === 'prepend') this.installComparisons()
     }
 
     // Prepending shifts logical indexes. Preserve the same candles in view,
@@ -1066,57 +1850,114 @@ export class TradingTerminal {
    * loaded rather than with what changed. A one-bar update is O(1) and the chart
    * splices it.
    *
-   * Only valid without a transform. Renko, Range, Point and Figure and Kagi
-   * re-derive their whole series from the raw bars, so one new raw bar can
-   * change the count and the shape of the output and the transform has to run
-   * again. Those fall back to the full path.
+   * A transformed chart takes the bar the same way: the chart forms the
+   * elements again from its last closed bar and writes only the ones that
+   * moved. One raw bar can add, change or take back several bricks, so the
+   * volume under them is summed again from the raw bars.
    *
    * Returns false when the caller must rebuild instead.
    */
   private updateLiveBar(bar: Bar): boolean {
     if (!this.price || !this.volume) return false
-    const cfg = CHART_TYPES[this.ctype] || CHART_TYPES.candlestick
-    if (cfg.transform) return false
     // `update` appends or replaces by time on its own, which is exactly the
     // append-or-replace the caller has already applied to `rawBars`.
     this.price.update(bar)
-    this.volume.update({
-      time: bar.time,
-      open: 0,
-      high: bar.volume || 0,
-      low: 0,
-      close: bar.volume || 0,
-    })
+    if (this.transformed()) {
+      this.setTransformedVolume(this.rawBars)
+      this.shownCount = this.shownBars.length
+      this.profileLayer?.refresh()
+      return true
+    }
+    const settings = volumeValues(this.chartSettingsSaved)
+    const point = volumePoint(
+      bar,
+      this.rawBars.at(-2)?.close,
+      bar.volume ?? 0,
+      this.volumeCandleStyle(),
+      settings['volume.colorByDirection'] === true
+    )
+    const last = this.displayedVolume.length - 1
+    if (last >= 0 && this.displayedVolume[last].time === point.time)
+      this.displayedVolume[last] = point
+    else this.displayedVolume.push(point)
+    this.volume.update(point)
+    if (settings['volume.showMA'] && this.volumeMA) {
+      this.volumeMA.update(
+        volumeAveragePoint(
+          this.displayedVolume,
+          this.displayedVolume.length - 1,
+          Number(settings['volume.maPeriod'])
+        )
+      )
+    }
     // Untransformed, the shown series *is* rawBars, which the caller mutated in
     // place, so only the count can have moved.
-    this.shownBars = this.rawBars
     this.shownCount = this.rawBars.length
     this.profileLayer?.refresh()
     return true
   }
 
-  private bucketVolume(tbars: Bar[]): Bar[] {
-    const out: Bar[] = []
-    let ri = 0
-    for (const tb of tbars) {
-      let v = 0
-      while (ri < this.rawBars.length && this.rawBars[ri].time <= tb.time) {
-        v += this.rawBars[ri].volume || 0
-        ri++
-      }
-      out.push({ time: tb.time, open: 0, high: v, low: 0, close: v })
+  private volumeCandleStyle(): SeriesStyle {
+    const theme = this.chart?.theme()
+    const style: SeriesStyle = {
+      upColor: theme?.upColor,
+      downColor: theme?.downColor,
+      ...this.chart?.primarySeriesInfo()?.style,
     }
-    let rest = 0
-    while (ri < this.rawBars.length) {
-      rest += this.rawBars[ri].volume || 0
-      ri++
+    return theme ? quietVolumeStyle(style, theme.background) : style
+  }
+
+  private volumeAvailable(): boolean {
+    return this.sym?.synthetic === true || !QUOTE_ONLY.has(this.sym?.exchange ?? '')
+  }
+
+  private setVolumeData(prices: readonly Bar[], amounts?: readonly Bar[]): void {
+    if (!this.volume || !this.chart) return
+    const settings = volumeValues(this.chartSettingsSaved)
+    const style = this.volumeCandleStyle()
+    const byTime = amounts ? new Map(amounts.map((bar) => [bar.time, bar.close])) : null
+    this.displayedVolume = prices.map((bar, index) =>
+      volumePoint(
+        bar,
+        prices[index - 1]?.close,
+        byTime?.get(bar.time) ?? bar.volume ?? 0,
+        style,
+        settings['volume.colorByDirection'] === true
+      )
+    )
+    this.volume.setData(this.displayedVolume)
+    if (!this.volumeMA) {
+      this.volumeMA = this.chart.addSeries('line', {
+        paneIndex: 0,
+        priceScaleId: '',
+        priceFormat: { type: 'volume' },
+        style: { priceLineVisible: false, lastValueVisible: false },
+      })
     }
-    if (out.length && rest) {
-      const last = out[out.length - 1]
-      last.high += rest
-      last.close += rest
-    }
-    return out
+    this.volumeMA.applyOptions({
+      visible:
+        this.volumeOn &&
+        this.volumeAvailable() &&
+        !isProfileKind(this.ctype) &&
+        settings['volume.showMA'] === true,
+      color: String(settings['volume.maColor']),
+      lineWidth: Number(settings['volume.maWidth']),
+      lineStyle: settings['volume.maStyle'] as 'solid' | 'dashed' | 'dotted',
+    })
+    this.volumeMA.setData(
+      settings['volume.showMA']
+        ? volumeAverage(this.displayedVolume, Number(settings['volume.maPeriod']))
+        : []
+    )
+  }
+
+  private refreshDisplayedVolume(): void {
+    if (!this.price || !this.volume) return
+    // A transformed series hands back the raw bars it was fed, which during
+    // replay is the revealed prefix: summing those keeps the volume of bars
+    // not yet replayed out of the last element.
+    if (this.transformed()) this.setTransformedVolume(this.price.getData())
+    else this.setVolumeData(this.price.getData(), this.volume.getData())
   }
 
   /* ── legend (imperative; high-frequency, kept off React state) ────────── */
@@ -1145,6 +1986,28 @@ export class TradingTerminal {
       return
     }
     this.legendEl.innerHTML = legendHtml(this.legendModel(bar))
+    // Comparison rows read the same bar as the readout above them.
+    this.comparisons?.setReadout(bar?.time ?? null)
+  }
+
+  /** Resolve the selected time again after history replacement or pagination. */
+  private refreshLegend(bars: readonly Bar[] = this.shownBars): void {
+    let selected = bars.at(-1) ?? null
+    if (this.legendTime !== null) {
+      let lo = 0
+      let hi = bars.length - 1
+      while (lo <= hi) {
+        const mid = (lo + hi) >>> 1
+        const bar = bars[mid]
+        if (bar.time === this.legendTime) {
+          selected = bar
+          break
+        }
+        if (bar.time < this.legendTime) lo = mid + 1
+        else hi = mid - 1
+      }
+    }
+    this.setLegend(selected)
   }
 
   /**
@@ -1189,11 +2052,14 @@ export class TradingTerminal {
       interval: this.interval,
       exchange: sym.exchange,
       lotsize: sym.lots ? sym.lotsize : null,
-      bar,
+      bar:
+        bar && !this.volumeAvailable() ? { ...bar, volume: undefined } : this.withDrawnVolume(bar),
       prevClose: this.closeBefore(bar),
       fmt: (n) => this.fmt(n),
       fmtVolume: compactVolume,
       volumeHidden: !this.volumeOn,
+      openInterest: this.chart?.statusLineOptions().openInterest,
+      hasOpenInterest: this.chart?.hasOpenInterest,
     })
     if (isProfileKind(this.ctype)) {
       runs.splice(2, 0, { text: CHART_TYPES[this.ctype].label, tone: 'meta' })
@@ -1333,7 +2199,10 @@ export class TradingTerminal {
       return
     }
     if (this.sym.synthetic) {
-      this.toast(`${this.sym.symbol} is a computed chart, not an instrument — there is nothing to trade`, 'err')
+      this.toast(
+        `${this.sym.symbol} is a computed chart, not an instrument — there is nothing to trade`,
+        'err'
+      )
       return
     }
     if (this.sym.quoteOnly) {
@@ -1412,7 +2281,7 @@ export class TradingTerminal {
   async placeTicket(order: ConfirmedOrder): Promise<{ orderId: string }> {
     // The ticket was refused before it opened; this covers a replay started
     // while it stood open. No toast here: the dialog shows the reason.
-    if (this.tradingLocked()) throw new Error('Replay is a simulation. Leave replay to trade.')
+    if (this.tradingLocked()) throw new Error(this.tradingLockMessage())
     if (!this.trade) throw new Error('trading is not available')
     const stop = order.pricetype === 'SL' || order.pricetype === 'SL-M'
     try {
@@ -1551,6 +2420,10 @@ export class TradingTerminal {
     const objects = new ChartObjects(chart, {
       drawings: this.objectDrawings,
       onSettings: (object) => this.openObjectSettings(object),
+      // A drawing's row reads as the drawing rail names its tool ("Anchored
+      // VWAP"), rather than as the engine spells an id it cannot look up
+      // ("Anchored vwap"). A tool the rail does not list keeps that spelling.
+      drawingName: drawingToolName,
     })
     this.objects = objects
     this.cb.onObjectsChange?.(objects)
@@ -1567,15 +2440,24 @@ export class TradingTerminal {
   }
 
   private buildChart() {
+    // The timeline stops following the chart about to go; the new one is
+    // followed once its studies and drawings are back (restoreChartContent).
+    this.undoHistory.pause()
+    this.legendTime = null
     this.stopReplay()
+    this.comparisons?.detach()
+    this.detachAlerts()
     this.detachObjects()
     this.profileLayer?.dispose()
     this.profileLayer = null
-    // Snapshot drawings before the chart they live on goes away.
+    // Snapshot drawings before the chart they live on goes away, and hand them
+    // to their own instrument before the next chart restores any.
     this.detachDrawing()
+    this.followDrawingScope()
     this.offBranding?.()
     this.offBranding = null
     if (this.chart) this.chart.destroy()
+    this.priceAxis.detach()
     // The primitives registered here belonged to the chart just destroyed.
     this.screenshotExcluded.length = 0
     this.container.innerHTML = ''
@@ -1585,6 +2467,18 @@ export class TradingTerminal {
     this.chart = createChart(this.container, {
       priceAxisWidth: 78,
       theme,
+      // No `navigation` override. The engine's default is `mousePan: 'both'`,
+      // and this used to pin it to `'horizontal'`, so dragging the plot moved
+      // through time and never through price. It was set with the 2.4.5
+      // integration and carried no reason beside it, which is how it survived
+      // three upgrades: nothing reads as wrong about a line that states a
+      // default, and this one stated the opposite of it.
+      //
+      // The setting is the trader's either way. The engine exposes it in chart
+      // settings as "Mouse drag" under Navigation, and `restoreChartSettings`
+      // reapplies whatever they chose after every rebuild. Forcing it here also
+      // made their choice the one thing a Reset would not return to, because
+      // `chartDefaults` is read off the chart just after it is built.
       // Corner clock and bar countdown. Both are off by default in the engine,
       // deliberately: a countdown repaints every second, and on the historical
       // range a chart usually opens on it counts against a bar that closed months
@@ -1609,6 +2503,13 @@ export class TradingTerminal {
       // pane under the pointer instead, and a second press puts the stack back.
       // Reset stays on the toolbar button, the right-click menu and Home.
       doubleClick: 'maximize',
+      // The wheel zooms about the latest bar, which stays at the right edge while
+      // history compresses or opens out beside it; Ctrl or Cmd with the wheel
+      // zooms about the pointer. The engine's default holds the bar under the
+      // pointer instead, so a zoom out with the pointer in the middle or over the
+      // empty space past the last bar pushed the bars left and the gap beside
+      // the latest one kept widening.
+      zoomAnchor: 'right',
       shortcuts: {
         disabledCommands: ['screenshot', 'toggleGridVert', 'toggleGridHorz'],
         customShortcuts: [
@@ -1620,6 +2521,7 @@ export class TradingTerminal {
               void this.screenshot()
             },
           },
+          ...priceAxisShortcuts((command) => void this.priceAxisCommand(command)),
         ],
       },
       // The pane's top-left already holds this terminal's own OHLC readout (and
@@ -1630,12 +2532,24 @@ export class TradingTerminal {
       // the SELL/qty/BUY panel (44 + 42*0.72 ~= 75). Indicator legend rows have
       // to start under both or they land on top of the buttons.
       legendOffset: { top: 80 },
+      // Zoom and autoscale snap instead of easing when the system asks for
+      // less motion.
+      ...chartMotionOptions(),
     })
     this.chart.setDataContext(
       this.sym
-        ? { symbol: this.sym.symbol, exchange: this.sym.exchange, interval: this.interval }
+        ? {
+            symbol: this.sym.symbol,
+            exchange: this.sym.exchange,
+            interval: this.interval,
+            hasOpenInterest: this.sym.synthetic
+              ? false
+              : (this.sym.hasOpenInterest ?? openInterestCapability(this.sym.exchange)),
+          }
         : { interval: this.interval }
     )
+    // Trading hours for the axis past the last bar and the bottom bar's status.
+    applySessionHours(this.chart, this.sym?.exchange ?? '', this.apiKey)
     this.offBranding = this.chart.on('branding:changed', () => {
       this.cb.onBrandingChange?.(this.brandingLink())
     })
@@ -1645,10 +2559,33 @@ export class TradingTerminal {
     const style: SeriesStyle = cfg.baseline
       ? { baseValue: this.rawBars.reduce((s, b) => s + b.close, 0) / (this.rawBars.length || 1) }
       : {}
-    this.price = this.chart.addSeries(cfg.series as SeriesType, {
-      style,
-      priceFormat: { type: 'custom', formatter: (p: number) => p.toFixed(dp) },
-    })
+    // The marker layer is bound to the series it was made from, so a rebuilt
+    // series leaves it pointing at one the chart no longer draws: the marks
+    // vanish and nothing can take them down or put them back. Dropped here so
+    // the next run makes a fresh one against the series that now exists.
+    this.btMarkers = null
+    this.btMarkersFor = null
+    this.btMarkersSeen = false
+    // A movement-driven type has the chart apply its transform to the raw bars
+    // this series is fed, forming the elements again on every tick. The box is
+    // sized once per build from the instrument's price, so bricks keep their
+    // size through ticks, history refreshes and older pages, unless the trader
+    // chose options for this instrument in chart settings.
+    const base = cfg.transform?.(this.boxOf()) ?? null
+    this.transformBase = base
+    const priceSeries = (transform: SeriesTransformSpec | null) =>
+      this.chart!.addSeries(cfg.series as SeriesType, {
+        style,
+        priceFormat: { type: 'custom', formatter: (p: number) => p.toFixed(dp) },
+        ...(transform ? { transform } : {}),
+      })
+    try {
+      this.price = priceSeries(base ? this.chosenTransform(base) : null)
+    } catch {
+      // A kept choice this build refuses throws before the series exists. The
+      // chart opens on the base instead; the choice goes when one is next saved.
+      this.price = priceSeries(base)
+    }
     // Tell the engine the instrument's tick. Without it the price scale treats
     // `minMove: 0` as "infer precision from the visible range", so RELIANCE at a
     // 0.05 tick renders a decimal short, drawings snap to an invented grid, and
@@ -1668,9 +2605,12 @@ export class TradingTerminal {
       priceFormat: { type: 'volume' },
     })
     this.volume.priceScale().setOptions({ marginTop: 0.82, marginBottom: 0 })
+    this.volumeMA = null
+    this.displayedVolume = []
     // A rebuild makes a fresh series, so the preference has to be re-applied
     // rather than assumed -- switching chart type or theme would show it again.
-    if (!this.volumeOn || isProfileKind(this.ctype)) this.volume.applyOptions({ visible: false })
+    if (!this.volumeOn || !this.volumeAvailable() || isProfileKind(this.ctype))
+      this.volume.applyOptions({ visible: false })
     this.installObjects()
     // Same reasoning for the settings patch: a chart-type or theme switch
     // rebuilds the chart, and without this the user's colours, timezone and
@@ -1682,12 +2622,14 @@ export class TradingTerminal {
     // reason -- `restoreChartSettings` and the grid re-apply further down both
     // write to this chart, and an awaited snapshot would land after them.
     this.snapshotChartDefaults()
-    void this.restoreChartSettings()
+    if (!this.preparingWorkspace) void this.restoreChartSettings()
+    this.syncPriceAxis()
     // A theme or chart-type switch throws the old Chart away, so membership has
     // to be re-established against the new one or the pane silently drops out
     // of the group it still believes it is in.
     this.joinLink()
     this.setPriceData()
+    if (!this.preparingWorkspace) this.installComparisons()
     this.installProfile()
 
     this.applyDefaultViewport()
@@ -1728,8 +2670,9 @@ export class TradingTerminal {
     } else this.tradeBtns = null
 
     this.chart.subscribeCrosshairMove((e) => {
-      this.setLegend(e.bar || (this.rawBars.length ? this.rawBars[this.rawBars.length - 1] : null))
-      this.moveReplayPick(e.index ?? null)
+      this.legendTime = e.bar?.time ?? null
+      this.refreshLegend(this.drawnBars())
+      if (e.source !== 'linked') this.moveReplayPick(e.index ?? null)
     })
 
     // Committing the pick on a plain DOM click rather than `subscribeClick`,
@@ -1805,27 +2748,46 @@ export class TradingTerminal {
           .catch((e) => this.toast(this.cleanError(e), 'err'))
       }
     })
+    if (this.cb.onContextMenu) {
+      this.chart.on('contextmenu', (payload) => this.showContextMenu(payload as ContextMenuEvent))
+    }
 
     this.orderLines.clear()
     this.posLine = null
     this.position = null
     if (this.trade && this.sym) this.pollBook()
-    this.setLegend(this.rawBars.length ? this.rawBars[this.rawBars.length - 1] : null)
+    this.refreshLegend()
 
     // Re-apply everything the rebuild just discarded.
     this.chart.setGridOptions({ vertLines: this.gridV, horzLines: this.gridH })
-    if (this.drawEnabled) void this.attachDrawing()
-    if (this.activeIndicators.length) void this.applyIndicators()
+    if (!this.preparingWorkspace) {
+      this.chartToolsReady = this.restoreChartContent(this.chart)
+    }
     // The gear on an indicator's legend row. openalgo-charts is canvas-only and
     // ships no DOM, so it emits and the host renders the form.
     this.chart.on('indicatorSettings', (p) => {
       void this.emitIndicatorSettings((p as { instanceId: string }).instanceId)
+    })
+    // The braces beside the gear. The chart holds no code and no DOM, so it
+    // names the indicator and we turn that back into the file it was compiled
+    // from. An id that is not one of ours resolves to null and nothing opens,
+    // which is what a built-in study should do if a button ever reaches here.
+    this.chart.on('indicatorSource', (p) => {
+      const file = fileForScriptId(String((p as { indicatorId?: unknown }).indicatorId ?? ''))
+      if (file !== null) this.cb.onOpenScriptSource?.(file)
     })
     // The on-chart legend's x removes an indicator without going through this
     // class. Without this the toolbar list went stale, and worse, the tracked
     // list still held it — so the next rebuild (timeframe, chart type, theme)
     // brought the deleted indicator back.
     this.chart.on('indicatorRemoved', () => this.syncIndicators())
+    // A pane moved carries its studies to another slot: their saved pane
+    // index follows. A fold is kept beside the saved studies.
+    this.chart.on('paneMoved', () => {
+      this.syncIndicators()
+      this.storeFoldedPanes()
+    })
+    this.chart.on('paneCollapsed', () => this.storeFoldedPanes())
     // Visibility changes made from the Objects panel stay with the pane on a
     // chart rebuild, just like settings and removal from the canvas legend.
     this.chart.on('objects:change', () => this.syncIndicators())
@@ -1882,7 +2844,76 @@ export class TradingTerminal {
    */
   private restoreChartTools(): void {
     try {
-      const raw = this.lsGet('draw')
+      const raw = this.lsGet('alerts')
+      if (raw) this.alertJson = parseAlertsDocument(JSON.parse(raw))
+    } catch {
+      this.toast('Saved alerts could not be restored. Check the saved document.', 'err')
+    }
+    // Drawings belong to the instrument they were drawn on. The pane's saved
+    // symbol names it; a save from before that rule is filed under it once.
+    this.drawOwner = drawingsKey(savedInstrument(this.lsGet('symbol')))
+    this.takeDrawings(openingDrawings(this.drawingsStorage(), this.drawOwner))
+    try {
+      const raw = this.lsGet('indicators')
+      this.activeIndicators = readStoredIndicators(raw ? JSON.parse(raw) : [])
+    } catch {
+      /* ignore */
+    }
+    this.drawMagnet = this.lsGet('magnet') === '1'
+    const magnetMode = this.lsGet('magnet-mode')
+    this.drawMagnetMode =
+      magnetMode === 'weak' || magnetMode === 'strong' || magnetMode === 'off'
+        ? magnetMode
+        : this.drawMagnet
+          ? 'strong'
+          : 'off'
+    this.drawMagnet = this.drawMagnetMode !== 'off'
+    this.drawStay = this.lsGet('stay') === '1'
+    const grid = this.lsGet('grid')
+    if (grid && grid.length === 2) {
+      this.gridV = grid[0] === '1'
+      this.gridH = grid[1] === '1'
+    }
+    // Absent means shown: only an explicit '0' hides it, so existing panes and
+    // a first visit both keep volume.
+    this.volumeOn = this.lsGet('vol') !== '0'
+    try {
+      const raw = this.lsGet('chartsettings')
+      const parsed = raw ? (JSON.parse(raw) as Record<string, string | number | boolean>) : null
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        this.chartSettingsSaved = parsed
+      }
+    } catch {
+      /* ignore */
+    }
+    try {
+      const raw = this.lsGet('transforms')
+      const parsed: unknown = raw ? JSON.parse(raw) : null
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        this.transformChoices = parsed as typeof this.transformChoices
+      }
+    } catch {
+      /* A malformed entry costs the choices, never the chart. */
+    }
+  }
+
+  /** The pane's preference storage as the drawing scope reads and writes it. */
+  private drawingsStorage() {
+    return {
+      get: (key: string) => this.lsGet(key),
+      set: (key: string, value: string) => this.lsSet(key, value),
+    }
+  }
+
+  /**
+   * Hold one instrument's stored drawings: a document in `drawJson`, or a
+   * 1.9.x array in `drawLegacy` for the draw tier to migrate when it attaches.
+   * Anything malformed is an empty chart rather than a pane that will not boot.
+   */
+  private takeDrawings(raw: string | null): void {
+    this.drawJson = emptyDrawings()
+    this.drawLegacy = null
+    try {
       const parsed: unknown = raw ? JSON.parse(raw) : null
       if (Array.isArray(parsed)) {
         // A 1.9.x save. The migration lives in the draw tier, which is fetched
@@ -1903,32 +2934,94 @@ export class TradingTerminal {
     } catch {
       /* ignore */
     }
-    try {
-      const raw = this.lsGet('indicators')
-      const parsed = raw ? (JSON.parse(raw) as typeof this.activeIndicators) : []
-      if (Array.isArray(parsed)) this.activeIndicators = parsed
-    } catch {
-      /* ignore */
+  }
+
+  /**
+   * Write the drawings on screen to their instrument's entry. An instrument
+   * with nothing drawn and nothing stored writes nothing, so browsing symbols
+   * leaves no empty entries behind; one whose drawings were all deleted keeps
+   * its emptied entry, which is what stops an old pane-level save ever being
+   * adopted for it again.
+   */
+  private storeDrawings(): void {
+    const key = this.drawOwner ?? UNSCOPED_DRAWINGS
+    const doc = this.drawLegacy ?? this.drawJson
+    const drawn = this.drawLegacy ? this.drawLegacy.length > 0 : this.drawJson.drawings.length > 0
+    if (drawn || this.lsGet(key) !== null) this.lsSet(key, JSON.stringify(doc))
+  }
+
+  /**
+   * Hand the drawings over when the pane changes instrument. Called from
+   * `buildChart` between the snapshot that ends the old chart and the restore
+   * that fills the new one, the one moment no controller is rendering them. A
+   * rebuild on the same instrument (an interval, a chart type, a theme) keeps
+   * them where they are.
+   */
+  private followDrawingScope(): void {
+    const key = drawingsKey(this.sym)
+    if (key === null || key === this.drawOwner) return
+    if (this.drawOwner === null) {
+      // The pane had no saved symbol: what it restored was on screen for
+      // whatever loaded first, which is this instrument, unless that
+      // instrument already has drawings of its own.
+      this.drawOwner = key
+      if (this.lsGet(key) === null) this.storeDrawings()
+      adoptUnscopedDrawings(this.drawingsStorage(), key)
+    } else {
+      this.storeDrawings()
+      this.drawOwner = key
     }
-    this.drawMagnet = this.lsGet('magnet') === '1'
-    this.drawStay = this.lsGet('stay') === '1'
-    const grid = this.lsGet('grid')
-    if (grid && grid.length === 2) {
-      this.gridV = grid[0] === '1'
-      this.gridH = grid[1] === '1'
+    this.takeDrawings(this.lsGet(key))
+  }
+
+  /** Where this chart's transform choices are kept: its instrument, or nothing yet. */
+  private transformChoiceKey(): string | null {
+    return this.sym ? `${this.sym.exchange}:${this.sym.symbol}` : null
+  }
+
+  /** The spec to build with: the base, with the choice kept for this instrument and type. */
+  private chosenTransform(base: SeriesTransformSpec): SeriesTransformSpec {
+    const key = this.transformChoiceKey()
+    const chosen = key ? this.transformChoices[key]?.[this.ctype] : undefined
+    if (!chosen || typeof chosen !== 'object') return base
+    return { type: base.type, options: { ...base.options, ...chosen } }
+  }
+
+  /**
+   * Keep what the chart's transform now differs from its base by, for this
+   * instrument and chart type, after a settings edit or a restored workspace.
+   * An edit back to the base drops the entry, so a reset leaves nothing behind.
+   */
+  private rememberTransformChoice(): void {
+    const key = this.transformChoiceKey()
+    const base = this.transformBase
+    const spec = this.chart && this.price ? this.chart.seriesTransform(this.price) : null
+    if (!key || !base || !spec || spec.type !== base.type) return
+    const before = transformValues(base)
+    const now = transformValues(spec)
+    const differs: Record<string, string | number> = {}
+    for (const [option, value] of Object.entries(now)) {
+      if (before[option] !== value) differs[option] = value
     }
-    // Absent means shown: only an explicit '0' hides it, so existing panes and
-    // a first visit both keep volume.
-    this.volumeOn = this.lsGet('vol') !== '0'
-    try {
-      const raw = this.lsGet('chartsettings')
-      const parsed = raw ? (JSON.parse(raw) as Record<string, string | number | boolean>) : null
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        this.chartSettingsSaved = parsed
-      }
-    } catch {
-      /* ignore */
-    }
+    const forInstrument = { ...this.transformChoices[key] }
+    if (Object.keys(differs).length) forInstrument[this.ctype] = differs
+    else delete forInstrument[this.ctype]
+    const next = { ...this.transformChoices }
+    // Re-inserted last, so the oldest instrument is the first to go.
+    delete next[key]
+    if (Object.keys(forInstrument).length) next[key] = forInstrument
+    const keys = Object.keys(next)
+    for (const old of keys.slice(0, Math.max(0, keys.length - TRANSFORM_CHOICES_KEPT)))
+      delete next[old]
+    this.transformChoices = next
+    this.lsSet('transforms', JSON.stringify(next))
+  }
+
+  /** The elements were formed again from the same bars: their count and their volume moved. */
+  private afterTransformChange(): void {
+    this.shownCount = this.shownBars.length
+    this.refreshDisplayedVolume()
+    this.refreshLegend(this.drawnBars())
   }
 
   /**
@@ -2055,21 +3148,50 @@ export class TradingTerminal {
    */
   private async attachDrawing(): Promise<void> {
     if (this.draw || !this.chart) return
+    const chart = this.chart
     const {
+      applyDrawingSettings,
+      boundsOf,
+      cloneLevels,
+      DEFAULT_FIB,
+      DRAWING_TOOL_ICONS,
       DrawingController,
+      drawingSettingsSchema,
       drawingShortcuts,
+      formatRatio,
+      gannLabel,
       getDrawingTool,
       keyToDrawingAction,
+      levelColor,
       matchDrawingShortcut,
       migrateDrawings,
+      readDrawingSetting,
+      toolCursor,
     } = await import('openalgo-charts/draw')
     // The await is a real suspension point: the pane can be destroyed, or the
     // chart rebuilt again, while the tier is in flight.
-    if (this.destroyed || !this.chart || this.draw) return
+    if (this.destroyed || this.chart !== chart || this.draw) return
     const draw = new DrawingController(this.chart, {
-      magnet: this.drawMagnet,
-      stayInDrawingMode: this.drawStay,
+      magnet: this.drawMagnetMode,
+      stayInDrawingMode: this.drawStay || this.drawLatch,
+      // Copy and paste go through the system clipboard, so they reach another
+      // tab, with a read that cannot hang on a permission prompt.
+      clipboard: drawingClipboardPort(),
     })
+    this.drawTier = {
+      applyDrawingSettings,
+      boundsOf,
+      cloneLevels,
+      DEFAULT_FIB,
+      DRAWING_TOOL_ICONS,
+      drawingSettingsSchema,
+      formatRatio,
+      gannLabel,
+      getDrawingTool,
+      levelColor,
+      readDrawingSetting,
+      toolCursor,
+    }
     this.draw = draw
     this.objectDrawings.attach(draw)
     this.drawShortcuts = drawingShortcuts()
@@ -2090,8 +3212,13 @@ export class TradingTerminal {
         this.drawJson = emptyDrawings() // a shape from an older build; better empty than broken
       }
     }
-    if (this.drawTool) draw.setTool(this.drawTool)
+    this.applyDrawTool(draw, this.drawTool)
     this.chart.on('draw:tool', () => this.afterDrawChange())
+    this.chart.on('draw:eraser', () => this.afterDrawChange())
+    // A z-order move is the one edit that reports no add, update or remove.
+    this.chart.on('drawing:change', (p) => {
+      if ((p as { kind?: string }).kind === 'reorder') this.afterDrawChange()
+    })
     this.chart.on('draw:select', () => this.afterDrawChange())
     // A text tool is useless until it has text, so placing one asks straight
     // away rather than leaving an empty box on the chart.
@@ -2114,14 +3241,42 @@ export class TradingTerminal {
       if (this.editSelectedText()) (p as { handled?: boolean }).handled = true
     })
     this.chart.on('draw:update', () => this.afterDrawChange())
+    this.syncToolCursor()
     this.objects?.refresh()
+    // The drawings join the timeline the studies are already on, unless a
+    // rebuild is still restoring (it follows the chart once it has).
+    if (this.undoHistory.following(this.chart)) this.followHistory()
+  }
+
+  /** Put the rail's tool on a controller: a drawing tool, the eraser, or neither. */
+  private applyDrawTool(draw: DrawingControllerInstance, tool: string | null): void {
+    if (tool === ERASER_TOOL) {
+      draw.setEraser(true)
+      return
+    }
+    if (draw.erasing()) draw.setEraser(false)
+    draw.setTool(tool)
+  }
+
+  /**
+   * The armed tool's glyph as the pointer over this chart, and the chart's own
+   * pointer back when nothing is armed. Set on the container as a CSS variable
+   * so the engine's hover hints (a grab hand over a handle) still win.
+   */
+  private syncToolCursor(): void {
+    const cursor = this.drawTier ? toolCursorValue(this.drawTier, this.drawTool) : null
+    if (cursor) this.container.style.setProperty('--tool-cursor', cursor)
+    else this.container.style.removeProperty('--tool-cursor')
   }
 
   private afterDrawChange(): void {
     if (!this.draw) return
-    this.drawTool = this.draw.activeTool()
+    const tool = this.draw.erasing() ? ERASER_TOOL : this.draw.activeTool()
+    const toolChanged = tool !== this.drawTool
+    this.drawTool = tool
+    if (toolChanged) this.syncToolCursor()
     this.drawJson = this.draw.toJSON()
-    this.lsSet('draw', JSON.stringify(this.drawJson))
+    this.storeDrawings()
     this.cb.onDrawChange?.(this.drawStats())
     this.cb.onDrawSelect?.(this.drawSelection())
   }
@@ -2132,6 +3287,7 @@ export class TradingTerminal {
     if (!this.draw || !id) return null
     const d = this.draw.get(id)
     if (!d) return null
+    if (!this.drawTier) return null
     return {
       id: d.id,
       tool: d.tool,
@@ -2140,6 +3296,7 @@ export class TradingTerminal {
       lineWidth: d.style.lineWidth ?? 1.5,
       lineStyle: d.style.lineStyle ?? 'solid',
       locked: d.locked === true,
+      ...describeSelection(this.draw, this.drawTier, d),
     }
   }
 
@@ -2287,12 +3444,137 @@ export class TradingTerminal {
     this.afterDrawChange()
   }
 
-  /** Arm a drawing tool, or pass null to return to the cursor. */
+  /**
+   * Write settings by path (`style.fill`, `style.fillOpacity`,
+   * `style.extendRight`, `style.showLabels`) to every selected drawing whose
+   * tool reads them, as one undo step.
+   */
+  setSelectedDrawingSettings(values: Record<string, unknown>): void {
+    if (!this.draw || !this.drawTier) return
+    const patches = settingsPatches(this.draw, this.drawTier, values)
+    if (patches.length > 0) this.draw.updateMany(patches)
+    this.afterDrawChange()
+  }
+
+  /** The primary selection's level ladder, for the levels editor; null for any other tool. */
+  drawLevels(): DrawLevels | null {
+    return this.draw && this.drawTier ? levelsOf(this.draw, this.drawTier) : null
+  }
+
+  /** Give every selected ladder drawing these levels, as one undo step. */
+  setDrawLevels(levels: readonly FibLevel[]): void {
+    if (!this.draw || !this.drawTier) return
+    const patches = levelsPatches(this.draw, this.drawTier, levels)
+    if (patches.length > 0) this.draw.updateMany(patches)
+    this.afterDrawChange()
+  }
+
+  /** Copies of the selection, offset so they read as new, and selected. One undo step. */
+  duplicateSelectedDrawings(): void {
+    const ids = this.draw?.selection() ?? []
+    if (!this.draw || ids.length === 0) return
+    this.draw.duplicate(ids)
+    this.afterDrawChange()
+  }
+
+  /** In front of, or behind, every other drawing on its side of the price series. */
+  orderSelectedDrawings(where: 'front' | 'back'): void {
+    const draw = this.draw
+    if (!draw) return
+    for (const id of draw.selection()) {
+      if (where === 'front') draw.bringToFront(id)
+      else draw.sendToBack(id)
+    }
+    this.afterDrawChange()
+  }
+
+  /** Hide the selection. It stays saved, and the Objects panel shows it again. */
+  hideSelectedDrawings(): void {
+    const ids = this.draw?.selection() ?? []
+    if (!this.draw || ids.length === 0) return
+    this.draw.updateMany(ids.map((id) => ({ id, patch: { visible: false } })))
+    this.afterDrawChange()
+    const them = ids.length === 1 ? 'it' : 'them'
+    this.toast(
+      `${drawingsLabel(ids.length)} hidden. Show ${them} again from the Objects panel.`,
+      'ok'
+    )
+  }
+
+  /** Select every drawing a click could select. */
+  selectAllDrawings(): void {
+    if (!this.draw) return
+    this.draw.select(selectableIds(this.draw))
+    this.afterDrawChange()
+  }
+
+  /** Delete one drawing, as the right-click menu's Delete drawing does. */
+  removeDrawing(id: string): void {
+    if (!this.draw) return
+    this.draw.removeMany([id])
+    this.afterDrawChange()
+  }
+
+  /**
+   * Ask the host to confirm removing every drawing on this chart. Nothing is
+   * removed here; the host calls `removeDrawings(true)` once the trader says so.
+   */
+  requestRemoveAllDrawings(): void {
+    const count = this.draw ? drawingCounts(this.draw).removable : 0
+    if (count === 0) return
+    this.cb.onDrawRemoveAll?.({ count, symbol: this.sym?.symbol ?? '' })
+  }
+
+  /** Put drawings on the clipboard: `target`, else the selection. */
+  async copyDrawings(target?: string | null): Promise<boolean> {
+    return this.clipboardWrite('copied', target)
+  }
+
+  /** Copy drawings, then delete them once the copy has landed. */
+  async cutDrawings(target?: string | null): Promise<boolean> {
+    return this.clipboardWrite('cut', target)
+  }
+
+  private async clipboardWrite(kind: 'copied' | 'cut', target?: string | null): Promise<boolean> {
+    const draw = this.draw
+    if (!draw) return false
+    const count = target ? 1 : draw.selection().length
+    if (count === 0) return false
+    const ok = await (kind === 'cut' ? draw.cut(target) : draw.copy(target))
+    if (this.destroyed || this.draw !== draw) return ok
+    if (!ok) {
+      this.toast('The drawing could not be copied. Try again.', 'err')
+      return false
+    }
+    noteDrawingsCopied()
+    if (kind === 'cut') this.afterDrawChange()
+    this.toast(clipboardMessage(kind, count, draw.clipboard().lastError() !== null), 'ok')
+    return true
+  }
+
+  /** Paste copied drawings onto this chart, selected, as one undo step. */
+  async pasteDrawings(): Promise<number> {
+    this.drawEnabled = true
+    await this.attachDrawing()
+    const draw = this.draw
+    if (!draw) return 0
+    const pasted = await draw.paste()
+    if (this.destroyed || this.draw !== draw) return pasted.length
+    // A paste that finds nothing of ours is only worth a word when a drawing
+    // was copied here: otherwise the key was likely meant for something else.
+    if (pasted.length > 0) this.afterDrawChange()
+    else if (drawingsOnClipboard())
+      this.toast('The copied drawing could not be read back. Copy it again.', 'err')
+    return pasted.length
+  }
+
+  /** Arm a drawing tool, or the eraser, or pass null to return to the cursor. */
   async setDrawTool(id: string | null): Promise<void> {
     this.drawEnabled = true
     this.drawTool = id
     await this.attachDrawing()
-    this.draw?.setTool(id)
+    if (this.draw) this.applyDrawTool(this.draw, id)
+    this.syncToolCursor()
     this.cb.onDrawChange?.(this.drawStats())
   }
 
@@ -2309,6 +3591,7 @@ export class TradingTerminal {
     metaKey?: boolean
     shiftKey?: boolean
   }): boolean {
+    if (this.alertDialogOpen()) return false
     const id = this.matchShortcut?.(e) ?? null
     if (id !== null) {
       void this.setDrawTool(id)
@@ -2328,16 +3611,24 @@ export class TradingTerminal {
     if (!action) return false
     const targets = [...d.selection()]
     switch (action.type) {
+      // Copy and cut need a selection, which the key mapping already checked;
+      // with text highlighted on the page the keys are the text's.
+      case 'copy':
+      case 'cut':
+        if (targets.length === 0 || pageHasTextSelection()) return false
+        void (action.type === 'copy' ? this.copyDrawings() : this.cutDrawings())
+        return true
+      case 'paste':
+        void this.pasteDrawings()
+        return true
       case 'delete':
         if (targets.length === 0) return false
         d.removeMany(targets)
         break
       case 'undo':
-        d.undo()
-        break
       case 'redo':
-        d.redo()
-        break
+        this.historyPress(action.type)
+        return true
       case 'duplicate':
         if (targets.length === 0) return false
         d.duplicate(targets)
@@ -2347,7 +3638,7 @@ export class TradingTerminal {
         d.nudge(targets, action.dx ?? 0, action.dy ?? 0)
         break
       // cancel, finish and popAnchor belong to placement, which the rail's
-      // own Escape already ends; copy, cut and paste are the clipboard's.
+      // own Escape already ends.
       default:
         return false
     }
@@ -2357,14 +3648,18 @@ export class TradingTerminal {
 
   drawStats(): DrawStats {
     const d = this.draw
+    const counts = d ? drawingCounts(d) : null
     return {
       // A 1.9.x save counts its raw entries until the tier lifts it: the same
       // number the rail showed for that save before the upgrade.
       count: d ? d.drawings().length : (this.drawLegacy?.length ?? this.drawJson.drawings.length),
-      canUndo: d ? d.canUndo() : false,
-      canRedo: d ? d.canRedo() : false,
+      canUndo: this.historyReady('undo'),
+      canRedo: this.historyReady('redo'),
       hasSelection: d ? d.selected() !== null : false,
       magnet: this.drawMagnet,
+      magnetMode: this.drawMagnetMode,
+      removable: counts?.removable ?? 0,
+      selectable: counts?.selectable ?? 0,
       stay: this.drawStay,
       tool: this.drawTool,
       shortcuts: this.drawShortcuts,
@@ -2372,13 +3667,11 @@ export class TradingTerminal {
   }
 
   undoDraw(): void {
-    this.draw?.undo()
-    this.afterDrawChange()
+    this.historyPress('undo')
   }
 
   redoDraw(): void {
-    this.draw?.redo()
-    this.afterDrawChange()
+    this.historyPress('redo')
   }
 
   /** Remove every selected drawing, or every drawing when `all` is set. */
@@ -2392,11 +3685,19 @@ export class TradingTerminal {
     this.afterDrawChange()
   }
 
-  /** Snap drawing anchors to the hovered bar's O/H/L/C. */
-  setMagnet(on: boolean): void {
-    this.drawMagnet = on
-    this.draw?.setOptions({ magnet: on })
-    this.lsSet('magnet', on ? '1' : '0')
+  /**
+   * Snap drawing anchors to the hovered bar's O/H/L/C: always (strong), only
+   * near one (weak), or never. `true` and `false` are strong and off, which is
+   * what the switch meant before the modes. Ctrl held while placing snaps
+   * whatever the mode.
+   */
+  setMagnet(mode: MagnetMode | boolean): void {
+    const next: MagnetMode = mode === true ? 'strong' : mode === false ? 'off' : mode
+    this.drawMagnetMode = next
+    this.drawMagnet = next !== 'off'
+    this.draw?.setOptions({ magnet: next })
+    this.lsSet('magnet', this.drawMagnet ? '1' : '0')
+    this.lsSet('magnet-mode', next)
     this.cb.onDrawChange?.(this.drawStats())
   }
 
@@ -2408,9 +3709,19 @@ export class TradingTerminal {
    */
   setDrawStay(on: boolean): void {
     this.drawStay = on
-    this.draw?.setOptions({ stayInDrawingMode: on })
+    this.draw?.setOptions({ stayInDrawingMode: on || this.drawLatch })
     this.lsSet('stay', on ? '1' : '0')
     this.cb.onDrawChange?.(this.drawStats())
+  }
+
+  /**
+   * Hold the armed tool after each placement until Escape, as a double-click
+   * on the rail asks. Unlike `setDrawStay` it is never saved: it ends with the
+   * tool it was asked for.
+   */
+  setDrawLatch(on: boolean): void {
+    this.drawLatch = on
+    this.draw?.setOptions({ stayInDrawingMode: this.drawStay || on })
   }
 
   /* The agent view of this chart, and the markup it puts on it. */
@@ -2430,6 +3741,43 @@ export class TradingTerminal {
    *   panel sends no context at all and every reading tool says so plainly,
    *   which is better than a context naming an instrument that is not there.
    */
+  /**
+   * Put a backtest's fills on the price, or take them off.
+   *
+   * The price series and nothing else, because these mark what a run did to
+   * the instrument the chart is showing. An empty list clears them, which is
+   * how a panel takes down the previous run before drawing the next: the
+   * library replaces the whole set, so a second run does not stack on the
+   * first.
+   *
+   * Answers false when there is no price series yet, so a caller can say the
+   * button did nothing rather than appearing to work. A pane that is still
+   * loading its history is the ordinary way to reach that.
+   */
+  setBacktestMarkers(
+    markers: readonly SeriesMarker[],
+    owner: { indicatorId: string; onCleared?: () => void } | null = null
+  ): boolean {
+    if (!this.price) return false
+    this.btMarkersFor = markers.length > 0 && owner ? owner.indicatorId : null
+    this.btMarkersCleared = this.btMarkersFor ? (owner?.onCleared ?? null) : null
+    this.btMarkersSeen =
+      this.btMarkersFor !== null &&
+      !!this.chart?.indicators().some((i) => i.indicatorId === this.btMarkersFor)
+    // One layer, kept and reused. `createMarkers` builds a primitive and
+    // attaches it, so calling it per run would stack a new layer over the old
+    // one every time and the previous run's marks would stay on the chart with
+    // nothing able to take them down.
+    //
+    // `rawBars` is handed over as the fallback because a mark is positioned by
+    // the bar under it, and the price series has gaps wherever the feed did: a
+    // fill landing in one is dropped without a word, which reads as the
+    // backtest having missed a trade it actually took.
+    if (!this.btMarkers) this.btMarkers = this.price.createMarkers(() => this.rawBars)
+    this.btMarkers.setMarkers(markers)
+    return true
+  }
+
   chartContext(): ChartContext | null {
     const chart = this.chart
     if (!chart || !this.sym) return null
@@ -2580,6 +3928,618 @@ export class TradingTerminal {
     // fail silently either: without this the indicator is simply absent and
     // there is nothing anywhere to say why.
     for (const err of custom.errors) this.toast(`${err.file}: ${err.message}`, 'err')
+
+    // The trader's OpenScript sources, compiled here and registered the same
+    // way. After the custom modules so that neither tier can be shadowed by a
+    // half-loaded one above it, and on every call for the same reason the
+    // custom loader runs on every call: a script saved from the panel appears
+    // on the next picker open rather than after a reload. A script already
+    // compiled at its current modification time costs nothing.
+    const studies = await loadOpenScriptStudies()
+    // A script that will not compile is the one thing a trader cannot discover
+    // any other way: there is no build step between saving and running, so this
+    // toast is the compiler's only route to the person who wrote the mistake.
+    for (const err of studies.errors) this.toast(`${err.file}: ${err.message}`, 'err')
+  }
+
+  /**
+   * Register just what `ids` need, so a saved layout can be restored now.
+   *
+   * loadIndicators is the whole catalogue, which the picker needs and a restore
+   * does not. With a folder of hundreds of user modules, waiting for all of them
+   * held every saved indicator, built-in ones included, back for seconds on each
+   * reload. A restore needs the built-in tier, the user modules that provide the
+   * ids it holds (the loader knows which from what those modules registered on
+   * earlier loads), and the OpenScript studies only when the layout holds one.
+   * The rest of the catalogue follows in the background: see
+   * completeIndicatorCatalogue.
+   */
+  private async loadIndicatorsFor(ids: readonly string[]): Promise<void> {
+    if (!this.indicatorsLoaded) {
+      await import('openalgo-charts/indicators')
+      this.indicatorsLoaded = true
+    }
+    if (ids.length === 0) return
+
+    const { ensureCustomIndicators } = await import('./customIndicators')
+    const custom = await ensureCustomIndicators(ids, {
+      onProblem: (message) => this.toast(message, 'err'),
+    })
+    for (const err of custom.errors) this.toast(`${err.file}: ${err.message}`, 'err')
+
+    if (ids.some((id) => fileForScriptId(id) !== null)) {
+      const studies = await loadOpenScriptStudies()
+      for (const err of studies.errors) this.toast(`${err.file}: ${err.message}`, 'err')
+    }
+  }
+
+  /**
+   * Load the whole catalogue once the chart is on screen, so the picker opens
+   * without waiting. Run when the browser is idle so it never competes with the
+   * first paint of the chart, and never awaited: its problems are reported by
+   * loadIndicators itself, the same toasts the picker would have raised.
+   */
+  private completeIndicatorCatalogue(): void {
+    if (this.destroyed) return
+    const run = () => {
+      if (!this.destroyed) void this.loadIndicators().catch(() => {})
+    }
+    // Called on the global itself: a browser refuses requestIdleCallback detached
+    // from window with an illegal invocation.
+    const host = globalThis as { requestIdleCallback?: (cb: () => void) => number }
+    if (typeof host.requestIdleCallback === 'function') host.requestIdleCallback(run)
+    else setTimeout(run, 0)
+  }
+
+  /** Restore sources before the evaluator validates their saved identities. */
+  private async restoreChartContent(chart: ChartInstance): Promise<void> {
+    if (this.activeIndicators.length) await this.applyIndicators()
+    if (this.destroyed || chart !== this.chart) return
+    if (this.drawEnabled) await this.attachDrawing()
+    if (this.destroyed || chart !== this.chart) return
+    chart.setAlertState(this.alertJson)
+    this.attachAlerts(chart)
+    this.restoreFoldedPanes(chart)
+    this.followHistory()
+    // The restore needed only its own studies; the picker needs everything.
+    this.completeIndicatorCatalogue()
+  }
+
+  /* ── folded study panes, kept beside the saved studies ───────────────── */
+
+  /** Remember which study panes are folded, by the studies they hold. */
+  private storeFoldedPanes(): void {
+    const chart = this.chart
+    if (!chart || this.destroyed || this.applyingIndicators || this.restoringIndicatorsOn === chart)
+      return
+    const ids = foldedStudyIds(chart)
+    const raw = this.lsGet('panes-folded')
+    if (ids.length === 0) {
+      if (raw !== null && raw !== '[]') this.lsSet('panes-folded', '[]')
+      return
+    }
+    const next = JSON.stringify(ids)
+    if (raw !== next) this.lsSet('panes-folded', next)
+  }
+
+  /**
+   * Fold again the panes that were folded when the chart was last saved. A
+   * save from before panes could fold has no entry and opens every pane, as
+   * it always did.
+   */
+  private restoreFoldedPanes(chart: ChartInstance): void {
+    if (this.destroyed || chart !== this.chart) return
+    for (const index of panesToFold(chart, readFoldedStudyIds(this.lsGet('panes-folded')))) {
+      if (!chart.paneCollapsed(index)) chart.setPaneCollapsed(index, true)
+    }
+  }
+
+  /* ── chart-wide undo and redo ─────────────────────────────────────────── */
+
+  /** Follow the chart on screen with the undo timeline, keeping its steps. */
+  private followHistory(): void {
+    const chart = this.chart
+    if (!chart || this.destroyed || this.preparingWorkspace) return
+    void this.undoHistory.follow(chart, this.draw)
+  }
+
+  /**
+   * One undo or redo press on this chart. Walks drawings, studies, panes,
+   * scales, the chart type and the interval in the order they were made.
+   * Orders are not on the timeline: no press reaches one.
+   */
+  historyPress(direction: HistoryDirection): boolean {
+    if (this.destroyed) return false
+    const moved = this.undoHistory.press(direction, this.chart, this.draw)
+    if (moved) {
+      this.syncIndicators()
+      this.storeFoldedPanes()
+      if (this.draw) this.afterDrawChange()
+      else this.cb.onDrawChange?.(this.drawStats())
+      this.cb.onWorkspaceChange?.()
+    }
+    return moved
+  }
+
+  /** Whether that press would do anything, for a button's enabled state. */
+  historyReady(direction: HistoryDirection): boolean {
+    return this.undoHistory.ready(direction, this.chart, this.draw)
+  }
+
+  /**
+   * The toolbar's interval switch, recorded as one undo step. The link
+   * group's own propagation calls `setInterval` and is not a step here: it
+   * is the step of the chart where the trader made it.
+   */
+  chooseInterval(iv: string): string {
+    const before = this.interval
+    const recorded = this.undoHistory.following(this.chart)
+    const after = this.setInterval(iv)
+    if (recorded && after !== before) {
+      this.undoHistory.push({
+        label: 'Interval',
+        undo: () => this.setInterval(before) === before,
+        redo: () => this.setInterval(after) === after,
+      })
+    }
+    return after
+  }
+
+  /** The toolbar's chart type switch, recorded as one undo step. */
+  chooseChartType(v: string): string {
+    const before = { type: this.ctype, interval: this.interval }
+    const recorded = this.undoHistory.following(this.chart)
+    const type = this.setChartType(v)
+    if (recorded && type !== before.type) {
+      const after = { type, interval: this.interval }
+      const apply = (to: { type: string; interval: string }) => {
+        if (this.setChartType(to.type) !== to.type) return false
+        // A profile type can have moved the interval with it.
+        return to.interval === this.interval || this.setInterval(to.interval) === to.interval
+      }
+      this.undoHistory.push({
+        label: 'Chart type',
+        undo: () => apply(before),
+        redo: () => apply(after),
+      })
+    }
+    return type
+  }
+
+  /* ── study rows of the right-click menu ───────────────────────────────── */
+
+  /** Move a study pane one slot up or down. */
+  moveStudyPane(paneIndex: number, direction: -1 | 1): boolean {
+    const chart = this.chart
+    if (!chart || this.destroyed) return false
+    const moved = chart.movePane(paneIndex, direction)
+    if (moved) this.cb.onWorkspaceChange?.()
+    return moved
+  }
+
+  /** Fold a study pane to its header strip, or open it again. */
+  setStudyPaneCollapsed(paneIndex: number, collapsed: boolean): boolean {
+    const chart = this.chart
+    if (!chart || this.destroyed || paneIndex === chart.primaryPaneIndex()) return false
+    const changed = chart.setPaneCollapsed(paneIndex, collapsed)
+    if (changed) this.cb.onWorkspaceChange?.()
+    return changed
+  }
+
+  private attachAlerts(chart: ChartInstance): void {
+    if (this.alerts || this.destroyed || this.chart !== chart) return
+    // An alert that has fired or expired keeps its record and loses its line.
+    //
+    // The line is what a trader asked the engine to draw until something
+    // happened; once it has, the line is a level nothing is watching, and a
+    // chart carrying a week of them is a chart somebody stops reading. The
+    // record stays, which is the part that matters: a once-only alert that has
+    // fired must be restored as fired, or it re-arms on the next reload and
+    // fires again on a price it already reported.
+    //
+    // Deleting the alert to be rid of the line is the mistake this replaces.
+    // This terminal restores an alert's definition and its runtime state from
+    // separate places, so a removed record lets the definition come back armed;
+    // `terminalAlerts.test.ts` holds that. `spentLines` is the engine's own
+    // answer, opt-in per host, and it changes nothing about evaluation.
+    this.alerts = new AlertController(chart, {
+      drawings: this.objectDrawings,
+      spentLines: 'hide',
+    })
+    this.syncAlertPause()
+    // Persist, and tell the page. A list built from the controller is a copy
+    // taken at render time, and nothing else would tell it that it is stale.
+    const save = () => {
+      this.saveAlerts()
+      this.cb.onAlertsChanged?.()
+      // Arming the first alert on a tab that is already hidden has to wake the
+      // feed, and removing the last one has to let it sleep again. Neither is a
+      // visibility change, so nothing else would ask.
+      this.onVisibilityChange()
+    }
+    for (const event of [
+      'alert:created',
+      'alert:updated',
+      'alert:removed',
+      'alert:triggered',
+      'alert:expired',
+      'alerts:restored',
+      'alerts:checkpoint',
+    ] as const) {
+      this.offAlerts.push(chart.on(event, save))
+    }
+    let fireSequence = 0
+    const deliver = (payload: unknown) => {
+      const event = payload as AlertEventPayload & { price?: number }
+      if (this.alertEvaluationPaused()) return
+      const id = String(event.alertId ?? '')
+      const alert = this.alerts?.list().find((one) => one.id === id)
+      const fired = String(event.title ?? alert?.title ?? 'Alert')
+      // The message is filled in against the bar that fired it, so a
+      // notification on a locked phone carries the number rather than sending
+      // the trader back to the chart to look it up.
+      const said = fillAlertMessage(String(event.message ?? ''), this.alertFacts(event)) || fired
+      this.toast(said, 'ok')
+      const facts = this.alertFacts(event)
+      void deliverAlert(
+        deliveryOf(alert?.payload),
+        {
+          title: this.sym?.symbol ? `${this.sym.symbol}: ${fired}` : fired,
+          body: said,
+          tag: `openalgo-alert-${id || fired}`,
+        },
+        {
+          apiKey: this.apiKey,
+          username: this.username,
+          // Named once per failure and never retried. These run on a price
+          // being reached, and a retry behind a fired alert is a queue that
+          // grows while the market moves.
+          onProblem: (message) => this.toast(message, 'err'),
+        }
+      ).then((delivered) => {
+        // Written down after the send, so the row can say what actually went
+        // out rather than what was asked for. The log is the only record that
+        // outlives the tab, and the only thing that answers "the message never
+        // arrived, did it even fire" the next morning.
+        void reportFire({
+          alertId: id,
+          title: String(event.title ?? 'Alert'),
+          kind: String(alert?.source?.kind ?? 'price'),
+          condition: String(alert?.condition ?? ''),
+          symbol: this.sym?.symbol ?? '',
+          exchange: this.sym?.exchange ?? '',
+          interval: this.interval,
+          ...(typeof facts.price === 'number' ? { price: facts.price } : {}),
+          // The filled message, not the template: a log row reading
+          // "crossed {{price}}" is a row nobody can read back.
+          message: said,
+          delivered,
+        })
+      })
+      // Numbered as well as timed. The time on the event is the source bar's,
+      // so two alerts firing on the same bar carry the same one, and a list
+      // keyed by time alone would show one of them.
+      fireSequence += 1
+      this.cb.onAlertFired?.({
+        key: `${event.alertId ?? 'alert'}-${fireSequence}`,
+        alertId: String(event.alertId ?? ''),
+        title: String(event.title ?? 'Alert'),
+        message: String(event.message ?? ''),
+        symbol: this.sym?.symbol ?? '',
+        exchange: this.sym?.exchange ?? '',
+        ...(typeof event.price === 'number' ? { price: event.price } : {}),
+        firedAt: typeof event.time === 'number' ? event.time : Math.floor(Date.now() / 1000),
+      })
+    }
+    this.offAlerts.push(chart.on('alert:triggered', deliver))
+    this.offAlerts.push(chart.on('indicator:alert', deliver))
+    // A script's alert that waits for its bar to close. The chart judges a
+    // study's alerts once, on a bar's first tick, when such an alert is still
+    // withheld, so it never fired live; the study announces the closed bar
+    // itself (`openscriptStudies.hostedStudy`) and it is delivered like any
+    // other, including being held back while replay or a workspace change owns
+    // the chart.
+    this.offAlerts.push(chart.on(SCRIPT_ALERT_EVENT, deliver))
+    this.offAlerts.push(
+      chart.on('alert:error', () => {
+        this.toast('An alert condition could not be evaluated. Review its source.', 'err')
+      })
+    )
+    // A dragged line is the one place an alert changes without a form. The
+    // engine commits the price under the pointer and leaves the name alone, so
+    // this is where both are put right. Bound to the drag's own event rather
+    // than to `alert:updated`, so it cannot answer the update it makes itself.
+    this.offAlerts.push(
+      chart.on('alerts:changed', (payload: unknown) => {
+        const id = (payload as { id?: unknown } | undefined)?.id
+        if (typeof id === 'string') this.settleDraggedAlert(id)
+      })
+    )
+    this.saveAlerts()
+    // The list on the rail can be drawn from here on. The editor's handle is
+    // still built per opening, because its tick and drawing tier are read at
+    // the moment it opens and this one has to last as long as the chart.
+    this.cb.onAlertsReady?.({ alerts: this.alerts, chart: chart as unknown as AlertChart })
+  }
+
+  private alertEvaluationPaused(): boolean {
+    return (
+      this.destroyed ||
+      this.preparingWorkspace ||
+      this.workspaceTransitionLocked ||
+      this.workspaceReplayLocked ||
+      this.replay !== null ||
+      this.replayOwnsDisplay() ||
+      this.replayPicking ||
+      this.replayLoading ||
+      this.dataUnavailable()
+    )
+  }
+
+  private syncAlertPause(): void {
+    this.alerts?.setPaused(this.alertEvaluationPaused())
+  }
+
+  private saveAlerts(): void {
+    if (!this.alerts) return
+    try {
+      this.alertJson = this.alerts.toJSON()
+      const serialized = JSON.stringify(this.alertJson)
+      this.lsSet('alerts', serialized)
+      if (
+        this.alertRuntimeScope &&
+        !this.destroyed &&
+        !this.preparingWorkspace &&
+        !this.workspaceTransitionLocked &&
+        !this.restoringAlertRuntime
+      ) {
+        globalThis.localStorage.setItem(this.alertRuntimeScope, serialized)
+      }
+      this.alertSaveFailed = false
+    } catch {
+      if (!this.alertSaveFailed)
+        this.toast('Alert state could not be saved. Check browser storage and payloads.', 'err')
+      this.alertSaveFailed = true
+    }
+  }
+
+  /** Bind only after a workspace is prepared, before its evaluator is unlocked. */
+  setAlertRuntimeScope(scope: string | null, mode: 'restore' | 'seed'): void {
+    this.alertRuntimeScope = scope
+    if (!scope || !this.alerts || this.destroyed) return
+    if (mode === 'restore') {
+      this.restoringAlertRuntime = true
+      try {
+        const runtime = globalThis.localStorage.getItem(scope)
+        if (runtime) this.alerts.fromJSON(mergeAlertRuntime(this.alerts.toJSON(), runtime))
+      } catch {
+        this.toast(
+          'Alert runtime could not be restored. The saved workspace definition is retained.',
+          'err'
+        )
+      } finally {
+        this.restoringAlertRuntime = false
+      }
+    }
+    this.saveAlerts()
+  }
+
+  /**
+   * Put a dragged alert back on the tick, and rename it if we named it.
+   *
+   * Two corrections, both of a price that came from a pointer. A pixel maps to
+   * a price with a dozen decimals behind it, so a line dropped where the axis
+   * reads 1,260.55 was stored at 1260.5486842105263: a price the instrument
+   * cannot trade at and a number nothing in the interface could show. And a
+   * name generated from the old price goes on advertising it, so the row says
+   * one number while the line sits at another.
+   *
+   * Both are no-ops when there is nothing to correct, which is what will happen
+   * to the first of them once the engine rounds the drag itself.
+   */
+  private settleDraggedAlert(id: string): void {
+    const controller = this.alerts
+    const chart = this.chart
+    if (!controller || !chart || this.destroyed) return
+    const alert = controller.list().find((one) => one.id === id)
+    if (!alert) return
+    const at: AlertTick = { tick: this.sym?.tick, refPrice: this.refPrice() }
+    const patch: AlertPatch = {}
+
+    // Only a price is snapped. A study threshold is in the plot's own units,
+    // and an oscillator running nought to a hundred has nothing to do with the
+    // instrument's tick.
+    if (alert.source.kind === 'price') {
+      const price = snapPrice(alert.source.price, at)
+      const upper =
+        alert.source.upperPrice === undefined ? undefined : snapPrice(alert.source.upperPrice, at)
+      if (price !== alert.source.price || upper !== alert.source.upperPrice) {
+        patch.source = {
+          ...alert.source,
+          price,
+          ...(upper === undefined ? {} : { upperPrice: upper }),
+        }
+      }
+    }
+
+    if (hasAutoTitle(alert)) {
+      // Named from the snapped source, not the one that was dropped, or the
+      // name would carry the decimals the price has just lost.
+      const settled = { ...alert, source: patch.source ?? alert.source }
+      const title = alertTitleFor(
+        settled,
+        chart as unknown as AlertChart,
+        this.sym?.symbol ?? '',
+        at
+      )
+      if (title !== alert.title) patch.title = title
+    }
+
+    if (patch.source === undefined && patch.title === undefined) return
+    try {
+      controller.update(id, patch)
+    } catch {
+      // The engine refused the corrected alert. The dragged one is still
+      // armed and still evaluated; leaving it be is better than removing it.
+    }
+  }
+
+  private detachAlerts(): void {
+    this.offAlertFullscreen?.()
+    this.offAlertFullscreen = null
+    this.alertUi?.destroy()
+    this.alertUi = null
+    this.saveAlerts()
+    for (const dispose of this.offAlerts.splice(0)) dispose()
+    this.alerts?.destroy()
+    this.alerts = null
+    // The dialog is holding the controller that has just been destroyed. Left
+    // open it would write alerts nothing evaluates, into a chart that is gone.
+    this.cb.onAlerts?.(null)
+    this.cb.onAlertsReady?.(null)
+  }
+
+  alertDialogOpen(): boolean {
+    return this.alertUi?.isOpen() ?? false
+  }
+
+  /**
+   * Make the alert the trader just pointed at, with no form in between.
+   *
+   * **Right-clicking a price is already the whole instruction.** The price is
+   * the one thing a form would ask for, and it has just been given by pointing
+   * at it; everything else has a default that is right almost every time. A
+   * dialog here is a confirmation step on a decision already made, and it costs
+   * the gesture its speed, which is the only reason to use it.
+   *
+   * The form is still there for the alert that needs it, on the toolbar's
+   * Alerts button, and the created alert is editable from the rail the moment
+   * it exists. So nothing is lost by making it now: what a right-click produces
+   * is exactly the alert the form would have proposed, because both seed from
+   * `draftFor`.
+   */
+  async createAlertAt(source: AlertSource): Promise<boolean> {
+    const chart = this.chart
+    if (!chart || this.destroyed || this.preparingWorkspace) return false
+    try {
+      await this.chartToolsReady
+      if (this.destroyed || this.chart !== chart || !this.alerts) return false
+      await this.attachDrawing()
+      if (this.destroyed || this.chart !== chart || !this.alerts) return false
+
+      const at: AlertTick = { tick: this.sym?.tick, refPrice: this.refPrice() }
+      const draft = draftFor({
+        chart: chart as unknown as AlertChart,
+        drawings: (this.draw ?? null) as AlertDrawings | null,
+        zone: chart.timezone(),
+        source,
+        at,
+      })
+      const problem = draftProblem(
+        draft,
+        chart as unknown as AlertChart,
+        (this.draw ?? null) as AlertDrawings | null
+      )
+      if (problem !== null) {
+        this.toast(problem, 'err')
+        return false
+      }
+      const input = toAlertInput(
+        draft,
+        chart as unknown as AlertChart,
+        (this.draw ?? null) as AlertDrawings | null,
+        this.sym?.symbol ?? '',
+        at
+      )
+      if (input === null) return false
+      const made = this.alerts.add(input)
+      // Borrowed from the click that made it: a browser starts an audio context
+      // suspended and only asks about notifications inside a gesture, and this
+      // is the gesture. Without it the first alert to fire hours later is silent
+      // and the trader believes it never fired.
+      readySound()
+      if (deliveryOf(made.payload).notify) void askToNotify()
+      this.toast(`Alert set: ${made.title}`, 'ok')
+      return true
+    } catch (error) {
+      if (!this.destroyed && this.chart === chart)
+        this.toast(`The alert could not be set: ${this.cleanError(error)}`, 'err')
+      return false
+    }
+  }
+
+  /**
+   * Open the alert dialog, on a source when one was clicked.
+   *
+   * The drawing tier is attached first because an alert can be set on a
+   * drawing's level, and a dialog that offered the option and then found no
+   * drawings would be telling the trader they have none.
+   */
+  async openAlerts(source?: AlertSource, editAlertId?: string): Promise<boolean> {
+    const chart = this.chart
+    if (!chart || this.destroyed || this.preparingWorkspace) return false
+    if (this.cb.onAlerts) {
+      try {
+        await this.chartToolsReady
+        if (this.destroyed || this.chart !== chart || !this.alerts) return false
+        await this.attachDrawing()
+        if (this.destroyed || this.chart !== chart || !this.alerts) return false
+        this.cb.onAlerts({
+          alerts: this.alerts,
+          chart: chart as unknown as AlertChart,
+          drawings: (this.draw ?? null) as AlertDrawings | null,
+          symbol: this.sym?.symbol ?? '',
+          at: { tick: this.sym?.tick, refPrice: this.refPrice() },
+          ...(source ? { source } : {}),
+          ...(editAlertId ? { editAlertId } : {}),
+        })
+        return true
+      } catch (error) {
+        if (!this.destroyed && this.chart === chart)
+          this.toast(`Alerts could not be opened: ${this.cleanError(error)}`, 'err')
+        return false
+      }
+    }
+    try {
+      await this.chartToolsReady
+      if (this.destroyed || this.chart !== chart || !this.alerts) return false
+      await this.attachDrawing()
+      const { createAlertUi } = await import('openalgo-charts/widget')
+      if (this.destroyed || this.chart !== chart || !this.draw || !this.alerts) return false
+      if (!this.alertUi) {
+        const doc = this.container.ownerDocument
+        const mount = () => (doc.fullscreenElement as HTMLElement | null) ?? doc.body
+        const ui = createAlertUi(mount(), {
+          chart,
+          draw: this.draw,
+          alerts: this.alerts,
+          theme: this.getTheme().mode,
+          chartTheme: this.chartTheme ?? undefined,
+          onOpenChange: (open) => {
+            if (this.alertUi) this.alertUi.root.dataset.tradingDialogOpen = String(open)
+          },
+        })
+        this.alertUi = ui
+        // A split pane must not clip source controls or shrink a phone dialog.
+        ui.root.style.position = 'fixed'
+        ui.root.style.zIndex = '100'
+        // The engine's dialogs are a step smaller than this app's controls in
+        // every dimension. Applied after `createAlertUi`, which writes the
+        // engine's own token set as it builds the root.
+        applyChartDialogMetrics(ui.root)
+        const fullscreen = () => {
+          ui.close()
+          mount().appendChild(ui.root)
+        }
+        doc.addEventListener('fullscreenchange', fullscreen)
+        this.offAlertFullscreen = () => doc.removeEventListener('fullscreenchange', fullscreen)
+      }
+      return source ? this.alertUi.openEditor({ source }) : this.alertUi.openList()
+    } catch (error) {
+      if (!this.destroyed && this.chart === chart)
+        this.toast(`Alerts could not be opened: ${this.cleanError(error)}`, 'err')
+      return false
+    }
   }
 
   /** Re-add the tracked indicators to a freshly built chart. */
@@ -2593,25 +4553,37 @@ export class TradingTerminal {
     if (!chart) return
     this.restoringIndicatorsOn = chart
     try {
-      await this.loadIndicators()
+      await this.loadIndicatorsFor(this.activeIndicators.map((record) => record.indicatorId))
       if (this.destroyed || !this.chart || this.chart !== chart) return
       // Re-adding walks the tracked list, so a sync mid-loop would read a
       // half-applied chart and truncate it.
       this.applyingIndicators = true
       try {
-        // syncIndicators writes the result back, so a layout that already
-        // carries duplicates heals on the next load.
-        for (const rec of dedupeIndicators(this.activeIndicators)) {
-          try {
-            const inst = this.chart.addIndicator(rec.indicatorId, rec.settings)
-            inst.setVisible(rec.visible !== false)
-          } catch {
-            /* an id that is no longer registered — skip rather than break the chart */
+        if (this.activeIndicators.every((record) => record.paneIndex !== undefined)) {
+          chart.restoreState({
+            version: 1,
+            indicators: this.activeIndicators as IndicatorState[],
+            drawings: this.draw?.toJSON() ?? this.drawJson,
+            alerts: this.alertJson,
+          })
+        } else {
+          // Legacy duplicate healing happens during migration. Modern templates
+          // may intentionally contain identical studies, including a shared pane.
+          for (const rec of this.activeIndicators) {
+            try {
+              const inst = this.chart.addIndicator(rec.indicatorId, rec.settings, {
+                paneIndex: rec.paneIndex,
+              })
+              inst.setVisible(rec.visible !== false)
+            } catch {
+              /* An unregistered legacy study must not prevent chart restoration. */
+            }
           }
         }
       } finally {
         this.applyingIndicators = false
       }
+      this.reportRefusedStudies()
     } catch (error) {
       if (!this.destroyed && this.chart === chart) {
         this.toast(`Indicators could not be restored: ${this.cleanError(error)}`, 'err')
@@ -2637,8 +4609,11 @@ export class TradingTerminal {
     this.cb.onIndicatorSettings({
       instanceId,
       name: inst.name,
+      ...(this.transformed() ? { barSource: inst.barSource() } : {}),
       values: { ...inst.settings() },
-      inputs: descriptor.inputs.map(toField).map((f) => this.fillIntervalOptions(f, inst.settings())),
+      inputs: descriptor.inputs
+        .map(toField)
+        .map((f) => this.fillIntervalOptions(f, inst.settings(), !isScriptInstance(instanceId))),
       styleInputs: indicatorStyleInputs(descriptor).map(toField),
     })
   }
@@ -2658,20 +4633,31 @@ export class TradingTerminal {
    * broker that lists `D` would otherwise show a select reading "Chart
    * interval" while the study computed on `1d`: a control disagreeing with the
    * value behind it, which is worse than no control.
+   *
+   * A study the chart runs (every built-in, and the Timeframe of the 29 that
+   * have one since 2.6.0) is offered only the codes the chart can fold to. A
+   * broker's monthly `M` is not one, and a study set to it would be refused and
+   * draw nothing. An OpenScript study reads its intervals in its own language,
+   * which does have a month, so its list is left whole for the dialog to
+   * respell (`openscriptIntervals.ts`).
    */
   private fillIntervalOptions(
     field: IndicatorField,
-    values: Record<string, unknown>
+    values: Record<string, unknown>,
+    chartRuns: boolean
   ): IndicatorField {
     if (field.type !== 'interval' || field.options !== undefined) return field
+    const offered = chartRuns
+      ? this.availableIntervals.filter((code) => isKnownInterval(code))
+      : this.availableIntervals
     // The empty entry is "the chart's own interval", which is how a study says
     // it is not folding at all.
     const options = [
       { label: 'Chart interval', value: '' as unknown },
-      ...this.availableIntervals.map((code) => ({ label: code, value: code as unknown })),
+      ...offered.map((code) => ({ label: code, value: code as unknown })),
     ]
     const current = values[field.key]
-    if (typeof current === 'string' && current !== '' && !this.availableIntervals.includes(current)) {
+    if (typeof current === 'string' && current !== '' && !offered.includes(current)) {
       options.push({ label: current, value: current })
     }
     return { ...field, options }
@@ -2686,12 +4672,65 @@ export class TradingTerminal {
     return d ? { ...indicatorDefaults(d) } : null
   }
 
-  /** Apply a settings patch to a live indicator. */
-  updateIndicatorSettings(instanceId: string, patch: Record<string, unknown>): void {
+  /**
+   * Apply a settings patch to a live indicator, and the bars it computes on
+   * when the form offered that choice.
+   *
+   * The bar source goes first: a timeframe is refused on a transformed chart's
+   * own elements and accepted on the bars under them, so applying both in the
+   * other order would report a refusal the same press then cleared.
+   *
+   * A setting the study refuses (a timeframe the chart cannot fold, say) does
+   * not throw: the study keeps the setting and stops drawing, with the reason
+   * on its data status, which is said where the trader just pressed Ok.
+   */
+  updateIndicatorSettings(
+    instanceId: string,
+    patch: Record<string, unknown>,
+    barSource?: IndicatorBarSource
+  ): void {
     const inst = this.chart?.indicators().find((i) => i.id === instanceId)
     if (!inst) return
-    inst.setSettings(patch)
+    // One Ok is one undo step, the bar source and the settings together.
+    this.undoHistory.transact(
+      this.chart,
+      () => {
+        if (barSource !== undefined && barSource !== inst.barSource()) inst.setBarSource(barSource)
+        inst.setSettings(patch)
+      },
+      'Study settings'
+    )
+    this.reportRefusedStudies(instanceId, true)
     this.syncIndicators()
+  }
+
+  /**
+   * Say why a study is on the chart and drawing nothing.
+   *
+   * A setting a study's inputs refuse (a timeframe on a transformed chart's own
+   * bricks, a timeframe the chart cannot fold) does not throw: the chart keeps
+   * the study, with the reason on its data status, and draws nothing. Said
+   * where it happens, a press of Ok or a rebuild that restored the study, or the
+   * study simply vanishes. The engine's sentence names the study and the fix.
+   * Only input refusals: a study that failed for another reason has its own
+   * report. A rebuild says it once: a theme or interval switch restoring the
+   * same refused study again is not news, a press of Ok is (`again`).
+   */
+  private reportRefusedStudies(only?: string, again = false): void {
+    for (const inst of this.chart?.indicators() ?? []) {
+      if (only !== undefined && inst.id !== only) continue
+      // Reading the values settles a recompute the edit left pending.
+      inst.values()
+      const status = inst.dataStatus()
+      if (status?.state !== 'error' || !(status.error instanceof IndicatorInputError)) {
+        this.reportedRefusals.delete(inst.id)
+        continue
+      }
+      const message = status.error.message
+      if (!again && this.reportedRefusals.get(inst.id) === message) continue
+      this.reportedRefusals.set(inst.id, message)
+      this.toast(message, 'err')
+    }
   }
 
   /** Open the settings form for an indicator from the host's own UI. */
@@ -2722,16 +4761,27 @@ export class TradingTerminal {
       inputs: t.inputs.map((i) =>
         i.type === 'colorPair'
           ? (i as unknown as ChartSettingsPairField)
-          : toField(i as { key: string; type: string; label?: string; group?: string })
+          : {
+              ...toField(i as { key: string; type: string; label?: string; group?: string }),
+              ...(i.key === 'statusLine.openInterest' && chart.hasOpenInterest === false
+                ? { unavailable: 'Open interest is unavailable for this instrument.' }
+                : {}),
+            }
       ),
     }))
-    return profileSettingsView(
-      {
-        tabs,
-        values: { ...readChartSettings(chart) },
-        defaults: { ...this.chartDefaults },
-      },
-      this.ctype,
+    return priceAxisSettingsView(
+      volumeSettingsView(
+        profileSettingsView(
+          {
+            tabs,
+            values: { ...readChartSettings(chart) },
+            defaults: { ...this.chartDefaults },
+          },
+          this.ctype,
+          this.chartSettingsSaved
+        ),
+        this.chartSettingsSaved
+      ),
       this.chartSettingsSaved
     )
   }
@@ -2756,7 +4806,15 @@ export class TradingTerminal {
    */
   private snapshotChartDefaults(): void {
     if (!this.chart) return
-    this.chartDefaults = { ...readChartSettings(this.chart) }
+    const defaults: Record<string, string | number | boolean> = { ...readChartSettings(this.chart) }
+    // The transform's baseline is the box this terminal sized, not whatever a
+    // kept choice built the chart with.
+    if (this.transformBase) {
+      for (const [option, value] of Object.entries(transformValues(this.transformBase))) {
+        defaults[`transform.${option}`] = value
+      }
+    }
+    this.chartDefaults = defaults
   }
 
   /**
@@ -2777,13 +4835,20 @@ export class TradingTerminal {
    * deviations lets an untouched control keep following the theme, which is
    * what "default" has to mean for the reset to be worth having.
    */
-  async applyChartSettings(patch: Record<string, string | number | boolean>): Promise<void> {
+  async applyChartSettings(given: Record<string, string | number | boolean>): Promise<void> {
     const chart = this.chart
     if (!chart) return
     const { applyChartSettings } = await import('openalgo-charts')
     if (chart !== this.chart || this.destroyed) return
+    // Transform options reach the chart with the rest, and are kept per
+    // instrument rather than with the pane's settings (see `transformSetting`).
+    const patch = withoutTransformSettings(given)
+    const transformChanged = Object.keys(given).some(transformSetting)
     const enginePatch = Object.fromEntries(
-      Object.entries(patch).filter(([key]) => !key.startsWith('profiles.'))
+      Object.entries(given).filter(
+        ([key]) =>
+          !key.startsWith('profiles.') && !key.startsWith('volume.') && !isPriceAxisSetting(key)
+      )
     )
     const merged = { ...this.chartSettingsSaved, ...patch }
     if (
@@ -2798,17 +4863,28 @@ export class TradingTerminal {
       this.toast('The broker has no interval compatible with this TPO block size', 'err')
       return
     }
+    if ('time.timezone' in enginePatch && enginePatch['time.timezone'] !== chart.timezone())
+      this.stopReplay()
     applyChartSettings(chart, enginePatch)
+    if (transformChanged) {
+      this.rememberTransformChoice()
+      this.afterTransformChange()
+    }
     const defaults = {
       ...this.chartDefaults,
       ...profileDefaults('tpo'),
       ...profileDefaults('session-volume-profile'),
+      ...VOLUME_DEFAULTS,
+      ...PRICE_AXIS_DEFAULTS,
     }
     for (const kind of ['tpo', 'session-volume-profile'] as const) {
       const normalized = profileValues(kind, merged)
       for (const key of Object.keys(normalized)) {
         if (key in merged) merged[key] = normalized[key]
       }
+    }
+    for (const [key, value] of Object.entries(volumeValues(merged))) {
+      if (key in merged) merged[key] = value
     }
     const kept: Record<string, string | number | boolean> = {}
     for (const [k, v] of Object.entries(merged)) {
@@ -2818,7 +4894,10 @@ export class TradingTerminal {
     }
     this.chartSettingsSaved = kept
     this.lsSet('chartsettings', JSON.stringify(kept))
+    this.syncPriceAxis()
     this.adoptGridFromPatch(patch)
+    this.refreshDisplayedVolume()
+    this.refreshLegend(this.drawnBars())
     if (isProfileKind(this.ctype)) {
       const interval = this.compatibleProfileInterval(this.ctype)
       if (interval && interval !== this.interval) {
@@ -2859,7 +4938,7 @@ export class TradingTerminal {
    * time. A malformed entry is dropped: a stale setting must never stop the
    * terminal booting.
    */
-  private async restoreChartSettings(): Promise<void> {
+  private async restoreChartSettings(strict = false): Promise<void> {
     const chart = this.chart
     if (!chart || !Object.keys(this.chartSettingsSaved).length) return
     try {
@@ -2868,11 +4947,25 @@ export class TradingTerminal {
       applyChartSettings(
         chart,
         Object.fromEntries(
-          Object.entries(this.chartSettingsSaved).filter(([key]) => !key.startsWith('profiles.'))
+          Object.entries(this.chartSettingsSaved).filter(
+            ([key]) =>
+              !key.startsWith('profiles.') &&
+              !key.startsWith('volume.') &&
+              !transformSetting(key) &&
+              !isPriceAxisSetting(key) &&
+              // Pinned once measured, below: pinned now it would hold no range.
+              !(key === 'scales.autoScale' && this.chartSettingsSaved[key] === false)
+          )
         )
       )
+      if (this.chartSettingsSaved['scales.autoScale'] === false)
+        pinOnceMeasured(chart, () => chart === this.chart && !this.destroyed)
+      this.syncPriceAxis()
       this.installProfile()
-    } catch {
+      this.refreshDisplayedVolume()
+      this.refreshLegend(this.drawnBars())
+    } catch (error) {
+      if (strict) throw error
       /* ignore */
     }
   }
@@ -2887,35 +4980,494 @@ export class TradingTerminal {
   private syncIndicators(): void {
     if (!this.chart || this.applyingIndicators || this.restoringIndicatorsOn === this.chart) return
     const next = this.chart.indicators().map((i) => ({
+      instanceId: i.id,
       indicatorId: i.indicatorId,
       settings: { ...i.settings() },
       visible: i.visible(),
+      paneIndex: i.paneIndex,
+      // Kept so a chart type switch, which rebuilds the chart, brings the
+      // study back on the bars it was set to compute on.
+      ...(i.barSource() === 'underlying' ? { barSource: 'underlying' as const } : {}),
     }))
     if (!sameIndicatorRecords(this.activeIndicators, next)) {
       this.activeIndicators = next
-      this.lsSet('indicators', JSON.stringify(this.activeIndicators))
+      this.lsSet('indicators', JSON.stringify({ version: 2, indicators: this.activeIndicators }))
     }
     const announced = this.listIndicators().map(({ id, name }) => ({ id, name }))
     if (!sameIndicatorInstances(this.announcedIndicators, announced)) {
       this.announcedIndicators = announced
       this.cb.onIndicatorsChange?.(announced)
     }
+    this.dropBacktestMarksWithoutTheirStudy(next)
   }
 
+  /**
+   * Take a backtest's marks down once the strategy they came from is removed
+   * from the chart, however it was removed (the legend, the menu, the
+   * dialog, undo). Marks with no study behind them read as the strategy still
+   * being applied.
+   */
+  private dropBacktestMarksWithoutTheirStudy(studies: readonly { indicatorId: string }[]): void {
+    const owner = this.btMarkersFor
+    if (!owner) return
+    if (studies.some((s) => s.indicatorId === owner)) {
+      this.btMarkersSeen = true
+      return
+    }
+    if (!this.btMarkersSeen) return
+    this.btMarkers?.setMarkers([])
+    const cleared = this.btMarkersCleared
+    this.btMarkersFor = null
+    this.btMarkersSeen = false
+    this.btMarkersCleared = null
+    cleared?.()
+  }
+
+  captureWorkspacePane(id: string): WorkspacePane {
+    const chart = this.chart
+    const symbol = this.sym
+    if (this.destroyed || !chart || !symbol) throw new Error('Chart is not available')
+    if (this.dataUnavailable()) throw new Error('Chart history is loading or unavailable')
+    if (
+      this.replayOwnsDisplay() ||
+      this.replayPicking ||
+      this.replayLoading ||
+      this.workspaceReplayLocked
+    )
+      throw new Error('Leave replay before saving a workspace')
+    const context = chart.getDataContext()
+    if (
+      context?.symbol !== symbol.symbol ||
+      context.exchange !== symbol.exchange ||
+      context.interval !== this.interval
+    )
+      throw new Error('Chart history is still loading')
+    if (this.restoringIndicatorsOn === chart) throw new Error('Studies are still loading')
+    if (this.drawLegacy || (this.drawEnabled && !this.draw))
+      throw new Error('Drawings are still loading')
+    return parseWorkspacePayload({
+      layout: {
+        rows: 1,
+        columns: 1,
+        slots: [{ paneId: id, row: 0, column: 0, rowSpan: 1, columnSpan: 1 }],
+      },
+      activePaneId: id,
+      panes: [
+        {
+          id,
+          symbol: symbol.symbol,
+          exchange: symbol.exchange,
+          interval: this.interval,
+          chartType: this.ctype,
+          chart: {
+            ...(this.comparisons?.captureBaseState() ?? chart.getState()),
+            drawings: this.draw?.toJSON() ?? this.drawJson,
+          },
+          settings: this.chartSettingsSaved,
+          volume: this.volumeOn,
+          magnet:
+            this.draw?.magnetMode() ?? this.drawMagnetMode ?? (this.drawMagnet ? 'strong' : 'off'),
+          stay: this.drawStay,
+          comparisons: this.comparisons?.specs() ?? this.comparisonPreferences?.items ?? [],
+          comparisonMode: this.comparisons?.mode ?? this.comparisonPreferences?.mode ?? 'price',
+        },
+      ],
+    }).panes[0]
+  }
+
+  captureIndicatorTemplate(): IndicatorState[] {
+    if (this.destroyed || !this.chart) throw new Error('Chart is not available')
+    const indicators = parseIndicatorStates(this.chart.getState().indicators ?? [])
+    for (const indicator of indicators) delete indicator.instanceId
+    return indicators
+  }
+
+  /**
+   * The chart's data as CSV. With no options it is every loaded bar, every
+   * study and every comparison close, which is what this always wrote; the
+   * download dialog narrows it (see `chartDataExport.ts`).
+   */
+  exportDataCsv(options: DataExportOptions = {}): string {
+    if (this.destroyed || !this.chart || this.dataUnavailable())
+      throw new Error('Chart history is unavailable for export')
+    if (
+      this.replayPicking ||
+      this.replayLoading ||
+      (this.workspaceReplayLocked && !this.workspaceReplayMember)
+    )
+      throw new Error('Finish replay selection and loading before exporting data')
+    return exportChartDataCsv(this.chart, csvOptions(this.chart, options))
+  }
+
+  /**
+   * Take the next click on the chart as a study input's value: a price, a bar
+   * time, or both from one click for a price paired with a time. Returns the
+   * cancel; `onValue` gets null when the pick ends without a click.
+   */
+  pickInput(field: IndicatorField, onValue: (value: InputPick | null) => void): () => void {
+    const chart = this.chart
+    if (!chart || this.destroyed) {
+      onValue(null)
+      return () => {}
+    }
+    const zone = chart.timezone()
+    const clock = (time: number) =>
+      `${utcSecondsToZonedDateString(time, zone)} ${formatZonedTime(time, zone)}`
+    let settled = false
+    const done = (value: InputPick | null) => {
+      if (settled) return
+      settled = true
+      offEnd()
+      onValue(value)
+    }
+    // The engine says a pick ended without a value (another pick, a cancel) on
+    // `pick:end`, so a form waiting on one is never left waiting.
+    const offEnd = chart.on('pick:end', (event) => {
+      if (event.value === null) done(null)
+    })
+    const where = typeof field.pick === 'object' ? field.pick : undefined
+    let cancel: () => void
+    if (field.type === 'price' && field.timeKey) {
+      cancel = chart.beginPick(
+        'point',
+        (point) => done({ price: point.price, time: point.time, clock: clock(point.time) }),
+        where
+      )
+    } else if (field.type === 'price') {
+      cancel = chart.beginPick('price', (price) => done({ price }), where)
+    } else {
+      cancel = chart.beginPick('time', (time) => done({ time, clock: clock(time) }))
+    }
+    return () => {
+      cancel()
+      done(null)
+    }
+  }
+
+  /** What the download dialog offers: the studies by name, and how many comparisons. */
+  dataExportChoices(): { studies: { id: string; name: string }[]; comparisons: number } {
+    return {
+      studies: this.listIndicators().map(({ id, name }) => ({ id, name })),
+      comparisons: this.comparisons?.specs().length ?? 0,
+    }
+  }
+
+  comparisonState(): TerminalComparisonState {
+    return {
+      mode:
+        this.comparisons?.scale ??
+        comparisonScaleOf(this.comparisonPreferences.mode, this.comparisonPreferences.scale),
+      items: (this.comparisons?.rows() ?? []).map((row) => ({
+        id: row.id,
+        symbol: row.symbol,
+        exchange: row.exchange,
+        label: `${row.exchange}:${row.symbol}`,
+        visible: row.visible,
+        ...(row.close === null ? {} : { close: row.close }),
+        ...(row.change === null ? {} : { change: row.change }),
+        // Always set by the time a row exists; the palette entry keeps a
+        // swatch from being blank if that ever stops being true, and keeps it
+        // from being the one colour a comparison is not allowed to be.
+        color: row.color ?? COMPARISON_PALETTE[0],
+        status:
+          row.status === 'ready'
+            ? 'ready'
+            : ['idle', 'loading', 'refreshing'].includes(row.status)
+              ? 'loading'
+              : 'error',
+        ...(row.error ? { error: row.error } : {}),
+      })),
+    }
+  }
+
+  private installComparisons(): void {
+    const chart = this.chart
+    const feed = this.cachedBars ?? this.rest
+    if (!chart || !feed || this.destroyed) return
+    let setup = Promise.resolve()
+    if (!this.comparisons) {
+      const comparisons = new TerminalComparisons({
+        feed,
+        ws: { url: this.wsUrl, apiKey: this.apiKey },
+        now: () => this.gridNow(),
+        onChange: () => {
+          if (this.destroyed || this.comparisons !== comparisons) return
+          this.comparisonPreferences = {
+            items: comparisons.specs(),
+            mode: comparisons.mode,
+            scale: comparisons.scale,
+          }
+          this.lsSet('comparisons', JSON.stringify(this.comparisonPreferences))
+          this.cb.onComparisonsChange?.(this.comparisonState())
+        },
+      })
+      this.comparisons = comparisons
+      setup = comparisons.replace(
+        this.comparisonPreferences.items,
+        this.comparisonPreferences.mode,
+        this.comparisonPreferences.scale
+      )
+    }
+    const comparisons = this.comparisons
+    const interval = this.interval
+    const ticket = this.loadTicket
+    const symbolOwner = this.sym
+    const isCurrent = () =>
+      !this.destroyed &&
+      chart === this.chart &&
+      interval === this.interval &&
+      ticket === this.loadTicket &&
+      symbolOwner === this.sym
+    const to = this.gridNow()
+    this.comparisonLoad = setup.then(async () => {
+      if (!isCurrent()) return
+      comparisons.setVisibleHost(document.visibilityState !== 'hidden')
+      await comparisons.bind(chart, {
+        interval,
+        from: this.rawBars[0]?.time ?? to - lookbackDays(interval) * 86400,
+        to,
+        timezone: chart.timezone(),
+      })
+      if (isCurrent()) this.cb.onComparisonsChange?.(this.comparisonState())
+    })
+    void this.comparisonLoad.catch((error) => {
+      if (isCurrent() && !this.preparingWorkspace)
+        this.toast(`Comparison history: ${this.cleanError(error)}`, 'err')
+    })
+  }
+
+  async addComparison(symbol: string, exchange: string): Promise<void> {
+    const chart = this.chart
+    const interval = this.interval
+    const symbolOwner = this.sym
+    if (!chart || this.destroyed || this.dataUnavailable())
+      throw new Error('Chart history is unavailable')
+    if (this.workspaceReplayLocked || this.replayOwnsDisplay() || this.replayPicking)
+      throw new Error('Leave replay before adding a comparison')
+    if (isChartExpression(symbol)) throw new Error('Choose an instrument for comparison')
+    if (!this.comparisons) this.installComparisons()
+    await this.comparisonLoad.catch(() => {})
+    if (
+      this.destroyed ||
+      chart !== this.chart ||
+      interval !== this.interval ||
+      symbolOwner !== this.sym ||
+      this.dataUnavailable() ||
+      !this.comparisons
+    )
+      throw new Error('The chart changed while comparison history was loading')
+    if (this.workspaceReplayLocked || this.replayOwnsDisplay() || this.replayPicking)
+      throw new Error('Leave replay before adding a comparison')
+    // No colour: `TerminalComparisons` assigns one, because it is the only
+    // place that sees every colour already on this chart. Choosing here by
+    // counting what exists handed the third comparison the second's colour as
+    // soon as the first was removed, and its first entry was the engine's own
+    // default line blue, so comparison one looked like a line the chart had
+    // drawn by accident.
+    await this.comparisons.add({
+      id: crypto.randomUUID(),
+      symbol,
+      exchange,
+      visible: true,
+    })
+  }
+
+  removeComparison(id: string): void {
+    // The comparison owns a temporary scale mode; its scale change is not a
+    // step of its own, or an undo would leave a comparison on a price scale.
+    this.undoHistory.ignore(() => this.comparisons?.remove(id))
+  }
+
+  /** Show or hide one comparison's line, keeping it on the chart. */
+  setComparisonVisible(id: string, visible: boolean): void {
+    this.comparisons?.setVisible(id, visible)
+  }
+
+  /** Load a comparison whose history failed again. */
+  async retryComparison(id: string): Promise<void> {
+    if (this.workspaceReplayLocked || this.replayOwnsDisplay() || this.replayPicking)
+      throw new Error('Leave replay before loading a comparison again')
+    await this.comparisons?.retry(id)
+  }
+
+  /**
+   * How comparisons are scaled: `price`, `percent`, `indexed` or `own`.
+   * `percentage` is still read as `percent`, the name this took before.
+   */
+  setComparisonMode(mode: ComparisonScale | 'percentage'): void {
+    const selected = mode === 'percentage' ? 'percent' : mode
+    if (!isComparisonScale(selected)) throw new Error('Invalid comparison mode')
+    if (this.comparisons) {
+      const comparisons = this.comparisons
+      this.undoHistory.ignore(() => comparisons.setMode(selected))
+    } else {
+      this.comparisonPreferences.mode = storedComparisonMode(selected)
+      this.comparisonPreferences.scale = selected
+      this.lsSet('comparisons', JSON.stringify(this.comparisonPreferences))
+      this.cb.onComparisonsChange?.(this.comparisonState())
+    }
+  }
+
+  async applyIndicatorTemplate(
+    input: IndicatorState[],
+    mode: IndicatorTemplateMode
+  ): Promise<void> {
+    const incoming = parseIndicatorStates(input)
+    const chart = this.chart
+    if (this.destroyed || !chart) throw new Error('Chart is not available')
+    await this.loadIndicators()
+    if (this.destroyed || this.chart !== chart)
+      throw new Error('The chart changed while studies were loading')
+    if (this.restoringIndicatorsOn === chart)
+      throw new Error('Studies are still loading. Try again when loading finishes.')
+    const previousState = chart.getState()
+    const previous = parseIndicatorStates(previousState.indicators ?? [])
+    const retained = {
+      drawings: this.draw?.toJSON() ?? this.drawJson,
+      alerts: previousState.alerts ?? this.alertJson,
+    }
+    const planned = planIndicatorTemplate(
+      previous,
+      incoming,
+      mode,
+      new Set(registeredIndicators().map((descriptor) => descriptor.id)),
+      chart.panes().length
+    )
+    this.applyingIndicators = true
+    try {
+      const report = chart.restoreState({ version: 1, indicators: planned, ...retained })
+      if (!report.applied) throw new Error(report.reason ?? 'Template could not be applied')
+    } catch (error) {
+      if (!this.destroyed && this.chart === chart) {
+        try {
+          chart.restoreState({ version: 1, indicators: previous, ...retained })
+        } catch (rollbackError) {
+          throw new AggregateError(
+            [error, rollbackError],
+            'Template failed and previous studies could not be restored'
+          )
+        }
+      }
+      throw error
+    } finally {
+      this.applyingIndicators = false
+      if (!this.destroyed && this.chart === chart) this.syncIndicators()
+    }
+  }
+
+  /**
+   * Put a study on the chart, or apply one of the trader's scripts again.
+   *
+   * **A script already on this chart is applied, not added a second time.** The
+   * scripts panel's Apply and the strategy's Apply both land here, and pressing
+   * Apply after an edit is how a trader asks to see the edit; a second copy
+   * beside the first, still running the old code, is not that. The copy on the
+   * chart holds the descriptor it was built from, so a recompute alone would run
+   * the old program again: it is rebuilt from the registry instead, keeping its
+   * instance id, pane, settings and visibility (an alert on one of its plots is
+   * bound to that id). Only a script: a built-in added twice from the picker is
+   * two studies on purpose, three moving averages being the ordinary case.
+   *
+   * A script's session facts arrive after it is first drawn, so the note about
+   * an empty study waits for them rather than describing the study before them.
+   */
   async addIndicatorById(indicatorId: string): Promise<void> {
     await this.loadIndicators()
-    if (!this.chart) return
+    const chart = this.chart
+    if (this.destroyed || !chart) return
+    const script = fileForScriptId(indicatorId) !== null
     try {
-      const inst = this.chart.addIndicator(indicatorId, {})
+      if (
+        script &&
+        this.restoringIndicatorsOn !== chart &&
+        chart.indicators().some((one) => one.indicatorId === indicatorId)
+      ) {
+        await this.reapplyScript(chart, indicatorId)
+        return
+      }
+      const inst = chart.addIndicator(indicatorId, {})
       this.syncIndicators()
-      this.warnIfStarved(inst)
+      if (script) await this.scriptFactsSettled()
+      if (this.chart === chart && chart.indicators().includes(inst)) this.warnIfStarved(inst)
     } catch (e) {
       this.toast(this.cleanError(e), 'err')
     }
   }
 
   /**
-   * Tell the user when an indicator drew nothing because the chart is too short.
+   * Rebuild every copy of a script on this chart from the registered program.
+   *
+   * `restoreState` is the chart's own replace-in-place: it keeps each study's
+   * instance id, order, pane, settings and visibility, which removing a copy and
+   * adding a new one would not. It rebuilds every study on the chart to do it,
+   * and it stops part way if one of them cannot be built, so the edited script
+   * is calculated on this chart's bars first. One that fails is reported and the
+   * chart is left exactly as it was, still drawing the version that worked.
+   */
+  private async reapplyScript(chart: ChartInstance, indicatorId: string): Promise<void> {
+    const refusal = this.studyRefusal(chart, indicatorId)
+    if (refusal !== null) {
+      this.toast(this.cleanError(refusal), 'err')
+      return
+    }
+    const state = chart.getState()
+    this.applyingIndicators = true
+    try {
+      const report = chart.restoreState({
+        version: 1,
+        indicators: parseIndicatorStates(state.indicators ?? []),
+        drawings: this.draw?.toJSON() ?? this.drawJson,
+        alerts: state.alerts ?? this.alertJson,
+      })
+      if (!report.applied) throw new Error('The study could not be applied again')
+    } finally {
+      this.applyingIndicators = false
+      if (!this.destroyed && this.chart === chart) this.syncIndicators()
+    }
+    await this.scriptFactsSettled()
+    if (this.destroyed || this.chart !== chart) return
+    const applied = chart.indicators().find((one) => one.indicatorId === indicatorId)
+    if (applied) this.warnIfStarved(applied)
+  }
+
+  /**
+   * Why the registered study cannot be calculated on this chart, or null.
+   *
+   * Run with each copy's own settings over the chart's own bars, in a store
+   * nothing else holds, which is what the chart would do when it built it.
+   */
+  private studyRefusal(chart: ChartInstance, indicatorId: string): unknown {
+    const descriptor = getIndicator(indicatorId)
+    const bars = chart.primaryBars()
+    const context = chart.getDataContext()
+    const tick = this.tick()
+    const ctx = {
+      barState: { isNew: false, isConfirmed: true, isRealtime: false, lastIndex: bars.length - 1 },
+      symbol: context?.symbol,
+      interval: context?.interval,
+      timezone: chart.timezone(),
+      now: () => Date.now() / 1000,
+      ...(tick > 0 ? { tickSize: tick } : {}),
+    }
+    for (const inst of chart.indicators()) {
+      if (inst.indicatorId !== indicatorId) continue
+      try {
+        descriptor.calc(bars, { ...indicatorDefaults(descriptor), ...inst.settings() }, {}, ctx)
+      } catch (error) {
+        return error
+      }
+    }
+    return null
+  }
+
+  /** Resolves once this chart's instrument facts have arrived or cannot be had. */
+  private async scriptFactsSettled(): Promise<void> {
+    const sym = this.sym
+    if (sym && !sym.synthetic && sym.exchange) await factsFor(sym.symbol, sym.exchange)
+  }
+
+  /**
+   * Tell the user when a study has nothing to plot on the bars loaded.
    *
    * Every indicator needs a warmup before it can print, and a few need a long
    * one: Special K sums rates of change out to 530 bars and only starts at 725,
@@ -2924,20 +5476,54 @@ export class TradingTerminal {
    * an empty pane, which is the correct answer and looks exactly like a broken
    * indicator. Saying so once, at the moment it is added, is the difference.
    *
+   * **It says what is known and no more.** An empty study is not always a short
+   * one: a session study before its session, or one that plots only on the bar
+   * a condition holds, has nothing to draw on a chart of any length. Saying it
+   * needed more history sent the trader loading more for nothing, so the note
+   * states the fact and offers the history only as the thing to try if the
+   * study is one that needs it.
+   *
+   * Only the columns drawn as plots count. A study's values also carry its alert
+   * conditions and its paint, none of them a line, and a study that draws only a
+   * grid or marks has no plot to be empty.
+   *
    * Reading `values()` is safe here: the engine flushes any pending recompute on
    * that call, so this sees the result of the add rather than the frame before.
    */
-  private warnIfStarved(inst: { name: string; values(): Record<string, unknown> }): void {
+  private warnIfStarved(inst: {
+    name: string
+    indicatorId: string
+    values(): Record<string, unknown>
+    series(plotKey: string): unknown
+  }): void {
     const loaded = this.rawBars.length
     if (!loaded) return
-    const cols = Object.values(inst.values()).filter(Array.isArray) as unknown[][]
+    const cols = Object.entries(inst.values())
+      .filter(([key, col]) => Array.isArray(col) && inst.series(key) !== undefined)
+      .map(([, col]) => col as unknown[])
     if (cols.length === 0) return
     const anyFinite = cols.some((col) =>
       col.some((v) => typeof v === 'number' && Number.isFinite(v))
     )
     if (anyFinite) return
+    if (
+      ['open-interest', 'open-interest-change', 'open-interest-buildup'].includes(
+        inst.indicatorId
+      ) &&
+      !this.rawBars.some((bar) => Number.isFinite(bar.oi))
+    ) {
+      const supported =
+        this.sym?.hasOpenInterest ?? openInterestCapability(this.sym?.exchange ?? '')
+      this.toast(
+        supported === false
+          ? 'Open interest is not available for this instrument.'
+          : 'The loaded history contains no open interest readings.',
+        ''
+      )
+      return
+    }
     this.toast(
-      `${inst.name} needs more history than the ${loaded} bars loaded, so it has nothing to draw yet. Widen the range or pick a longer interval.`,
+      `${inst.name} has nothing to plot on the ${loaded} bars loaded. If it needs a longer history before it starts, widen the range or pick a longer interval.`,
       ''
     )
   }
@@ -2994,6 +5580,8 @@ export class TradingTerminal {
     if (!this.link || !this.chart) return
     this.link.add(this.chart, {
       symbol: this.linkSymbol(),
+      interval: this.interval,
+      onInterval: (next) => this.setInterval(next) === next,
       onSymbol: (next) => {
         // Ignore an echo of what this pane already shows: the group puts a
         // joining member onto the agreed symbol, and reloading a chart onto the
@@ -3047,7 +5635,16 @@ export class TradingTerminal {
    */
   setVolumeVisible(on: boolean): void {
     this.volumeOn = on
-    this.volume?.applyOptions({ visible: on && !isProfileKind(this.ctype) })
+    this.volume?.applyOptions({
+      visible: on && this.volumeAvailable() && !isProfileKind(this.ctype),
+    })
+    this.volumeMA?.applyOptions({
+      visible:
+        on &&
+        this.volumeAvailable() &&
+        !isProfileKind(this.ctype) &&
+        volumeValues(this.chartSettingsSaved)['volume.showMA'] === true,
+    })
     this.lsSet('vol', on ? '1' : '0')
   }
 
@@ -3092,7 +5689,259 @@ export class TradingTerminal {
 
   /** True while the chart is showing a replayed prefix rather than live data. */
   replayActive(): boolean {
-    return this.replay !== null
+    return this.replay !== null || this.workspaceReplayMember?.active === true
+  }
+
+  private replayOwnsDisplay(): boolean {
+    return this.replayActive() || this.workspaceReplayMember?.preparing === true
+  }
+
+  setWorkspaceReplayLocked(locked: boolean): void {
+    this.workspaceReplayLocked = locked
+    this.syncAlertPause()
+    this.showTradeButtons(
+      !locked && !this.replayOwnsDisplay() && !this.replayPicking && !this.replayLoading
+    )
+    if (!locked) {
+      this.workspaceReplayMember?.detachAbort()
+      this.workspaceReplayMember = null
+    }
+  }
+
+  setReplayInvalidationHandler(handler: (() => void) | null): void {
+    this.replayInvalidation = handler
+  }
+
+  beginWorkspaceReplayPick(
+    onPick: (time: number) => void,
+    onCancel: () => void,
+    onPreview?: (time: number) => void
+  ): boolean {
+    if (this.destroyed || this.replayOwnsDisplay() || this.replayPicking || this.replayLoading)
+      return false
+    this.startReplay()
+    if (!this.replayPicking) return false
+    this.workspaceReplayPick = { onPick, onCancel, onPreview }
+    this.publishReplayPreview()
+    return true
+  }
+
+  private publishReplayPreview(): void {
+    const index = this.replayPickIndex
+    if (index === null || !this.chart || !this.workspaceReplayPick?.onPreview) return
+    const bar = this.shownBars[index]
+    if (!bar) return
+    this.workspaceReplayPick.onPreview(
+      replayTiming(this.interval, this.chart.timezone()).barEndTime(bar, index)
+    )
+  }
+
+  setWorkspaceReplayPreview(time: number | null): void {
+    if (time === null) {
+      this.setReplayShade(null)
+      return
+    }
+    if (!this.chart) return
+    const timing = replayTiming(this.interval, this.chart.timezone())
+    let last = -1
+    for (let index = 0; index < this.shownBars.length; index++) {
+      if (timing.barEndTime(this.shownBars[index], index) > time) break
+      last = index
+    }
+    this.setReplayShade(last)
+  }
+
+  async prepareReplayMember({
+    id,
+    sessionId,
+    signal,
+  }: {
+    id: string
+    sessionId: number
+    signal: AbortSignal
+  }): Promise<PreparedReplayMember> {
+    const chart = this.chart
+    const price = this.price
+    if (this.destroyed || !chart || !price || this.dataUnavailable() || price.getData().length < 2)
+      throw new Error('Every replay chart needs available history')
+    if (signal.aborted) throw new Error('Replay preparation was cancelled')
+    if (this.replay || this.workspaceReplayMember?.active)
+      throw new Error('This chart already has a replay owner')
+    const data = this.data
+    const sym = this.sym
+    const interval = this.interval
+    const ctype = this.ctype
+    const timezone = chart.timezone()
+    const previous = this.workspaceReplayMember
+    if (previous) this.restoreReplayMember(previous.sessionId)
+    previous?.detachAbort()
+    const member = {
+      sessionId,
+      chart,
+      price,
+      data,
+      active: false,
+      preparing: true,
+      state: null as ReplayState | null,
+      autoScale: price.priceScale().autoScale,
+      positioned: false,
+      isCurrent: () =>
+        !this.destroyed &&
+        !signal.aborted &&
+        this.workspaceReplayMember === member &&
+        this.chart === chart &&
+        this.price === price &&
+        this.data === data &&
+        this.sym === sym &&
+        this.interval === interval &&
+        this.ctype === ctype &&
+        chart.timezone() === timezone,
+      detachAbort: () => signal.removeEventListener('abort', cancel),
+    }
+    const cancel = () => {
+      if (this.workspaceReplayMember !== member || !member.preparing) return
+      this.replayHistoryAbort?.abort()
+      this.restoreReplayMember(sessionId)
+    }
+    this.workspaceReplayMember = member
+    signal.addEventListener('abort', cancel, { once: true })
+    this.replayLoading = true
+    this.replayPicking = false
+    this.workspaceReplayPick = null
+    this.setReplayShade(null)
+    this.syncAlertPause()
+    data?.setPaused(true)
+    this.showTradeButtons(false)
+    this.cb.onReplayChange?.(null)
+    try {
+      const transformed = Boolean(CHART_TYPES[ctype]?.transform)
+      const finer = transformed ? undefined : TradingTerminal.REPLAY_SUB[interval]
+      let sub = finer ? await this.loadReplaySubBars() : null
+      if (!member.isCurrent())
+        throw new Error('Replay preparation was cancelled or the chart changed')
+      let timing = replayTiming(interval, timezone, sub?.length ? finer : undefined)
+      if (sub?.length) {
+        const candidates = sub
+        const endTime = timing.subBarEndTime!
+        const valid = candidates.every((bar, index) => {
+          if (![bar.time, bar.open, bar.high, bar.low, bar.close].every(Number.isFinite))
+            return false
+          if (index > 0 && bar.time <= candidates[index - 1].time) return false
+          try {
+            const end = endTime(bar, index)
+            return (
+              Number.isFinite(end) &&
+              end > bar.time &&
+              (index === candidates.length - 1 || end <= candidates[index + 1].time)
+            )
+          } catch {
+            return false
+          }
+        })
+        if (!valid) {
+          sub = null
+          this.replaySub = null
+          timing = replayTiming(interval, timezone)
+        }
+      }
+      const series = this.volume ? [price, this.volume] : [price]
+      if (this.volumeMA) series.push(this.volumeMA)
+      return {
+        isCurrent: member.isCurrent,
+        member: {
+          id,
+          chart,
+          options: {
+            series,
+            // Inactive members must be prepared again from their current live series.
+            timing,
+            ...(sub?.length ? { subBars: sub } : {}),
+            onFrame: (state) => {
+              if (!member.isCurrent() || !member.active) return
+              member.state = state
+              this.refreshDisplayedVolume()
+              this.refreshLegend(this.drawnBars(true))
+              this.profileLayer?.refresh(true)
+              this.cb.onReplayChange?.(state)
+            },
+          },
+        },
+      }
+    } catch (error) {
+      this.restoreReplayMember(sessionId)
+      throw error
+    }
+  }
+
+  setReplayParticipation(sessionId: number, active: boolean, state?: ReplayState): void {
+    const member = this.workspaceReplayMember
+    if (!member || member.sessionId !== sessionId || !member.isCurrent()) return
+    if (!active) {
+      this.restoreReplayMember(sessionId)
+      return
+    }
+    if (!member.active) {
+      member.autoScale = member.price.priceScale().autoScale
+      member.positioned = false
+    }
+    member.active = true
+    member.preparing = false
+    this.replayLoading = false
+    member.data?.setPaused(true)
+    member.chart.setAutoScale(true)
+    this.showReplayMark(true)
+    this.showTradeButtons(false)
+    this.syncAlertPause()
+    if (state) {
+      member.state = state
+      if (!member.positioned) {
+        // A logical index on the chart: elements formed so far on a transformed one.
+        const head =
+          member.chart.seriesTransform(member.price) === null
+            ? state.index
+            : member.chart.primaryBars().length - 1
+        const to = head + 4
+        member.chart.setVisibleLogicalRange(
+          head > VISIBLE_BARS ? { from: to - VISIBLE_BARS, to } : { from: -1, to }
+        )
+        member.positioned = true
+      }
+      this.cb.onReplayChange?.(state)
+    }
+  }
+
+  restoreReplayMember(sessionId: number): void {
+    const member = this.workspaceReplayMember
+    if (!member || member.sessionId !== sessionId || (!member.active && !member.preparing)) return
+    member.active = false
+    member.preparing = false
+    member.state = null
+    member.positioned = false
+    this.replayLoading = false
+    if (this.chart !== member.chart || this.price !== member.price) return
+    let failed = false
+    let failure: unknown
+    const attempt = (action: () => void) => {
+      try {
+        action()
+      } catch (error) {
+        if (!failed) {
+          failed = true
+          failure = error
+        }
+      }
+    }
+    attempt(() => this.showReplayMark(false))
+    attempt(() => member.chart.setAutoScale(member.autoScale))
+    if (this.data === member.data) attempt(() => member.data?.setPaused(false))
+    if (!this.destroyed) {
+      attempt(() => this.setPriceData())
+      attempt(() => this.refreshLegend())
+      attempt(() => this.syncAlertPause())
+      attempt(() => this.showTradeButtons(!this.workspaceReplayLocked))
+      attempt(() => this.cb.onReplayChange?.(null))
+    }
+    if (failed) throw failure
   }
 
   /**
@@ -3112,18 +5961,46 @@ export class TradingTerminal {
    * did not use.
    */
   private tradingLocked(): boolean {
-    return this.replay !== null || this.replayPicking
+    return (
+      this.destroyed ||
+      this.preparingWorkspace ||
+      this.workspaceTransitionLocked ||
+      this.workspaceReplayLocked ||
+      this.alertDialogOpen() ||
+      this.dataUnavailable() ||
+      this.replay !== null ||
+      this.replayOwnsDisplay() ||
+      this.replayPicking ||
+      this.replayLoading
+    )
+  }
+
+  /** Locks existing panes while their owning page prepares a replacement grid. */
+  setWorkspaceTransitionLocked(locked: boolean): void {
+    this.workspaceTransitionLocked = locked
+    this.syncAlertPause()
+    if (!locked) this.saveAlerts()
+  }
+
+  private tradingLockMessage(): string {
+    if (this.destroyed) return 'This chart is closed. Use the active chart to trade.'
+    if (this.alertDialogOpen()) return 'Close the alert dialog before trading.'
+    if (this.dataUnavailable())
+      return 'Chart history is loading or unavailable. Wait for data before trading.'
+    return this.preparingWorkspace || this.workspaceTransitionLocked
+      ? 'Workspace is loading. Wait for it to finish before trading.'
+      : 'Replay is a simulation. Leave replay to trade.'
   }
 
   /** Says no once, in the words of the reason, rather than doing nothing. */
   private refuseWhileReplaying(): boolean {
     if (!this.tradingLocked()) return false
-    this.toast('Replay is a simulation. Leave replay to trade.', 'err')
+    this.toast(this.tradingLockMessage(), 'err')
     return true
   }
 
   replayState(): ReplayState | null {
-    return this.replay?.state() ?? null
+    return this.workspaceReplayMember?.state ?? this.replay?.state() ?? null
   }
 
   /**
@@ -3136,6 +6013,10 @@ export class TradingTerminal {
     return this.replayPicking
   }
 
+  replayLoadingBars(): boolean {
+    return this.replayLoading
+  }
+
   /**
    * Step one of replay: choose where to start.
    *
@@ -3146,13 +6027,22 @@ export class TradingTerminal {
    * choosing on hindsight, which is the one thing replay exists to remove.
    */
   startReplay(startIndex?: number): void {
-    if (this.replay || this.replayPicking || !this.chart || !this.price) return
+    if (this.dataUnavailable()) return
+    if (
+      this.replayOwnsDisplay() ||
+      this.replayPicking ||
+      this.replayLoading ||
+      !this.chart ||
+      !this.price
+    )
+      return
     if (this.shownBars.length < 2) return
     if (startIndex !== undefined) {
       void this.beginReplayAt(startIndex)
       return
     }
     this.replayPicking = true
+    this.syncAlertPause()
     this.replayPickIndex = Math.floor(this.shownBars.length / 4)
     this.setReplayShade(this.replayPickIndex)
     this.showTradeButtons(false)
@@ -3168,6 +6058,7 @@ export class TradingTerminal {
     if (clamped === this.replayPickIndex) return
     this.replayPickIndex = clamped
     this.setReplayShade(clamped)
+    this.publishReplayPreview()
   }
 
   /** The bar under the cursor right now, for a host that labels the prompt. */
@@ -3179,16 +6070,42 @@ export class TradingTerminal {
   /** Commit the pick. A click on the plot lands here. */
   commitReplayPick(): void {
     if (!this.replayPicking || this.replayPickIndex === null) return
+    const workspace = this.workspaceReplayPick
+    if (workspace) {
+      const index = this.replayPickIndex
+      const bar = this.shownBars[index]
+      if (!bar || !this.chart) return
+      try {
+        const time = replayTiming(this.interval, this.chart.timezone()).barEndTime(bar, index)
+        this.workspaceReplayPick = null
+        this.replayPicking = false
+        this.replayPickIndex = null
+        this.setReplayShade(null)
+        workspace.onPick(time)
+      } catch (error) {
+        this.toast(this.cleanError(error), 'err')
+        this.cancelReplayPick()
+      }
+      return
+    }
     void this.beginReplayAt(this.replayPickIndex)
   }
 
   cancelReplayPick(): void {
+    if (this.replayLoading) {
+      this.stopReplay()
+      return
+    }
     if (!this.replayPicking) return
+    const workspace = this.workspaceReplayPick
+    this.workspaceReplayPick = null
     this.replayPicking = false
     this.replayPickIndex = null
+    this.syncAlertPause()
     this.setReplayShade(null)
     this.showTradeButtons(true)
     this.cb.onReplayChange?.(null)
+    workspace?.onCancel()
   }
 
   /**
@@ -3217,26 +6134,49 @@ export class TradingTerminal {
    * cover.
    */
   private async beginReplayAt(startIndex: number): Promise<void> {
-    if (this.replay || !this.chart || !this.price || this.shownBars.length < 2) return
+    if (
+      this.replay ||
+      this.replayLoading ||
+      !this.chart ||
+      !this.price ||
+      this.shownBars.length < 2
+    )
+      return
     const chart = this.chart
     const price = this.price
     const data = this.data
     const ticket = ++this.replayLoadTicket
+    this.replayLoading = true
+    this.syncAlertPause()
     data?.setPaused(true)
     this.replayPicking = false
+    this.showTradeButtons(false)
+    this.cb.onReplayChange?.(null)
     this.setReplayShade(null)
     const driven = this.volume ? [this.price, this.volume] : [this.price]
-    // Walk what the price series is showing, not the raw feed: on Heikin Ashi
-    // or Renko those are different arrays of different lengths, so replaying
-    // rawBars would repaint the chart as plain candles and put the playhead at
-    // the wrong bar.
-    // Copied, not aliased. Untransformed, `shownBars` *is* `rawBars`, which
-    // the tick path pushes to, so handing it over directly let the replay set
-    // grow while it was being walked: the total moved and the end of the session
-    // receded with every tick that arrived.
-    const bars = this.shownBars.slice()
-    const from = Math.max(0, Math.min(bars.length - 1, Math.floor(startIndex)))
-    const sub = await this.loadReplaySubBars()
+    if (this.volumeMA) driven.push(this.volumeMA)
+    // Walk the raw bars the price series is fed. On a transformed chart type
+    // the chart forms the elements from each revealed prefix, so a brick
+    // appears at the bar that completed it. The pick is made on the elements
+    // drawn, so it is carried to the raw bar its element was completed on: the
+    // newest raw bar at or before the element's time.
+    // Copied, not aliased. `rawBars` is what the tick path pushes to, so
+    // handing it over directly let the replay set grow while it was being
+    // walked: the total moved and the end of the session receded with every
+    // tick that arrived.
+    const transformed = this.transformed()
+    const bars = this.rawBars.slice()
+    let from = Math.max(0, Math.min(bars.length - 1, Math.floor(startIndex)))
+    if (transformed) {
+      const shown = this.shownBars
+      const picked = shown[Math.max(0, Math.min(shown.length - 1, Math.floor(startIndex)))]
+      from = 0
+      if (picked) while (from < bars.length - 1 && bars[from + 1].time <= picked.time) from++
+    }
+    // Intra-bar steps fold finer bars into the displayed one, which on a
+    // transformed chart is not an element of the chart: those step a bar at a
+    // time, as a workspace replay of one does.
+    const sub = transformed ? null : await this.loadReplaySubBars()
     // The await above yields, and the user may have left in the meantime.
     if (
       this.destroyed ||
@@ -3246,8 +6186,18 @@ export class TradingTerminal {
       this.replay
     ) {
       // Do not unpause a newer replay attempt that superseded this await.
-      if (!this.destroyed && data === this.data && ticket === this.replayLoadTicket && !this.replay)
+      if (
+        !this.destroyed &&
+        data === this.data &&
+        ticket === this.replayLoadTicket &&
+        !this.replay
+      ) {
+        this.replayLoading = false
         data?.setPaused(false)
+        this.syncAlertPause()
+        this.showTradeButtons(true)
+        this.cb.onReplayChange?.(null)
+      }
       return
     }
     this.replay = new ReplayController(this.chart, {
@@ -3256,10 +6206,13 @@ export class TradingTerminal {
       startIndex: from,
       subBars: sub ?? undefined,
       onFrame: (state) => {
+        this.refreshDisplayedVolume()
+        this.refreshLegend(this.drawnBars(true))
         this.profileLayer?.refresh(true)
         this.cb.onReplayChange?.(state)
       },
     })
+    this.replayLoading = false
     this.showReplayMark(true)
     this.showTradeButtons(false)
     // Entering replay truncates the series to a prefix, but leaves the viewport
@@ -3267,10 +6220,13 @@ export class TradingTerminal {
     // on the newest bars, hundreds of bars past the end of that prefix and at a
     // price the prefix never trades at. The result is an apparently empty chart
     // with the candles clipped off the top. Put the view on the playhead and
-    // re-measure the axis, the same way the initial load does.
-    const to = from + 4
+    // re-measure the axis, the same way the initial load does. The playhead is
+    // a logical index on the chart, which on a transformed chart counts the
+    // elements formed so far rather than the raw bars.
+    const head = transformed ? this.chart.primaryBars().length - 1 : from
+    const to = head + 4
     this.chart.timeScale.setVisibleLogicalRange(
-      from > VISIBLE_BARS ? { from: to - VISIBLE_BARS, to } : { from: -1, to }
+      head > VISIBLE_BARS ? { from: to - VISIBLE_BARS, to } : { from: -1, to }
     )
     // Remembered so a hand-pinned axis is not silently lost: replay has to
     // autoscale to stay readable as it walks, but that is replay's state, not
@@ -3305,6 +6261,9 @@ export class TradingTerminal {
       this.replaySub.exchange === sym.exchange
     )
       return this.replaySub.bars
+    const request = new AbortController()
+    this.replayHistoryAbort?.abort()
+    this.replayHistoryAbort = request
     try {
       const to = this.gridNow()
       const bars = await rest.getBars({
@@ -3313,13 +6272,22 @@ export class TradingTerminal {
         interval: finer,
         from: to - lookbackDays(interval) * 86400,
         to,
+        signal: request.signal,
       })
-      if (!bars.length || this.destroyed || this.sym !== sym || this.interval !== interval)
+      if (
+        request.signal.aborted ||
+        !bars.length ||
+        this.destroyed ||
+        this.sym !== sym ||
+        this.interval !== interval
+      )
         return null
       this.replaySub = { interval, symbol: sym.symbol, exchange: sym.exchange, bars }
       return bars
     } catch {
       return null
+    } finally {
+      if (this.replayHistoryAbort === request) this.replayHistoryAbort = null
     }
   }
 
@@ -3338,6 +6306,7 @@ export class TradingTerminal {
    */
   private showTradeButtons(on: boolean): void {
     if (!this.chart || !this.tradeBtns) return
+    if (this.workspaceReplayLocked) on = false
     if (on) this.chart.addPrimitive(this.tradeBtns, 0)
     else this.chart.removePrimitive(this.tradeBtns)
   }
@@ -3358,10 +6327,28 @@ export class TradingTerminal {
 
   /** Leave replay and put the live chart back exactly where the user left it. */
   stopReplay(): void {
+    this.replayInvalidation?.()
+    const member = this.workspaceReplayMember
+    if (member) {
+      this.restoreReplayMember(member.sessionId)
+      member.detachAbort()
+      this.workspaceReplayMember = null
+    }
     this.replayLoadTicket++
+    this.replayHistoryAbort?.abort()
+    this.replayHistoryAbort = null
+    const wasLoading = this.replayLoading
+    this.replayLoading = false
     this.cancelReplayPick()
     this.data?.setPaused(false)
-    if (!this.replay) return
+    if (!this.replay) {
+      if (wasLoading) {
+        this.showTradeButtons(true)
+        this.cb.onReplayChange?.(null)
+      }
+      this.syncAlertPause()
+      return
+    }
     this.replay.stop()
     this.replay = null
     this.showReplayMark(false)
@@ -3371,7 +6358,8 @@ export class TradingTerminal {
     // the live chart comes back caught up rather than frozen at the moment
     // replay started. Only a transformed chart has to rebuild from scratch.
     this.setPriceData()
-    this.setLegend(this.rawBars.length ? this.rawBars[this.rawBars.length - 1] : null)
+    this.refreshLegend()
+    this.syncAlertPause()
     this.cb.onReplayChange?.(null)
   }
 
@@ -3431,6 +6419,7 @@ export class TradingTerminal {
         const q = j.data || {}
         if (typeof q.ltp === 'number' && q.ltp > 0)
           this.onTick({ symbol: this.sym.symbol, ltp: q.ltp, timeSec: nowSec() })
+        if (!this.sym.quoteOnly) this.priceAxis.setQuote(q.bid, q.ask)
         if (
           this.tradeBtns &&
           typeof q.bid === 'number' &&
@@ -3486,7 +6475,7 @@ export class TradingTerminal {
         // it, then vanishes on the next replay frame when setData rewrites the
         // prefix. rawBars keeps accumulating either way, so leaving replay finds
         // the session already caught up.
-        if (this.replay) {
+        if (this.replayOwnsDisplay()) {
           this.cb.onLtp(e.ltp)
           return
         }
@@ -3496,8 +6485,8 @@ export class TradingTerminal {
     }
     // The legend belongs to the bar on screen. During replay that is the
     // playhead's, written by onReplayChange, not the live one.
-    if (!this.replay) {
-      this.setLegend(this.rawBars.length ? this.rawBars[this.rawBars.length - 1] : null)
+    if (!this.replayOwnsDisplay()) {
+      this.refreshLegend()
     }
   }
 
@@ -3521,6 +6510,8 @@ export class TradingTerminal {
       this.builder.seed(this.rawBars[this.rawBars.length - 1])
     }
     this.depthActive = false
+    // A new subscription starts with no book: the last one's bid and ask belong to another symbol.
+    this.priceAxis.setQuote(null, null)
     if (this.offLtp) {
       this.offLtp()
       this.offLtp = null
@@ -3538,6 +6529,7 @@ export class TradingTerminal {
       if (!this.sym || symbol !== this.sym.symbol) return
       const bid = depth.bids?.[0]?.price
       const ask = depth.asks?.[0]?.price
+      this.priceAxis.setQuote(bid, ask)
       if (typeof bid === 'number' && typeof ask === 'number' && bid > 0 && ask > 0) {
         this.depthActive = true
         if (this.tradeBtns) this.tradeBtns.setPrices(bid, ask)
@@ -3591,6 +6583,8 @@ export class TradingTerminal {
       if (last) this.legLtp.set(leg, last.close)
     }
     this.depthActive = false
+    // A new subscription starts with no book: the last one's bid and ask belong to another symbol.
+    this.priceAxis.setQuote(null, null)
     if (this.offLtp) {
       this.offLtp()
       this.offLtp = null
@@ -3757,6 +6751,10 @@ export class TradingTerminal {
 
   /** Monotonic id for the most recent loadSymbol; older loads abandon. */
   private loadTicket = 0
+  /** The instrument last asked for, so the overlay's Try again repeats it. */
+  private lastPick: SearchRow | null = null
+  /** Why the current load drew no chart, for the overlay. Null when it did. */
+  private loadOutcome: ChartStateView | null = null
 
   /* ── symbol selection ─────────────────────────────────────────────────── */
   /**
@@ -3772,7 +6770,7 @@ export class TradingTerminal {
   private async loadExpression(
     source: string,
     ticket: number,
-    opts: { silent?: boolean },
+    opts: { silent?: boolean }
   ): Promise<boolean> {
     let expr: SymbolExpression
     try {
@@ -3803,7 +6801,8 @@ export class TradingTerminal {
     } catch (e) {
       if (this.destroyed || ticket !== this.loadTicket) return false
       this.rawBars = []
-      if (!opts.silent) this.toast(`${source}: ${this.cleanError(e)}`, 'err')
+      if (!opts.silent)
+        this.loadOutcome = chartLoadFailed(source, this.interval, this.cleanError(e))
       return false
     }
     if (this.destroyed || ticket !== this.loadTicket) return false
@@ -3814,10 +6813,9 @@ export class TradingTerminal {
       this.rawBars = []
       const error = this.data?.getState().error
       if (!opts.silent) {
-        this.toast(
-          `${source}: ${error ? this.cleanError(error) : `the legs share no bars on ${this.interval}`}`,
-          'err'
-        )
+        this.loadOutcome = error
+          ? chartLoadFailed(source, this.interval, this.cleanError(error))
+          : chartNoData(source, this.interval, 'The instruments in this chart share no bars')
       }
       return false
     }
@@ -3834,6 +6832,7 @@ export class TradingTerminal {
       freezeQty: 1,
       quoteOnly: true,
       synthetic: true,
+      hasOpenInterest: false,
       productOptions: [],
       product: '',
     }
@@ -3847,8 +6846,56 @@ export class TradingTerminal {
     return true
   }
 
-  async loadSymbol(pick: SearchRow, opts: { silent?: boolean } = {}): Promise<boolean> {
+  loadSymbol(pick: SearchRow, opts: { silent?: boolean; strict?: boolean } = {}): Promise<boolean> {
+    const run = this.runLoadSymbol(pick, opts)
+    this.loading = run
+    return run
+  }
+
+  private async runLoadSymbol(
+    pick: SearchRow,
+    opts: { silent?: boolean; strict?: boolean }
+  ): Promise<boolean> {
     if (this.destroyed || !this.rest) return false
+    const ticket = ++this.loadTicket
+    this.lastPick = pick
+    this.loadOutcome = null
+    this.cb.onChartState?.({ kind: 'loading', symbol: pick.symbol, interval: this.interval })
+    this.historyPending = true
+    this.historyFailed = false
+    this.syncAlertPause()
+    this.alertUi?.close()
+    this.showTradeButtons(false)
+    let loaded = false
+    try {
+      const result = await this.loadSymbolRequest(pick, opts, ticket)
+      if (result && !this.destroyed && ticket === this.loadTicket) await this.chartToolsReady
+      loaded = result
+      return loaded && !this.destroyed && ticket === this.loadTicket
+    } finally {
+      if (!this.destroyed && ticket === this.loadTicket) {
+        this.historyPending = false
+        this.historyFailed = !loaded
+        this.syncAlertPause()
+        this.showTradeButtons(loaded)
+        // A silent load that fails says nothing: its caller falls back.
+        this.cb.onChartState?.(loaded ? CHART_READY : (this.loadOutcome ?? CHART_READY))
+        if (loaded && !this.preparingWorkspace) this.cb.onWorkspaceChange?.()
+      }
+    }
+  }
+
+  dataUnavailable(): boolean {
+    return this.historyPending || this.historyFailed
+  }
+
+  private async loadSymbolRequest(
+    pick: SearchRow,
+    opts: { silent?: boolean; strict?: boolean },
+    ticket: number
+  ): Promise<boolean> {
+    const feed = this.cachedBars ?? this.rest
+    if (!feed) return false
     /**
      * Claim this load. Two awaits follow -- the symbol lookup and the bars --
      * and a second call arriving inside either of them used to run to
@@ -3859,11 +6906,11 @@ export class TradingTerminal {
      * clicking down an option chain left thirty copies of one indicator's
      * legend covering the chart.
      */
-    const ticket = ++this.loadTicket
     // Replay holds a snapshot of the bars it was started on, and stop() puts
     // that snapshot back. Carrying it across a symbol change would restore the
     // previous instrument's data onto the new one.
     this.stopReplay()
+    this.comparisons?.detach()
     // swap the live stream: drop the previous symbol's subscription
     if (
       this.ws &&
@@ -3891,7 +6938,20 @@ export class TradingTerminal {
     // An expression is not an instrument: there is no master record to look up,
     // no lot size, no tick and nothing to subscribe to. It takes its own path
     // and never reaches the order machinery below.
-    if (pick.expression === true || isChartExpression(pick.symbol)) {
+    //
+    // **An exchange is what says this is an instrument.** Reading the symbol
+    // alone cannot tell `BAJAJ-AUTO` from a subtraction, because to the chart's
+    // grammar that is exactly what it is: `isPlainSymbol` returns false and
+    // `parseExpression` succeeds, so a name with a hyphen in it was sent down
+    // the expression path and fetched as `BAJAJ` minus `AUTO`, two instruments
+    // that do not exist. The symbol search picked the instrument correctly and
+    // this threw the choice away, which is why the chart reported a 400 for a
+    // symbol the platform resolves perfectly well.
+    //
+    // A computed chart carries no exchange and never can: it is several
+    // instruments, possibly on different ones. So the exchange is the thing
+    // that settles it, and it does not require guessing at the name.
+    if (pick.expression === true || (!pick.exchange && isChartExpression(pick.symbol))) {
       return await this.loadExpression(pick.symbol, ticket, opts)
     }
     // authoritative metadata (lotsize / tick_size / freeze_qty)
@@ -3901,8 +6961,14 @@ export class TradingTerminal {
         symbol: pick.symbol,
         exchange: pick.exchange,
       })
+      if (
+        opts.strict &&
+        (!j.data || j.data.symbol !== pick.symbol || j.data.exchange !== pick.exchange)
+      )
+        throw new Error(`Workspace symbol metadata is unavailable: ${pick.exchange}:${pick.symbol}`)
       info = { ...pick, ...(j.data || {}) }
-    } catch {
+    } catch (error) {
+      if (opts.strict) throw error
       /* search row already carries the essentials */
     }
     // A newer load claimed the pane while this one was waiting.
@@ -3929,6 +6995,7 @@ export class TradingTerminal {
       tick: resolveTick(exchange, info.tick_size),
       freezeQty: Number(info.freeze_qty) || 1,
       quoteOnly: QUOTE_ONLY.has(exchange),
+      hasOpenInterest: openInterestCapability(exchange, info),
       productOptions,
       product: this.product,
     }
@@ -3953,13 +7020,12 @@ export class TradingTerminal {
         from: to - lookbackDays(this.interval) * 86400,
         to,
       }
-      bars = this.data
-        ? await this.data.load(request)
-        : await (this.cachedBars ?? this.rest).getBars(request)
+      bars = this.data ? await this.data.load(request) : await feed.getBars(request)
     } catch (e) {
       if (this.destroyed || ticket !== this.loadTicket) return false
       this.rawBars = []
-      if (!opts.silent) this.toast(`history error: ${this.cleanError(e)}`, 'err')
+      if (!opts.silent)
+        this.loadOutcome = chartLoadFailed(this.sym.symbol, this.interval, this.cleanError(e))
       return false // caller may fall back (e.g. to the default symbol)
     }
     // Validate before assigning: an older response must neither overwrite the
@@ -3969,12 +7035,9 @@ export class TradingTerminal {
     if (!this.rawBars.length) {
       if (!opts.silent) {
         const error = this.data?.getState().error
-        this.toast(
-          error
-            ? `history error: ${this.cleanError(error)}`
-            : `no history for ${this.sym.symbol} ${this.sym.exchange} ${this.interval}`,
-          'err'
-        )
+        this.loadOutcome = error
+          ? chartLoadFailed(this.sym.symbol, this.interval, this.cleanError(error))
+          : chartNoData(this.sym.symbol, this.interval)
       }
       return false
     }
@@ -3989,6 +7052,7 @@ export class TradingTerminal {
       this.buildChart()
     } else {
       this.setPriceData()
+      this.installComparisons()
     }
     this.cb.onLtp(this.lastLtp)
     this.cb.onSymbolLoaded(this.sym)
@@ -4001,6 +7065,11 @@ export class TradingTerminal {
 
   /* ── toolbar setters (called by the React page) ───────────────────────── */
   setInterval(iv: string): string {
+    if (iv === this.interval) return iv
+    if (!this.availableIntervals.includes(iv)) {
+      this.toast(`The connected feed does not support ${iv}`, 'err')
+      return this.interval
+    }
     if (
       isProfileKind(this.ctype) &&
       !profileIntervalSupported(this.ctype, iv, this.profileBlockMinutes())
@@ -4015,8 +7084,11 @@ export class TradingTerminal {
     }
     this.stopReplay() // same reason as loadSymbol: the bars are about to change
     this.interval = iv
+    // A preset range holds while its interval does; any other change ends it.
+    if (this.rangeChoice) this.setActiveRange(null)
     this.lsSet('interval', iv)
     this.cb.onIntervalChange?.(iv)
+    if (this.link && this.chart) this.link.setInterval(this.chart, iv)
     if (this.sym) this.reloadCurrent()
     return iv
   }
@@ -4030,6 +7102,7 @@ export class TradingTerminal {
     this.stopReplay()
     this.ctype = v
     this.lsSet('ctype', v)
+    this.cb.onChartTypeChange?.(v)
     if (interval !== this.interval) {
       this.setInterval(interval)
       this.toast(`Using ${interval} bars for ${CHART_TYPES[v].label}`, '')
@@ -4073,6 +7146,12 @@ export class TradingTerminal {
     const muted = mutedTradeColors(this.chartTheme)
     this.tradeBtns.setColors(muted.buy, muted.sell)
   }
+  /** The overlay's Try again: repeat the load that drew no chart. */
+  retryLoad(): void {
+    if (this.destroyed || !this.lastPick) return
+    void this.loadSymbol(this.lastPick)
+  }
+
   private reloadCurrent() {
     if (!this.sym) return
     this.loadSymbol({ symbol: this.sym.symbol, exchange: this.sym.exchange, name: this.sym.name })
@@ -4117,6 +7196,81 @@ export class TradingTerminal {
     if (!this.chart) return
     this.chart.resetScale()
     this.applyDefaultViewport()
+  }
+
+  /* ── bottom bar hooks: the logic is in bottomBar.ts ───────────────────── */
+
+  /** The chart on screen, or null before the first load and after teardown. */
+  liveChart(): ChartInstance | null {
+    return this.destroyed || !this.chart || this.chart.isDestroyed ? null : this.chart
+  }
+  /** Where the chart draws: a press or a wheel there is the trader moving the view. */
+  chartElement(): HTMLElement {
+    return this.container
+  }
+  currentInterval(): string {
+    return this.interval
+  }
+  supportedIntervals(): readonly string[] {
+    return this.availableIntervals
+  }
+  activeRange(): string | null {
+    return this.rangeChoice?.interval === this.interval ? this.rangeChoice.id : null
+  }
+  setActiveRange(id: string | null): void {
+    this.rangeChoice = id === null ? null : { id, interval: this.interval }
+    this.lsSet('range', serializeRangeChoice(this.rangeChoice))
+  }
+
+  /** Switch to `iv` when it differs, and resolve once the pane's bars have settled. */
+  async showInterval(iv: string): Promise<boolean> {
+    if (iv !== this.interval && this.setInterval(iv) !== iv) return false
+    for (let i = 0; i < 4 && this.historyPending; i++) await this.loading.catch(() => false)
+    return !this.destroyed && this.interval === iv && !this.dataUnavailable()
+  }
+
+  /**
+   * One older page reaching back to `time`, for Go to and the range presets.
+   * Never while replay or a workspace switch owns the bars, or while a load is
+   * replacing them.
+   */
+  async loadHistoryBack(time: number): Promise<'loaded' | 'empty' | 'exhausted' | 'unavailable'> {
+    const data = this.data
+    const chart = this.chart
+    const sym = this.sym
+    const interval = this.interval
+    const ticket = this.loadTicket
+    if (
+      this.destroyed ||
+      !data ||
+      !chart ||
+      !sym ||
+      this.dataUnavailable() ||
+      this.replayActive() ||
+      this.replayPicking ||
+      this.replayLoading ||
+      this.preparingWorkspace ||
+      this.workspaceTransitionLocked
+    )
+      return 'unavailable'
+    if (this.noMoreHistory) return 'exhausted'
+    const before = this.rawBars[0]?.time
+    await data.loadMore(time)
+    if (
+      this.destroyed ||
+      chart !== this.chart ||
+      ticket !== this.loadTicket ||
+      sym !== this.sym ||
+      interval !== this.interval ||
+      data !== this.data
+    )
+      return 'unavailable'
+    const state = data.getState()
+    this.applyDataSnapshot(state)
+    if (state.historyError) throw state.historyError
+    const first = this.rawBars[0]?.time
+    if (first !== undefined && (before === undefined || first < before)) return 'loaded'
+    return state.hasMore === false ? 'exhausted' : 'empty'
   }
 
   /* ── PNG export ───────────────────────────────────────────────────────── */
@@ -4293,6 +7447,135 @@ export class TradingTerminal {
 
   /* ── right-click order menu ───────────────────────────────────────────── */
   private ctxPrice = 0
+
+  private showContextMenu(event: ContextMenuEvent): void {
+    const chart = this.chart
+    if (!chart || this.destroyed) return
+    event.preventDefault()
+    const { target } = event
+    // The price scale has a menu of its own: what the scale shows, not orders.
+    if (target.kind === 'price-scale' && event.paneIndex === chart.primaryPaneIndex()) {
+      const box = this.container.getBoundingClientRect()
+      this.cb.onContextMenu?.({
+        x: box.left + event.point.x,
+        y: box.top + event.point.y,
+        items: [],
+        profile: null,
+        axis: this.priceAxis.menu(chart, this.chartSettingsSaved),
+      })
+      return
+    }
+    let alert: TerminalContextMenu['alert']
+    let clicked: string | null = null
+    if (target.kind === 'drawing' && target.id?.startsWith('draw:')) {
+      const drawingId = target.id.slice(5).split('#')[0]
+      if (this.draw?.get(drawingId)) {
+        clicked = drawingId
+        const info = this.draw.alertInfo(drawingId)
+        alert = {
+          label: 'Create drawing alert',
+          source: { kind: 'drawing', drawingId },
+          disabled: !info.available,
+          reason: info.reason,
+        }
+      }
+    } else if (target.kind === 'indicator' && target.instanceId) {
+      const instance = chart.indicators().find((study) => study.id === target.instanceId)
+      const plot =
+        instance &&
+        getIndicator(instance.indicatorId).plots.find(
+          (candidate) =>
+            (candidate.overlay ? 0 : instance.paneIndex) === event.paneIndex &&
+            (target.plotKey === undefined || candidate.key === target.plotKey)
+        )
+      if (instance && plot) {
+        const value = instance.values()[plot.key]?.[event.index ?? chart.primaryBars().length - 1]
+        alert = {
+          label: 'Create study alert',
+          source: {
+            kind: 'indicator',
+            instanceId: instance.id,
+            plotKey: plot.key,
+            value: value ?? NaN,
+          },
+        }
+      }
+    } else if (event.paneIndex === 0 && event.price !== null && Number.isFinite(event.price)) {
+      // Snapped to the instrument's tick, not the raw price under the pointer.
+      // A pixel maps to a price with fifteen decimals behind it, so the menu
+      // offered "Create price alert at 1,293.63" and the dialog it opened put
+      // 1293.6305656934308 in the box: the label and the field disagreed, and
+      // the alert was armed at a price the instrument cannot trade at.
+      const price = this.snap(event.price)
+      alert = {
+        label: `Create price alert at ${this.fmt(price)}`,
+        source: { kind: 'price', price },
+      }
+    }
+    const box = this.container.getBoundingClientRect()
+    this.cb.onContextMenu?.({
+      x: box.left + event.point.x,
+      y: box.top + event.point.y,
+      items:
+        event.paneIndex === 0 && event.price !== null
+          ? (this.contextMenuAt(event.point.y)?.items ?? [])
+          : [],
+      profile: this.profileContextMenuAt(event.point.x, event.point.y),
+      alert,
+      study:
+        studyMenuAt(
+          chart,
+          event.paneIndex,
+          target.kind === 'indicator' ? (target.instanceId ?? null) : null
+        ) ?? undefined,
+      drawing: this.draw
+        ? {
+            id: clicked,
+            removable: drawingCounts(this.draw).removable,
+            paste: drawingsOnClipboard(),
+          }
+        : undefined,
+    })
+  }
+  /** The price scale menu as it reads now, or null with no chart. */
+  priceAxisMenu(): PriceAxisMenu | null {
+    const chart = this.chart
+    if (!chart || this.destroyed) return null
+    return this.priceAxis.menu(chart, this.chartSettingsSaved)
+  }
+
+  /**
+   * Run one price scale action from its menu or a chord. It goes through the
+   * settings path, so the choice is kept with the pane and a rebuild, a reload
+   * or a workspace brings it back.
+   */
+  async priceAxisCommand(command: PriceAxisCommand): Promise<void> {
+    const chart = this.chart
+    if (!chart || this.destroyed) return
+    const patch = priceAxisPatch(command, chart, this.chartSettingsSaved)
+    if (patch) await this.applyChartSettings(patch)
+  }
+
+  /** Bring the price scale's levels and side in line with the saved settings. */
+  private syncPriceAxis(): void {
+    const chart = this.chart
+    if (!chart || this.destroyed) return
+    this.priceAxis.sync(chart, this.chartSettingsSaved)
+    // The OHLC readout sits over the plot's top-left corner, so a scale moved
+    // to the left would print it over the axis. It moves right by the axis
+    // width, read after the frame that lays the axis out.
+    const box = this.legendEl.parentElement
+    if (!box) return
+    requestAnimationFrame(() => {
+      if (chart !== this.chart || this.destroyed) return
+      let inset = 0
+      for (const slot of chart.priceAxisLayout(chart.primaryPaneIndex())) {
+        if (slot.side === 'left') inset += slot.width
+      }
+      box.style.left = inset > 0 ? `${Math.round(inset) + 12}px` : ''
+    })
+  }
+
   /** Per-session profile actions are available for quote-only instruments too. */
   profileContextMenuAt(localX: number, localY: number) {
     const chart = this.chart
@@ -4345,8 +7628,121 @@ export class TradingTerminal {
   }
 
   /* ── bootstrap + teardown ─────────────────────────────────────────────── */
-  async init() {
-    this.rest = new OpenAlgoDataFeed({ baseUrl: '', apiKey: this.apiKey })
+  private assertWorkspacePreparation(chart?: ChartInstance): void {
+    if (this.destroyed || !this.preparingWorkspace)
+      throw new Error('Workspace preparation was cancelled')
+    if (chart && this.chart !== chart) throw new Error('Workspace chart changed during preparation')
+  }
+
+  private async restoreInitialWorkspace(pane: WorkspacePane): Promise<void> {
+    const chart = this.chart
+    if (!chart) throw new Error('Workspace chart is unavailable')
+    this.assertWorkspacePreparation(chart)
+    const context = chart.getDataContext()
+    if (
+      context?.symbol !== pane.symbol ||
+      context.exchange !== pane.exchange ||
+      context.interval !== pane.interval
+    )
+      throw new Error('Workspace chart context changed during preparation')
+    await this.restoreChartSettings(true)
+    this.assertWorkspacePreparation(chart)
+    this.applyingIndicators = true
+    try {
+      const report = chart.restoreState(pane.chart)
+      if (!report.applied || report.indicators !== (pane.chart.indicators?.length ?? 0))
+        throw new Error('Workspace studies and settings could not be restored completely')
+      // Host series own their data; the engine returns only style descriptors.
+      const primary = report.series.find(
+        (series) =>
+          series.paneIndex === 0 &&
+          series.priceScaleId === 'right' &&
+          series.type === CHART_TYPES[pane.chartType].series
+      )
+      if (primary) this.price?.applyOptions(primary.style)
+      // A workspace saved by 2.6.0 records the transform's options with the
+      // series. The chart type already chose the transform; its options come
+      // back too, and are kept for this instrument like a settings edit.
+      const savedTransform = primary?.transform
+      if (savedTransform && this.price && savedTransform.type === this.transformBase?.type) {
+        try {
+          chart.setSeriesTransform(this.price, savedTransform)
+          this.rememberTransformChoice()
+          this.afterTransformChange()
+        } catch {
+          // Options this build refuses: the chart keeps the box it sized.
+        }
+      }
+      const volume = report.series.find(
+        (series) =>
+          series.paneIndex === 0 && series.priceScaleId === '' && series.type === 'histogram'
+      )
+      if (volume) this.volume?.applyOptions(volume.style)
+      const average = report.series.find(
+        (series) => series.paneIndex === 0 && series.priceScaleId === '' && series.type === 'line'
+      )
+      if (average) this.volumeMA?.applyOptions(average.style)
+      // The host volume switch stays authoritative across future chart rebuilds.
+      this.setVolumeVisible(pane.volume)
+    } finally {
+      this.applyingIndicators = false
+    }
+    this.syncIndicators()
+    const document = pane.chart.drawings ?? emptyDrawings()
+    if (!isDrawingsDocument(document)) throw new Error('Unsupported workspace drawing document')
+    if (document.drawings.length) {
+      const { migrateDrawings, getDrawingTool } = await import('openalgo-charts/draw')
+      this.assertWorkspacePreparation(chart)
+      const migrated = migrateDrawings(document)
+      const ids = new Set(document.drawings.map((drawing) => drawing.id))
+      if (
+        migrated.drawings.length !== document.drawings.length ||
+        ids.size !== document.drawings.length ||
+        migrated.drawings.some(
+          (drawing, index) =>
+            drawing.id !== document.drawings[index].id ||
+            !getDrawingTool(drawing.tool) ||
+            drawing.paneIndex >= chart.panes().length
+        )
+      )
+        throw new Error('Workspace drawings could not be restored completely')
+      this.drawJson = migrated
+      this.drawEnabled = true
+      await this.attachDrawing()
+      this.assertWorkspacePreparation(chart)
+      if (this.draw?.toJSON().drawings.length !== migrated.drawings.length)
+        throw new Error('Workspace drawings could not be restored completely')
+    }
+    this.attachAlerts(chart)
+    this.installComparisons()
+    await this.comparisonLoad
+    this.assertWorkspacePreparation(chart)
+  }
+
+  async init(): Promise<void> {
+    try {
+      await this.initialize()
+    } catch (error) {
+      if (this.initialWorkspacePane) this.destroy()
+      throw error
+    }
+  }
+
+  private async initialize(): Promise<void> {
+    if (this.destroyed) {
+      if (this.initialWorkspacePane) throw new Error('Workspace preparation was cancelled')
+      return
+    }
+    this.rest = new OpenAlgoDataFeed({
+      baseUrl: '',
+      apiKey: this.apiKey,
+      hasOpenInterest: (request) => {
+        const sym = this.sym
+        return sym?.symbol === request.symbol && sym.exchange === request.exchange
+          ? (sym.hasOpenInterest ?? openInterestCapability(sym.exchange))
+          : openInterestCapability(request.exchange ?? '')
+      },
+    })
     this.cachedBars = withBarCache(this.rest, { ttlMs: 10 * 60_000 })
     this.exprFeed = new ExpressionFeed(this.cachedBars, () => this.exprLegExchange)
     // Repair follows the stream: one small refresh a moment after each bar
@@ -4376,14 +7772,38 @@ export class TradingTerminal {
     try {
       const j = await this.api<{ data?: IntervalData }>('intervals')
       groups = intervalGroups(j.data || {})
-    } catch {
+    } catch (error) {
+      if (this.initialWorkspacePane) throw error
       groups = intervalGroups({ minutes: ['1m', '5m', '15m'], hours: ['1h'], days: ['D'] })
     }
     // The pane may have closed while intervals loaded. Do not reopen its resources.
-    if (this.destroyed) return
-    this.interval = pickInterval(groups, this.lsGet('interval'))
+    if (this.destroyed) {
+      if (this.initialWorkspacePane) throw new Error('Workspace preparation was cancelled')
+      return
+    }
     this.availableIntervals = groups.flatMap((group) => group.items)
-    if (isProfileKind(this.ctype)) {
+    if (this.initialWorkspacePane) {
+      const pane = this.initialWorkspacePane
+      // Only what this pane holds: the validation below reads the registry for
+      // the pane's own studies, and the rest of the catalogue follows once the
+      // chart is up.
+      await this.loadIndicatorsFor((pane.chart.indicators ?? []).map((study) => study.indicatorId))
+      this.assertWorkspacePreparation()
+      validateWorkspacePaneSupport(pane, {
+        chartTypes: new Set(Object.keys(CHART_TYPES)),
+        intervals: new Set(this.availableIntervals),
+        indicators: new Set(registeredIndicators().map((study) => study.id)),
+      })
+      if (
+        isProfileKind(this.ctype) &&
+        !profileIntervalSupported(this.ctype, pane.interval, this.profileBlockMinutes())
+      )
+        throw new Error(`Unsupported workspace profile interval: ${pane.interval}`)
+      this.interval = pane.interval
+    } else {
+      this.interval = pickInterval(groups, this.lsGet('interval'))
+    }
+    if (!this.initialWorkspacePane && isProfileKind(this.ctype)) {
       const interval = this.compatibleProfileInterval(this.ctype)
       if (interval) this.interval = interval
       else this.ctype = 'candlestick'
@@ -4448,6 +7868,31 @@ export class TradingTerminal {
     if (this.bookTimer) clearInterval(this.bookTimer)
     this.bookTimer = setInterval(() => this.pollBook(), 8000)
 
+    if (this.initialWorkspacePane) {
+      const pane = this.initialWorkspacePane
+      const rows = isChartExpression(pane.symbol)
+        ? [{ symbol: pane.symbol, exchange: pane.exchange, expression: true }]
+        : await this.search(pane.symbol, pane.exchange)
+      this.assertWorkspacePreparation()
+      const row = rows.find(
+        (value) => value.symbol === pane.symbol && value.exchange === pane.exchange
+      )
+      if (!row) throw new Error(`Workspace symbol is unavailable: ${pane.exchange}:${pane.symbol}`)
+      const loaded = await this.loadSymbol(row, { silent: true, strict: true })
+      this.assertWorkspacePreparation()
+      if (!loaded)
+        throw new Error(
+          `Workspace history is unavailable: ${pane.exchange}:${pane.symbol} ${pane.interval}`
+        )
+      await this.restoreInitialWorkspace(pane)
+      this.assertWorkspacePreparation()
+      this.initialWorkspacePane = null
+      this.preparingWorkspace = false
+      this.syncAlertPause()
+      this.followHistory()
+      return
+    }
+
     // restore the last symbol; fall back to BHEL/NSE if it's gone or has no data.
     let loaded = false
     try {
@@ -4475,7 +7920,24 @@ export class TradingTerminal {
   }
 
   destroy() {
+    if (this.destroyed) return
+    // Optional: a terminal built without its fields (a test double) has none.
+    this.undoHistory?.destroy()
+    this.replayInvalidation?.()
+    this.replayInvalidation = null
+    if (this.workspaceReplayMember || this.workspaceReplayPick) this.stopReplay()
     this.destroyed = true
+    let comparisonError: unknown
+    let comparisonFailed = false
+    try {
+      this.comparisons?.destroy()
+    } catch (error) {
+      comparisonFailed = true
+      comparisonError = error
+    }
+    this.comparisons = null
+    this.offDeleteKey?.()
+    this.offDeleteKey = null
     this.offBranding?.()
     this.offBranding = null
     this.cb.onBrandingChange?.(null)
@@ -4484,6 +7946,7 @@ export class TradingTerminal {
     this.offData = null
     this.data?.destroy()
     this.data = null
+    this.detachAlerts()
     this.detachObjects()
     this.detachDrawing()
     if (this.bookTimer) clearInterval(this.bookTimer)
@@ -4523,5 +7986,6 @@ export class TradingTerminal {
     this.chart = null
     this.ws = null
     this.screenshotExcluded.length = 0
+    if (comparisonFailed) throw comparisonError
   }
 }

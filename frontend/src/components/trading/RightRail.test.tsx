@@ -46,12 +46,45 @@ describe('RightRail', () => {
     expect(onSelect).toHaveBeenCalledWith('objects')
   })
 
+  it('opens Alerts from the rail, beside the objects it lists', async () => {
+    const onSelect = rail()
+    const button = screen.getByRole('button', { name: 'Alerts' })
+    expect(button.textContent).toBe('')
+    await userEvent.click(button)
+    expect(onSelect).toHaveBeenCalledWith('alerts')
+  })
+
+  it('opens the data window from a glyph on the rail', async () => {
+    const onSelect = rail()
+    const button = screen.getByRole('button', { name: 'Data window' })
+    expect(button.textContent).toBe('')
+    await userEvent.click(button)
+    expect(onSelect).toHaveBeenCalledWith('data')
+  })
+
+  it('still opens every panel a trader had open before the data window existed', () => {
+    for (const saved of [
+      'watchlist',
+      'options',
+      'objects',
+      'alerts',
+      'scripts',
+      'backtest',
+      'strategies',
+      'agent',
+    ]) {
+      expect(isPanelId(saved)).toBe(true)
+    }
+    expect(isPanelId('data')).toBe(true)
+  })
+
   it('recognises only the panels the rail actually renders', () => {
     // Storage outlives a release. A remembered name that no longer resolves
     // has to read as "no panel", not as one.
     expect(isPanelId('agent')).toBe(true)
     expect(isPanelId('watchlist')).toBe(true)
     expect(isPanelId('objects')).toBe(true)
+    expect(isPanelId('alerts')).toBe(true)
     expect(isPanelId('depth')).toBe(false)
     expect(isPanelId(null)).toBe(false)
   })

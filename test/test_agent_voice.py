@@ -53,14 +53,15 @@ def keys_for(**kwargs: Any) -> set[str]:
     """The toolkit keys a run with these context values would be offered.
 
     Args:
-        **kwargs: Overrides for :class:`ToolContext`. Web search is switched off
-            unless a test says otherwise, so the sets below name only the
-            toolkits the surface decides.
+        **kwargs: Overrides for :class:`ToolContext`. Web search and external
+            data (MCP) are switched off unless a test says otherwise, so the
+            sets below name only the toolkits the surface decides.
 
     Returns:
         The selected toolkit keys.
     """
     kwargs.setdefault("web_search_enabled", False)
+    kwargs.setdefault("mcp_enabled", False)
     return {spec.key for spec in select_specs(ToolContext(api_key="k", **kwargs))}
 
 
@@ -137,8 +138,11 @@ class TestVoiceWidensNothing:
         assert "chart" not in keys_for(surface=SURFACE_CHAT)
 
     def test_the_chart_panel_is_unchanged_by_the_new_surface(self):
+        # Orders reach the chart panel through the trading capability alone, the
+        # same gate as chat and voice; the chat-only authoring tools do not.
         chart = keys_for(surface=SURFACE_CHART, trading_enabled=True)
-        assert "orders" not in chart
+        assert "orders" in chart
+        assert "orders" not in keys_for(surface=SURFACE_CHART, trading_enabled=False)
         assert not ({"openui", "strategy_gen", "flow_gen"} & chart)
 
     def test_a_context_that_does_not_carry_the_capability_is_refused_it(self):
@@ -690,6 +694,110 @@ class TestSpokenApprovalIsDecidedServerSide:
         verdict = voice.judge_approval("run-1", "yes", self.ARMED)
         assert verdict.approved is False
         assert "passed" in verdict.reason
+
+    def test_a_run_already_decided_cannot_be_approved_by_voice(self):
+        """A run resumed or cancelled elsewhere stops being approvable.
+
+        The hazard this closes: the trader approves or rejects on the card, or
+        abandons the turn, and says "ok" to something else while the window
+        still has twenty seconds on it. `forget_pause` is what the resume and
+        cancel paths call, and before they called it this approved the order.
+        """
+        voice.note_pause("run-1")
+        voice.forget_pause("run-1")
+        verdict = voice.judge_approval("run-1", "yes", self.ARMED)
+        assert verdict.approved is False
+        assert "passed" in verdict.reason
+
+    def test_the_window_is_claimed_by_the_pop_not_by_the_read(self, monkeypatch):
+        """Two utterances interleaved mid-decision approve once, not twice.
+
+        Calling twice in sequence cannot show this: the first call consumes the
+        window either way. The defect only appears when a second utterance
+        lands between the first call's *read* of the window and its *consume*,
+        so that is driven here deterministically, with the switch placed at the
+        confirmation check, which is a real call boundary.
+
+        Before the consume became the claim, the outer call had already decided
+        it held an open window and approved on the strength of that read, so
+        both utterances were told yes and one order became two.
+        """
+        from services.agent.safety import voice_confirm
+
+        voice.note_pause("run-1")
+        genuine = voice_confirm.is_spoken_confirmation
+        interleaved = False
+        inner: list[Any] = []
+
+        def reentrant(transcript: Any) -> bool:
+            # The flag is set before the nested call, not after it: setting it
+            # after means the nested call finds it unset and recurses forever.
+            nonlocal interleaved
+            if not interleaved:
+                interleaved = True
+                inner.append(voice.judge_approval("run-1", "yes", self.ARMED))
+            return genuine(transcript)
+
+        monkeypatch.setattr(voice_confirm, "is_spoken_confirmation", reentrant)
+        outer = voice.judge_approval("run-1", "yes", self.ARMED)
+
+        assert inner[0].approved is True, "the utterance that claimed first must win"
+        assert outer.approved is False, "the second must not also approve"
+        assert "passed" in outer.reason
+        assert "run-1" not in voice._PAUSED_AT
+
+    def test_resuming_a_run_closes_its_spoken_window(self):
+        """The card's resume is what closes the window for the card's decision.
+
+        `stream_continue` is not a generator, so its body runs when it is
+        called rather than when the result is first iterated. That is what lets
+        this assert the close without running an agno stream.
+        """
+        from services.agent import stream as agent_stream
+
+        voice.note_pause("run-1")
+        agent_stream.stream_continue(
+            object(),
+            run_id="run-1",
+            session_id="session-1",
+            conversation_id=1,
+            decisions={"req-1": True},
+        )
+        assert "run-1" not in voice._PAUSED_AT
+
+    def test_cancelling_a_run_closes_its_spoken_window(self):
+        """An abandoned run stops being approvable with the run itself."""
+        from services.agent import stream as agent_stream
+
+        voice.note_pause("run-1")
+        translator = agent_stream.EventTranslator(1)
+        translator.run_id = "run-1"
+        translator._on_run_cancelled(object())
+        assert "run-1" not in voice._PAUSED_AT
+
+    def test_closing_an_unknown_run_is_harmless(self):
+        """Callers close windows without knowing whether one was ever opened."""
+        from services.agent import stream as agent_stream
+
+        voice.note_pause("run-1")
+        agent_stream._close_voice_approval("run-never-paused")
+        agent_stream._close_voice_approval(None)
+        agent_stream._close_voice_approval("")
+        assert "run-1" in voice._PAUSED_AT
+
+    def test_a_question_does_not_consume_the_window(self):
+        """The deliberate exception, kept explicit so it is not lost.
+
+        A trader who asks something while an order is read back is still
+        deciding about that order, so the window survives. This is the one
+        utterance that reaches the confirmation check and leaves the timestamp
+        in place, which is why the claim sits after that check and not before.
+        """
+        voice.note_pause("run-1")
+        assert voice.judge_approval("run-1", "what is bank nifty doing", self.ARMED).approved is (
+            False
+        )
+        assert "run-1" in voice._PAUSED_AT
 
 
 class TestAnUpstreamFailureSaysSo:

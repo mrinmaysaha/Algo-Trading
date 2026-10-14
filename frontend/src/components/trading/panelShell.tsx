@@ -4,11 +4,10 @@
  * Two jobs, both of which have to be identical across panels or the workspace
  * stops reading as one surface:
  *
- * - **A shared horizon.** The chart grid is `p-2` and each pane is a bordered
- *   card with a `py-1.5` toolbar of `h-8` controls, so the pane toolbar's rule
- *   lands 46px below the top of the card: 1px of card border, then 45px of
- *   toolbar. A panel whose own header rule sits anywhere else is what makes
- *   it look bolted on rather than shipped.
+ * - **One band.** The terminal's toolbar row is a 40px band a step off the
+ *   page background with a hairline under it, and every panel header is the
+ *   same band at the same height, so a panel reads as part of the terminal's
+ *   chrome rather than a card laid on top of it.
  * - **A width the user owns.** A watchlist of option symbols needs more room
  *   than one of index names, and no single default serves both. The width is
  *   dragged from the panel's inner edge and remembered per panel.
@@ -18,11 +17,11 @@ import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 
 /**
- * A panel header, sized to land its bottom rule on the same line as the pane
- * toolbar's. Kept as a class string rather than a component so a panel can put
- * whatever controls it likes inside it.
+ * A panel header: the toolbar row's band, at its height. Kept as a class
+ * string rather than a component so a panel can put whatever controls it
+ * likes inside it.
  */
-export const PANEL_HEADER = 'flex h-[46px] shrink-0 items-center gap-1.5 border-b px-2 py-1.5'
+export const PANEL_HEADER = 'oa-terminal-band flex h-10 shrink-0 items-center gap-1.5 border-b px-2'
 
 /** Narrower than this and the symbol column cannot hold an option symbol. */
 const MIN_WIDTH = 260
@@ -30,9 +29,9 @@ const MIN_WIDTH = 260
 /** Wider than this and the chart, which is the point of the page, is squeezed. */
 const MAX_WIDTH = 520
 
-function readWidth(storageKey: string, fallback: number): number {
+function readWidth(storageKey: string, fallback: number, ceiling: number): number {
   const saved = Number(localStorage.getItem(storageKey))
-  return Number.isFinite(saved) && saved >= MIN_WIDTH && saved <= MAX_WIDTH ? saved : fallback
+  return Number.isFinite(saved) && saved >= MIN_WIDTH && saved <= ceiling ? saved : fallback
 }
 
 interface Props {
@@ -53,6 +52,15 @@ interface Props {
    * silently ruining the one column every row is identified by.
    */
   minWidth?: number
+  /**
+   * The widest this panel may be dragged.
+   *
+   * Raised only by a panel whose content is the thing being worked on rather
+   * than a view of the market. While a trader is writing a script the panel is
+   * the point of the page and the chart is the reference, which is the reverse
+   * of the assumption behind the shared ceiling.
+   */
+  maxWidth?: number
   children: ReactNode
 }
 
@@ -62,16 +70,18 @@ export function PanelShell({
   storageKey,
   defaultWidth = 340,
   minWidth,
+  maxWidth,
   children,
 }: Props) {
   const floor = Math.max(MIN_WIDTH, minWidth ?? 0)
-  const [width, setWidth] = useState(() => readWidth(storageKey, defaultWidth))
+  const ceiling = Math.max(floor, maxWidth ?? MAX_WIDTH)
+  const [width, setWidth] = useState(() => readWidth(storageKey, defaultWidth, ceiling))
 
   // Grow to the floor when it rises, but never shrink back: a user who
   // widened the panel and then removed a column keeps the width they chose.
   useEffect(() => {
-    setWidth((w) => (w < floor ? Math.min(MAX_WIDTH, floor) : w))
-  }, [floor])
+    setWidth((w) => (w < floor ? Math.min(ceiling, floor) : w))
+  }, [floor, ceiling])
   const [dragging, setDragging] = useState(false)
   const widthRef = useRef(width)
   widthRef.current = width
@@ -113,7 +123,7 @@ export function PanelShell({
       const onMove = (e: PointerEvent) => {
         // The panel is on the right, so dragging left makes it wider.
         const next = startWidth + (startX - e.clientX)
-        setWidth(Math.min(MAX_WIDTH, Math.max(floor, next)))
+        setWidth(Math.min(ceiling, Math.max(floor, next)))
       }
       const onUp = () => {
         setDragging(false)
@@ -137,7 +147,7 @@ export function PanelShell({
     },
     // floor: a drag started before a column change must clamp to the new
     // minimum, not the one that was live when the pointer went down.
-    [persist, floor]
+    [persist, floor, ceiling]
   )
 
   return (
@@ -158,13 +168,13 @@ export function PanelShell({
         aria-label={`Resize ${label.toLowerCase()}`}
         aria-valuenow={width}
         aria-valuemin={floor}
-        aria-valuemax={MAX_WIDTH}
+        aria-valuemax={ceiling}
         tabIndex={0}
         onPointerDown={startResize}
         onKeyDown={(e) => {
           const step = e.key === 'ArrowLeft' ? 16 : e.key === 'ArrowRight' ? -16 : 0
           if (!step) return
-          setWidth((w) => Math.min(MAX_WIDTH, Math.max(floor, w + step)))
+          setWidth((w) => Math.min(ceiling, Math.max(floor, w + step)))
           e.preventDefault()
         }}
         // Held-arrow auto-repeat fires about thirty times a second, so the

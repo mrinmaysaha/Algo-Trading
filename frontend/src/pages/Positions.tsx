@@ -1280,7 +1280,11 @@ export default function Positions() {
 
                             {/* Position Rows */}
                             {!isCollapsed &&
-                              groupPositions.map((position, index) => (
+                              groupPositions.map((position, index) => {
+                                const quantity = Number(position.quantity) || 0
+                                const isOpen = quantity !== 0
+
+                                return (
                                 <TableRow key={`${position.symbol}-${position.exchange}-${index}`}>
                                   <TableCell className="w-[140px] font-medium">
                                     {position.symbol}
@@ -1320,7 +1324,11 @@ export default function Positions() {
                                   <TableCell
                                     className={cn(
                                       'w-[95px] text-right font-medium',
-                                      position.quantity > 0 ? 'text-green-600' : 'text-red-600'
+                                      !isOpen
+                                        ? 'text-muted-foreground'
+                                        : quantity > 0
+                                          ? 'text-green-600'
+                                          : 'text-red-600'
                                     )}
                                   >
                                     <div>{position.quantity}</div>
@@ -1373,7 +1381,7 @@ export default function Positions() {
                                     {calculatePnlPercent(position).toFixed(2)}%
                                   </TableCell>
                                   <TableCell className="w-[60px] text-right">
-                                    {position.quantity !== 0 ? (
+                                    {isOpen ? (
                                       <Button
                                         variant="ghost"
                                         size="sm"
@@ -1388,7 +1396,8 @@ export default function Positions() {
                                     )}
                                   </TableCell>
                                 </TableRow>
-                              ))}
+                              )
+                            })}
                           </React.Fragment>
                         )
                       })}
